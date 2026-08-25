@@ -1,0 +1,47 @@
+[project]
+name = "harness-config-manager"
+version = "0.1.0"
+description = "Detect, inventory, and distribute user-level skills / MCP / plugin config across all your AI coding harnesses."
+readme = "README.md"
+authors = [
+    { name = "pengkangzhen", email = "pengkangzhen@outlook.com" }
+]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "ai", "coding-agents", "harness", "claude-code", "codex", "cursor",
+    "mcp", "skills", "plugins", "config-sync",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Tools",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "rich>=15.0.0",
+    "tomlkit>=0.15.1",
+    "typer>=0.27.1",
+]
+
+[project.urls]
+Repository = "https://github.com/pengkangzhen/harness-config-manager"
+Issues = "https://github.com/pengkangzhen/harness-config-manager/issues"
+
+[project.scripts]
+hcm = "harness_config_manager:main"
+harness-config-manager = "harness_config_manager:cli_main"
+
+[build-system]
+requires = ["uv_build>=0.11.20,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
