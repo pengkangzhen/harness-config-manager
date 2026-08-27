@@ -31,7 +31,7 @@ def scan(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
-        help="查看某层明细，可多选：skills / mcp / plugins",
+        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents",
     ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
@@ -53,7 +53,7 @@ def scan(
     console.print(f"⚓ 检测到 [cyan]{n_installed}[/cyan] 个 AI 编码工具")
     rp.print_summary(reports)
 
-    # 默认显示三层覆盖矩阵（每个条目铺到了哪些工具）
+    # 默认显示五层覆盖矩阵（每个条目铺到了哪些工具）
     if detail:
         if "skills" in detail:
             rp.print_skills_detail(reports)
@@ -61,10 +61,16 @@ def scan(
             rp.print_mcp_detail(reports)
         if "plugins" in detail:
             rp.print_plugins_detail(reports)
+        if "hooks" in detail:
+            rp.print_hooks_detail(reports)
+        if "agents" in detail:
+            rp.print_agents_detail(reports)
     else:
         rp.print_skills_matrix(reports)
+        rp.print_agents_matrix(reports)
         rp.print_mcp_matrix(reports)
         rp.print_plugins_matrix(reports)
+        rp.print_hooks_matrix(reports)
     notes = [(r.tool, n) for r in reports for n in r.scan_notes]
     if notes:
         console.print("[dim]扫描备注：[/dim]")
@@ -87,13 +93,28 @@ def sync(
     layer_skills: bool = typer.Option(True, "--skills/--no-skills", help="同步 skills 层"),
     layer_mcp: bool = typer.Option(True, "--mcp/--no-mcp", help="同步 MCP 层"),
     layer_plugins: bool = typer.Option(True, "--plugins/--no-plugins", help="同步插件层"),
+    layer_hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="同步 hooks 层"),
+    layer_agents: bool = typer.Option(True, "--agents/--no-agents", help="同步 subagents 层"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认跳过）/ library（备份工具侧后以清单覆盖）"),
     source: str = typer.Option("auto", "--from", help="清单为空时的收集源（默认自动选最全的工具）"),
 ) -> None:
     """同步一下：清单/库 -> 所有工具。清单为空会自动从最全的工具收集；默认 dry-run。"""
+    from .agents import (
+        plan_adopt as plan_agent_adopt,
+        plan_sync as plan_agent_sync,
+        resolve_agents_library,
+        run_adopt as run_agent_adopt,
+        run_sync as run_agent_sync,
+    )
     from .config import load_config
     from .detect import detect_tools
+    from .hooks_manifest import (
+        adopt_hooks,
+        auto_hook_source,
+        load_manifest as load_hook_manifest,
+    )
+    from .hooks_write import sync_hooks
     from .mcp_manifest import _load_secrets, auto_mcp_source, load_manifest
     from .mcp_write import sync_mcp
     from .plugin_sync import auto_plugin_source, load_plugin_manifest, sync_plugins
@@ -143,6 +164,51 @@ def sync(
                               if not line.startswith(("[red]", "[yellow]")) else f"  {line}")
         elif apply:
             console.print("[yellow]插件层跳过（清单仍为空）[/yellow]")
+
+    # --- hooks 层：清单为空则自动收集（含第三方注入条目；exclude_hooks 黑名单兜底） ---
+    if layer_hooks:
+        specs = [s for s in load_hook_manifest() if s.id not in cfg.exclude_hooks]
+        if not specs:
+            src = source if source != "auto" else auto_hook_source(installed)
+            console.print(f"[blue]hooks 清单为空，自动从 {src} 收集[/blue]")
+            for line in adopt_hooks(src, apply):
+                console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
+            specs = ([s for s in load_hook_manifest() if s.id not in cfg.exclude_hooks]
+                     if apply else [])
+        if specs:
+            console.print(f"hooks 清单: {len(specs)} 条")
+            for line in sync_hooks(specs, installed, apply, prefer):
+                console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
+                              if not line.startswith(("[red]", "[yellow]")) else f"  {line}")
+        elif apply:
+            console.print("[yellow]hooks 层跳过（清单仍为空）[/yellow]")
+
+    # --- subagents 层：库外独有自动收集，然后逐条 symlink 分发 ---
+    if layer_agents:
+        agents_lib = resolve_agents_library(cfg, create=apply)
+        agent_plan = plan_agent_adopt(agents_lib, reports)
+        if agent_plan.to_adopt:
+            console.print(f"[blue]库外独有 subagents {len(agent_plan.to_adopt)} 个，自动收集[/blue]")
+            for line in run_agent_adopt(agent_plan, agents_lib, apply):
+                console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
+        for tool, name, path, other in agent_plan.conflicts:
+            console.print(f"  [yellow]同名冲突[/yellow] {name} @ {tool}（多工具内容不一致，需人工裁决）")
+
+        agent_actions = plan_agent_sync(agents_lib, reports, cfg.exclude_agents)
+        agent_counts: dict[str, int] = {}
+        for a in agent_actions:
+            agent_counts[a.kind] = agent_counts.get(a.kind, 0) + 1
+        console.print(f"\nsubagents 事实源库: {agents_lib}")
+        console.print("计划: " + ", ".join(f"{k}×{v}" for k, v in sorted(agent_counts.items())))
+        if not apply:
+            console.print("[dim]dry-run 模式（--apply 生效）[/dim]")
+        for line in run_agent_sync(agent_actions, agents_lib, apply, prefer):
+            style = {"link": "green", "relink": "yellow", "replace": "yellow",
+                     "conflict": "red"}.get(line.split()[0], None)
+            console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
+        for a in agent_actions:
+            if a.kind == "adopt-hint":
+                console.print(f"  [blue]提示[/blue] {a.tool}:{a.agent} 仅该工具有")
 
     # --- skills 层：库外独有自动收集，然后分发 ---
     if layer_skills:

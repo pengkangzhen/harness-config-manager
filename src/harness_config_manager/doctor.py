@@ -15,9 +15,11 @@ from .skills import resolve_library
 
 CHECKABLE_FILES = [
     ("claude", ".claude.json"),
+    ("claude", ".claude/settings.json"),
     ("zcode", ".zcode/cli/config.json"),
     ("codex", ".codex/config.toml"),
     ("cursor", ".cursor/mcp.json"),
+    ("cursor", ".cursor/hooks.json"),
     ("gemini", ".gemini/settings.json"),
     ("opencode", ".config/opencode/opencode.json"),
     ("vscode", "Library/Application Support/Code/User/mcp.json"),
@@ -61,7 +63,7 @@ def run_doctor() -> list[tuple[str, str, str]]:
         else:
             results.append(("ok", f"{tool}: ~/{pattern}", "可解析"))
 
-    # 2. skills 断链
+    # 2. skills / subagents 断链
     for spec in TOOLS:
         for pattern in spec.skills_dirs:
             root = expand(pattern)
@@ -70,6 +72,14 @@ def run_doctor() -> list[tuple[str, str, str]]:
             for child in root.iterdir():
                 if child.is_symlink() and not child.exists():
                     results.append(("error", f"{spec.key}: {child.name}",
+                                    f"断链（指向 {child.resolve(strict=False)} 不存在）"))
+        for pattern in getattr(spec, "agents_dirs", ()):
+            root = expand(pattern)
+            if not root.is_dir():
+                continue
+            for child in root.iterdir():
+                if child.is_symlink() and not child.exists():
+                    results.append(("error", f"{spec.key}: agent {child.name}",
                                     f"断链（指向 {child.resolve(strict=False)} 不存在）"))
 
     # 3. 库状态
@@ -122,5 +132,40 @@ def run_doctor() -> list[tuple[str, str, str]]:
             if not alive:
                 results.append(("error", f"{tool}: MCP {m.name}",
                                 f"command 指向的 {m.command} 不存在（死配置，建议删除）"))
+
+    # 6. hooks 死配置检测：仅对「单一脚本路径」形式的 command 判定存在性。
+    #    复合 shell 表达式（if/case/管道等）无法可靠判定，一律跳过不误报。
+    import re as _re
+    import shutil as _sh
+
+    from .hooks import HOOK_READERS
+    from .model import HookInfo
+
+    _META = _re.compile(r"[;&|`<>(){}\[\]]")
+
+    def _hook_alive(cmd: str, home: Path) -> bool | None:
+        s = cmd.strip()
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+            s = s[1:-1].strip()
+        for var in ("${HOME}", "$HOME"):
+            s = s.replace(var, str(home))
+        if not s or _META.search(s) or " " in s or s.startswith("-"):
+            return None                      # 复合 shell / 带参数 / 标志，放弃判定
+        p = Path(home / s[2:]) if s.startswith("~/") else Path(s)
+        return p.exists() if p.is_absolute() else _sh.which(s) is not None
+
+    for tool, reader in HOOK_READERS.items():
+        spec = BY_KEY.get(tool)
+        if spec is None or not any(expand(p).exists() for p in spec.config_dirs):
+            continue
+        infos: list[HookInfo] = []
+        reader(infos, [])
+        for h in infos:
+            if not h.command or h.type != "command":
+                continue
+            alive = _hook_alive(h.command, Path.home())
+            if alive is False:
+                results.append(("error", f"{tool}: hook {h.label} @ {h.event}",
+                                f"command 指向的 {h.command} 不存在（死配置，建议删除）"))
 
     return results

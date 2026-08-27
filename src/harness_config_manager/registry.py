@@ -16,6 +16,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         cli_names=("claude",),
         config_dirs=(".claude",),
         skills_dirs=(".claude/skills", ".agents/skills"),  # 后者为其跨工具共享发现路径
+        agents_dirs=(".claude/agents",),
         notes="MCP 在 ~/.claude.json 顶层 mcpServers；插件用 `claude plugin install -y` 无头安装",
     ),
     ToolSpec(
@@ -23,6 +24,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="ZCode",
         config_dirs=(".zcode",),
         skills_dirs=(".zcode/skills", ".agents/skills"),  # 同上
+        agents_dirs=(".zcode/agents",),  # 注意不是 .zcode/cli/agents（那是会话数据）
         notes="MCP 在 ~/.zcode/cli/config.json 的 mcp.servers；插件体系与 Claude Code 同源",
     ),
     ToolSpec(
@@ -39,6 +41,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         cli_names=("cursor-agent",),
         config_dirs=(".cursor",),
         skills_dirs=(".cursor/skills",),  # skills-cursor/ 为内置，跳过
+        agents_dirs=(".cursor/agents",),
         notes="MCP 在 ~/.cursor/mcp.json；插件 v1 仅盘点不安装",
     ),
     ToolSpec(

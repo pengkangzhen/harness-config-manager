@@ -15,6 +15,9 @@ class HcmConfig:
     library: str | None = None            # skills 事实源，None 走三层回退
     exclude_skills: list[str] = field(default_factory=list)
     exclude_mcp: list[str] = field(default_factory=list)
+    exclude_hooks: list[str] = field(default_factory=list)   # hooks 清单按 id 排除
+    agents_library: str | None = None     # subagents 事实源，None 走三层回退
+    exclude_agents: list[str] = field(default_factory=list)
 
 
 def load_config(path: Path | None = None) -> HcmConfig:
@@ -29,6 +32,9 @@ def load_config(path: Path | None = None) -> HcmConfig:
         library=doc.get("library"),
         exclude_skills=list(doc.get("exclude_skills", [])),
         exclude_mcp=list(doc.get("exclude_mcp", [])),
+        exclude_hooks=list(doc.get("exclude_hooks", [])),
+        agents_library=doc.get("agents_library"),
+        exclude_agents=list(doc.get("exclude_agents", [])),
     )
 
 
@@ -42,4 +48,10 @@ def save_config(cfg: HcmConfig, path: Path | None = None) -> None:
         doc["exclude_skills"] = cfg.exclude_skills
     if cfg.exclude_mcp:
         doc["exclude_mcp"] = cfg.exclude_mcp
+    if cfg.exclude_hooks:
+        doc["exclude_hooks"] = cfg.exclude_hooks
+    if cfg.agents_library:
+        doc["agents_library"] = cfg.agents_library
+    if cfg.exclude_agents:
+        doc["exclude_agents"] = cfg.exclude_agents
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")

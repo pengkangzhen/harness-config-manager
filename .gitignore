@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Harness local session data
+.zcode/
+.claude/
