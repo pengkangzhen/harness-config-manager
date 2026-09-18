@@ -87,7 +87,6 @@
         <header class="view-header">
           <h1>跨助手会话</h1>
           <div class="header-actions">
-            <input id="project-input" class="text-input" value="." spellcheck="false" title="当前项目路径（用于标记）" />
             <button id="btn-refresh-sessions" class="btn">↻ 刷新</button>
           </div>
         </header>
@@ -97,13 +96,30 @@
               <input id="search-input" class="text-input" placeholder="搜索会话内容…" spellcheck="false" />
               <button id="btn-search" class="btn">搜索</button>
             </div>
-            <div id="project-picker" class="project-picker"></div>
-            <div id="tool-filter" class="tool-filter hidden"></div>
-            <div class="list-toolbar">
-              <div id="session-count" class="session-count"></div>
-              <div class="view-toggle">
-                <button id="btn-view-list" class="toggle-btn">列表</button>
-                <button id="btn-view-timeline" class="toggle-btn active">时间线</button>
+            <div class="facet-panel">
+              <div class="facet-row">
+                <div class="facet-label">项目</div>
+                <div class="facet-value facet-dropdown-wrap">
+                  <button id="project-dropdown-btn" class="facet-select"></button>
+                  <div id="project-dropdown" class="project-dropdown hidden">
+                    <input id="project-search" class="text-input" placeholder="筛选项目名…" spellcheck="false" />
+                    <div id="project-dropdown-list" class="project-dropdown-list"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="facet-row">
+                <div class="facet-label">助手</div>
+                <div id="tool-filter" class="facet-value tool-filter hidden"></div>
+              </div>
+              <div class="facet-row">
+                <div class="facet-label">视图</div>
+                <div class="facet-value">
+                  <div class="view-toggle">
+                    <button id="btn-view-list" class="toggle-btn">列表</button>
+                    <button id="btn-view-timeline" class="toggle-btn active">时间线</button>
+                  </div>
+                </div>
+                <div id="session-count" class="session-count"></div>
               </div>
             </div>
             <div id="sessions-list" class="sessions-list"></div>

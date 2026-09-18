@@ -75,7 +75,7 @@ const state = {
   sessions: [],
   projects: [],
   projectFilter: null,    // null = 全部项目；string = 项目路径
-  toolFilter: null,       // null = 全部助手
+  toolFilters: new Set(), // 空集 = 全部助手
   viewMode: "timeline",   // "timeline" | "list"
   matrixLayer: "skills",
   matrixGapsOnly: false,
@@ -426,7 +426,8 @@ $("btn-refresh-matrix").addEventListener("click", () => loadMatrix(true));
 /* ---------------- sessions ---------------- */
 
 function currentProject() {
-  return $("project-input").value.trim() || ".";
+  // 维度面板接管项目选择后，这里仅作为 CLI --project 标记参数
+  return ".";
 }
 
 async function loadSessionsView() {
@@ -450,36 +451,74 @@ async function loadSessionProjects() {
     return;
   }
   state.projects = data.projects || [];
-  renderProjectPicker();
+  renderProjectSelectButton();
 }
 
-function renderProjectPicker() {
-  const picker = $("project-picker");
-  picker.replaceChildren();
+let projectDropdownOpen = false;
 
-  // "全部项目" row
+function toggleProjectDropdown(open) {
+  projectDropdownOpen = open;
+  $("project-dropdown").classList.toggle("hidden", !open);
+  $("project-dropdown-btn").classList.toggle("open", open);
+  if (open) {
+    $("project-search").value = "";
+    renderProjectDropdownList("");
+    $("project-search").focus();
+  }
+}
+
+function selectProject(path) {
+  state.projectFilter = path;
+  toggleProjectDropdown(false);
+  renderProjectSelectButton();
+  loadSessions();
+}
+
+function renderProjectSelectButton() {
+  const btn = $("project-dropdown-btn");
+  btn.replaceChildren();
+  if (state.projectFilter === null) {
+    btn.append(el("span", "facet-select-label", `全部项目 · ${state.projects.length} 个`));
+  } else {
+    const p = state.projects.find((x) => x.path === state.projectFilter);
+    btn.append(el("span", "facet-select-label", p ? (p.name || basename(p.path)) : basename(state.projectFilter)));
+    if (p) {
+      const dots = el("span", "project-dots");
+      for (const tool of p.tools || []) {
+        const dot = el("span", "filter-dot");
+        dot.style.backgroundColor = toolColor(tool);
+        dot.title = tool;
+        dots.append(dot);
+      }
+      btn.append(dots);
+    }
+  }
+  btn.append(el("span", "facet-caret", "▾"));
+}
+
+function renderProjectDropdownList(filter) {
+  const listEl = $("project-dropdown-list");
+  listEl.replaceChildren();
+  const needle = (filter || "").trim().toLowerCase();
+
   const allRow = el("div", `project-item${state.projectFilter === null ? " selected" : ""}`);
   const allHead = el("div", "project-head");
   allHead.append(el("span", "project-name", "全部项目"));
   const totalSessions = state.projects.reduce((a, p) => a + p.sessions, 0);
-  allHead.append(el("span", "project-count", `${state.projects.length} 个项目 · ${totalSessions} 会话`));
+  allHead.append(el("span", "project-count", `${state.projects.length} 项目 · ${totalSessions} 会话`));
   allRow.append(allHead);
-  allRow.addEventListener("click", () => {
-    state.projectFilter = null;
-    renderProjectPicker();
-    loadSessions();
-  });
-  picker.append(allRow);
+  allRow.addEventListener("click", () => selectProject(null));
+  listEl.append(allRow);
 
-  for (const p of state.projects) {
+  const projects = needle
+    ? state.projects.filter((p) =>
+        (p.path || "").toLowerCase().includes(needle) ||
+        (p.name || "").toLowerCase().includes(needle))
+    : state.projects;
+  for (const p of projects) {
     const row = el("div", `project-item${state.projectFilter === p.path ? " selected" : ""}`);
     const head = el("div", "project-head");
-    const name = el("span", "project-name", p.name || basename(p.path));
-    if (p.current) {
-      const cur = el("span", "project-current", "当前");
-      name.append(cur);
-    }
-    head.append(name);
+    head.append(el("span", "project-name", p.name || basename(p.path)));
     head.append(el("span", "project-count", `${p.sessions} 会话`));
     row.append(head);
 
@@ -496,14 +535,24 @@ function renderProjectPicker() {
     row.append(sub);
 
     row.title = p.path;
-    row.addEventListener("click", () => {
-      state.projectFilter = p.path;
-      renderProjectPicker();
-      loadSessions();
-    });
-    picker.append(row);
+    row.addEventListener("click", () => selectProject(p.path));
+    listEl.append(row);
+  }
+  if (needle && !projects.length) {
+    listEl.append(el("div", "loading", "没有匹配的项目"));
   }
 }
+
+$("project-dropdown-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleProjectDropdown(!projectDropdownOpen);
+});
+$("project-search").addEventListener("input", (e) => renderProjectDropdownList(e.target.value));
+document.addEventListener("click", (e) => {
+  if (projectDropdownOpen && !e.target.closest(".facet-dropdown-wrap")) {
+    toggleProjectDropdown(false);
+  }
+});
 
 async function loadSessions() {
   const list = $("sessions-list");
@@ -544,21 +593,23 @@ function renderToolFilter() {
   }
   box.classList.remove("hidden");
 
-  const all = el("button", `filter-chip${state.toolFilter === null ? " active" : ""}`, `全部 ${state.sessions.length}`);
+  const anySelected = state.toolFilters.size > 0;
+  const all = el("button", `filter-chip${!anySelected ? " active" : ""}`, `全部 ${state.sessions.length}`);
   all.addEventListener("click", () => {
-    state.toolFilter = null;
+    state.toolFilters.clear();
     renderToolFilter();
     renderSessions(state.sessions);
   });
   box.append(all);
 
   for (const [tool, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
-    const chip = el("button", `filter-chip${state.toolFilter === tool ? " active" : ""}`);
+    const chip = el("button", `filter-chip${state.toolFilters.has(tool) ? " active" : ""}`);
     const dot = el("span", "filter-dot");
     dot.style.backgroundColor = toolColor(tool);
     chip.append(dot, el("span", "", tool), el("span", "filter-count", String(n)));
     chip.addEventListener("click", () => {
-      state.toolFilter = state.toolFilter === tool ? null : tool;
+      if (state.toolFilters.has(tool)) state.toolFilters.delete(tool);
+      else state.toolFilters.add(tool);
       renderToolFilter();
       renderSessions(state.sessions);
     });
@@ -567,17 +618,23 @@ function renderToolFilter() {
 }
 
 function applyToolFilter(items) {
-  return state.toolFilter ? items.filter((s) => s.tool === state.toolFilter) : items;
+  return state.toolFilters.size ? items.filter((s) => state.toolFilters.has(s.tool)) : items;
 }
 
 /* ---------- dimension 2: timeline / list views ---------- */
 
 function renderSessions(items) {
   const filtered = applyToolFilter(items);
-  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
-  $("session-count").textContent = `${scope} · ${filtered.length} / ${items.length} 个会话`;
+  updateSessionCount(filtered.length, items.length);
   if (state.viewMode === "timeline") renderTimeline(filtered);
   else renderFlatList(filtered);
+}
+
+function updateSessionCount(shown, total, suffix) {
+  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
+  const toolScope = state.toolFilters.size ? ` · ${state.toolFilters.size} 个助手` : "";
+  const tail = suffix ? ` · ${suffix}` : "";
+  $("session-count").textContent = `${scope}${toolScope}${tail} · ${shown}/${total}`;
 }
 
 function sessionCard(s, opts = {}) {
@@ -608,7 +665,7 @@ function renderFlatList(items) {
   list.className = "sessions-list";
   list.replaceChildren();
   if (!items.length) {
-    list.append(el("div", "loading", state.toolFilter ? `${state.toolFilter} 没有会话` : "没有找到会话"));
+    list.append(el("div", "loading", state.toolFilters.size ? "所选助手没有会话" : "没有找到会话"));
     return;
   }
   for (const s of items) list.append(sessionCard(s));
@@ -619,7 +676,7 @@ function renderTimeline(items) {
   list.className = "sessions-list timeline";
   list.replaceChildren();
   if (!items.length) {
-    list.append(el("div", "loading", state.toolFilter ? `${state.toolFilter} 没有会话` : "没有找到会话"));
+    list.append(el("div", "loading", state.toolFilters.size ? "所选助手没有会话" : "没有找到会话"));
     return;
   }
 
@@ -699,7 +756,7 @@ async function selectSession(session, itemEl) {
   detail.className = "session-detail";
   detail.replaceChildren(el("div", "loading", "读取会话详情…"));
 
-  const project = session.project || currentProject();
+  const project = session.project || state.projectFilter || ".";
   let data;
   try {
     data = await invoke("hcm_sessions_show", {
@@ -759,7 +816,7 @@ function renderSessionDetail(data) {
     try {
       const text = await invoke("hcm_sessions_context", {
         ref: s.ref,
-        project: s.project || currentProject(),
+        project: s.project || state.projectFilter || ".",
         tail: 40,
       });
       let block = detail.querySelector(".handoff-block");
@@ -812,9 +869,6 @@ function renderSessionDetail(data) {
 }
 
 $("btn-refresh-sessions").addEventListener("click", loadSessionsView);
-$("project-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") loadSessionsView();
-});
 
 /* ---------- session search (follows project + harness filters) ---------- */
 
@@ -841,8 +895,7 @@ async function runSearch() {
   }
   const allHits = data.hits || [];
   const hits = applyToolFilter(allHits);
-  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
-  $("session-count").textContent = `${scope} · 搜索“${query}”：${hits.length} / ${allHits.length} 条`;
+  updateSessionCount(hits.length, allHits.length, `搜索“${query}”`);
   list.className = "sessions-list";
   list.replaceChildren();
   if (!hits.length) {
