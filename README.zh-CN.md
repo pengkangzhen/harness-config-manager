@@ -104,3 +104,32 @@ exclude_agents = []              # 不分发的 subagent 名单
 ```bash
 uv run pytest               # 63 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
+
+## 桌面 App（Tauri + hcm sidecar）
+
+`desktop/` 内置一个 Tauri v2 桌面应用：
+
+- **总览仪表盘**：检测到的工具、五层配置（skills / subagents / MCP / 插件 / hooks）计数、健康检查问题
+- **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
+- **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
+
+前端为纯静态文件（无构建步骤），通过 Tauri IPC 调用 Rust 命令；Rust 侧以 sidecar 方式执行 `hcm --json`。sidecar 解析顺序：`HCM_BINARY` 环境变量 → 应用旁打包的 `hcm` 可执行文件 → PATH 上的 `hcm`。
+
+### 开发
+
+```bash
+cd desktop
+npm install
+HCM_BINARY=../devbin/hcm npm run dev   # 使用本仓库 .venv 中的 hcm，而非全局安装版
+```
+
+依赖：Node 18+、Rust toolchain、Xcode Command Line Tools（macOS）。
+
+### 构建
+
+```bash
+cd desktop
+npm run build
+```
+
+正式打包时可把 PyInstaller 产出的 `hcm` 二进制放入 `desktop/src-tauri/binaries/hcm-<target-triple>` 并在 `tauri.conf.json` 的 `bundle` 中声明 `externalBin`，使其随 App 分发。

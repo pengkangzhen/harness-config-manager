@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" />
+  <title>Harness Config Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">H</div>
+        <div>
+          <div class="brand-name">hcm</div>
+          <div class="brand-sub">harness config manager</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="overview">
+          <span class="nav-icon">◎</span> 总览
+        </button>
+        <button class="nav-item" data-view="sessions">
+          <span class="nav-icon">⌘</span> 会话
+        </button>
+        <button class="nav-item" data-view="sync">
+          <span class="nav-icon">⇄</span> 同步
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="hcm-version" class="version-pill">hcm …</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- ============ Overview ============ -->
+      <section id="view-overview" class="view active">
+        <header class="view-header">
+          <h1>总览</h1>
+          <div class="header-actions">
+            <button id="btn-refresh-scan" class="btn">↻ 刷新</button>
+          </div>
+        </header>
+        <div id="scan-error" class="error-box hidden"></div>
+        <div id="scan-loading" class="loading">正在扫描本机 AI 编码工具…</div>
+        <div id="overview-content" class="hidden">
+          <div id="doctor-section" class="doctor-section hidden">
+            <h2>健康检查</h2>
+            <div id="doctor-list"></div>
+          </div>
+          <h2 id="tools-heading">工具</h2>
+          <div id="tools-grid" class="tools-grid"></div>
+        </div>
+      </section>
+
+      <!-- ============ Sessions ============ -->
+      <section id="view-sessions" class="view">
+        <header class="view-header">
+          <h1>跨助手会话</h1>
+          <div class="header-actions">
+            <input id="project-input" class="text-input" value="." spellcheck="false" title="项目路径" />
+            <button id="btn-refresh-sessions" class="btn">↻ 刷新</button>
+          </div>
+        </header>
+        <div class="sessions-layout">
+          <div class="sessions-left">
+            <div class="search-row">
+              <input id="search-input" class="text-input" placeholder="搜索会话内容…" spellcheck="false" />
+              <button id="btn-search" class="btn">搜索</button>
+            </div>
+            <div id="sessions-list" class="sessions-list"></div>
+          </div>
+          <div class="sessions-right">
+            <div id="session-detail" class="session-detail empty">
+              <div class="empty-state">← 选择一个会话查看详情</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Sync ============ -->
+      <section id="view-sync" class="view">
+        <header class="view-header">
+          <h1>同步</h1>
+        </header>
+        <div class="sync-panel">
+          <p class="sync-note">
+            默认 dry-run：只生成计划、不写任何文件。Apply 才会实际执行（skills 覆盖前自动备份）。
+          </p>
+          <div class="layer-grid">
+            <label class="layer-chip"><input type="checkbox" value="skills" checked /><span>skills</span></label>
+            <label class="layer-chip"><input type="checkbox" value="mcp" checked /><span>MCP</span></label>
+            <label class="layer-chip"><input type="checkbox" value="plugins" checked /><span>插件</span></label>
+            <label class="layer-chip"><input type="checkbox" value="hooks" checked /><span>hooks</span></label>
+            <label class="layer-chip"><input type="checkbox" value="agents" checked /><span>subagents</span></label>
+            <label class="layer-chip"><input type="checkbox" value="sessions" checked /><span>sessions skill</span></label>
+          </div>
+          <div class="sync-actions">
+            <button id="btn-sync-preview" class="btn">预览 dry-run</button>
+            <button id="btn-sync-apply" class="btn danger" disabled>Apply 实际执行</button>
+          </div>
+          <pre id="sync-output" class="sync-output hidden"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

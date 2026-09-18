@@ -141,3 +141,32 @@ uv run pytest               # 63 tests, all against a fake $HOME — never touch
 ## License
 
 MIT
+
+## Desktop App (Tauri + hcm sidecar)
+
+`desktop/` ships a Tauri v2 desktop app:
+
+- **Overview dashboard**: detected tools, five-layer counts (skills / subagents / MCP / plugins / hooks), doctor issues
+- **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
+- **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
+
+The frontend is plain static files (no build step) talking to Rust commands over Tauri IPC; the Rust side executes `hcm --json` as a sidecar. Sidecar resolution order: `HCM_BINARY` env var → bundled `hcm` executable next to the app → `hcm` on PATH.
+
+### Development
+
+```bash
+cd desktop
+npm install
+HCM_BINARY=../devbin/hcm npm run dev   # use the repo's .venv hcm instead of the global one
+```
+
+Requires Node 18+, a Rust toolchain, and Xcode Command Line Tools (macOS).
+
+### Build
+
+```bash
+cd desktop
+npm run build
+```
+
+For release distribution, place a PyInstaller-built `hcm` binary at `desktop/src-tauri/binaries/hcm-<target-triple>` and declare it as `externalBin` in `tauri.conf.json` so it ships inside the app bundle.

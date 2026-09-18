@@ -187,6 +187,27 @@ def install(
 
 
 # ---------------------------------------------------------------------------
+# version：桌面 App / 脚本探测用
+
+
+@app.command()
+def version(
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """显示 hcm 版本。"""
+    from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+    try:
+        v = pkg_version("harness-config-manager")
+    except PackageNotFoundError:
+        v = "0.0.0+dev"
+    if json_out:
+        console.print_json(_json.dumps({"name": "hcm", "version": v}, ensure_ascii=False))
+    else:
+        console.print(f"hcm {v}")
+
+
+# ---------------------------------------------------------------------------
 # scan：detect + 盘点 + doctor，只读全家桶
 
 
@@ -208,9 +229,14 @@ def scan(
 
     reports = scan_all()
     if json_out:
+        doctor = [
+            {"level": level, "where": where, "message": msg}
+            for level, where, msg in run_doctor()
+        ]
         console.print_json(_json.dumps({
             "tools_detected": [d.__dict__ for d in detections if d.installed],
             "inventory": _json.loads(rp.to_json(reports)),
+            "doctor": doctor,
         }, ensure_ascii=False))
         return
 

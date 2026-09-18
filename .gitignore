@@ -12,3 +12,8 @@ wheels/
 # Harness local session data
 .zcode/
 .claude/
+
+# Tauri desktop app
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/
