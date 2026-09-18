@@ -30,6 +30,12 @@
         <button class="nav-item" data-view="dispatch">
           <span class="nav-icon">⏵</span> 调度
         </button>
+        <button class="nav-item" data-view="models">
+          <span class="nav-icon">∗</span> 模型
+        </button>
+        <button class="nav-item" data-view="audit">
+          <span class="nav-icon">☰</span> 审计
+        </button>
         <button class="nav-item" data-view="sync">
           <span class="nav-icon">⇄</span> 同步
         </button>
@@ -172,6 +178,59 @@
 
             <div id="dispatch-error" class="error-box hidden"></div>
             <div id="dispatch-tasks" class="dispatch-tasks"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Models ============ -->
+      <section id="view-models" class="view">
+        <header class="view-header">
+          <h1>原生模型</h1>
+          <div class="header-actions">
+            <button id="btn-refresh-models" type="button" class="btn">↻ 刷新</button>
+          </div>
+        </header>
+        <div id="models-error" class="error-box hidden"></div>
+        <div class="model-panel">
+          <p class="model-note">
+            配置 OpenAI-compatible 路由。halter 只保存 base URL 与环境变量名，永远不会保存 API key。
+          </p>
+          <label class="model-field">
+            <span>默认模型</span>
+            <input id="native-model-input" class="text-input" placeholder="local/qwen-coder 或 zhipu/glm-4.7" spellcheck="false" />
+          </label>
+          <label class="model-field">
+            <span>Base URL</span>
+            <input id="native-base-url-input" class="text-input" placeholder="http://127.0.0.1:11434/v1（openai/zhipu 可留空）" spellcheck="false" />
+          </label>
+          <label class="model-field">
+            <span>API key 环境变量名</span>
+            <input id="native-api-key-env-input" class="text-input" placeholder="LOCAL_MODEL_API_KEY（本地服务可留空）" spellcheck="false" />
+          </label>
+          <div class="model-actions">
+            <button id="btn-save-native-model" type="button" class="btn">保存并重启 AHP</button>
+          </div>
+          <div id="model-status" class="model-status"></div>
+        </div>
+      </section>
+
+      <!-- ============ Audit ============ -->
+      <section id="view-audit" class="view">
+        <header class="view-header">
+          <h1>原生 Agent 审计</h1>
+          <div class="header-actions">
+            <input id="audit-kind-input" class="text-input audit-kind-input" placeholder="按事件类型过滤，如 approval.response" spellcheck="false" />
+            <button id="btn-refresh-audit" type="button" class="btn">↻ 刷新</button>
+          </div>
+        </header>
+        <div id="audit-error" class="error-box hidden"></div>
+        <div id="audit-loading" class="loading">正在读取私有审计日志…</div>
+        <div id="audit-content" class="audit-layout hidden">
+          <div class="audit-left">
+            <div id="audit-list" class="audit-list"></div>
+          </div>
+          <div id="audit-detail" class="audit-detail empty">
+            <div class="empty-state">← 选择一个审计轨迹查看事件</div>
           </div>
         </div>
       </section>

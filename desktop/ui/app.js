@@ -98,6 +98,10 @@ const state = {
   expandedFamilies: new Set(),
   projectsError: null,
   projectMatches: [],
+  modelsLoaded: false,
+  auditLoaded: false,
+  auditItems: [],
+  selectedAudit: null,
   dispatchLoaded: false,
   dispatchModels: {},      // harness -> 默认模型（config.toml [models]）
   dispatchCatalog: {},     // harness -> 可选模型列表（[model_catalog] 或内置 GLM 系）
@@ -121,6 +125,8 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     if (btn.dataset.view === "overview") loadOverview();
     if (btn.dataset.view === "matrix") loadMatrix();
     if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
+    if (btn.dataset.view === "models") loadModelsView();
+    if (btn.dataset.view === "audit") loadAuditView();
     if (btn.dataset.view === "dispatch") loadDispatchView();
   });
 });
@@ -1038,6 +1044,210 @@ async function runSearch() {
 $("btn-search").addEventListener("click", runSearch);
 $("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
+});
+
+/* ---------------- models（原生模型配置） ---------------- */
+
+async function loadModelsView(force = false) {
+  if (!force && state.modelsLoaded) return;
+  const status = $("model-status");
+  status.textContent = "";
+  try {
+    const data = await invoke("halter_models");
+    const model = (data.models || {}).halter || "";
+    $("native-model-input").value = model;
+    const provider = model.includes("/") ? model.split("/")[0] : "";
+    const providerConfig = (data.providers || {})[provider] || {};
+    $("native-base-url-input").value = providerConfig.base_url || "";
+    $("native-api-key-env-input").value = providerConfig.api_key_env || "";
+    state.modelsLoaded = true;
+  } catch (err) {
+    showError($("models-error"), err);
+  }
+}
+
+async function saveNativeModel() {
+  const errorBox = $("models-error");
+  const status = $("model-status");
+  errorBox.classList.add("hidden");
+  status.className = "model-status";
+  status.textContent = "保存中…";
+  const button = $("btn-save-native-model");
+  button.disabled = true;
+  try {
+    const model = $("native-model-input").value.trim();
+    const baseUrl = $("native-base-url-input").value.trim();
+    const apiKeyEnv = $("native-api-key-env-input").value.trim();
+    if (!model) throw new Error("默认模型不能为空");
+    await invoke("halter_model_configure", {
+      model,
+      baseUrl: baseUrl || null,
+      apiKeyEnv,
+    });
+    // AHP host caches config at startup. Stop our managed host so the next
+    // dispatch recreates it with the new provider routing.
+    try {
+      await invoke("halter_ahp_stop");
+    } catch (_err) {
+      // An externally managed host may refuse stop; surface a restart hint.
+    }
+    state.ahp = null;
+    state.dispatchLoaded = false;
+    state.modelsLoaded = false;
+    await loadModelsView(true);
+    status.className = "model-status ok";
+    status.textContent = "已保存。托管 AHP 将在下次派发时重启；外部手动 host 需要重启后生效。";
+  } catch (err) {
+    status.className = "model-status";
+    status.textContent = "";
+    showError(errorBox, err);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("btn-refresh-models").addEventListener("click", () => {
+  state.modelsLoaded = false;
+  loadModelsView(true);
+});
+$("btn-save-native-model").addEventListener("click", saveNativeModel);
+
+/* ---------------- audit（原生 Agent 审计） ---------------- */
+
+async function loadAuditView(force = false) {
+  const loading = $("audit-loading");
+  const content = $("audit-content");
+  const errorBox = $("audit-error");
+  errorBox.classList.add("hidden");
+  if (!force && state.auditLoaded) return;
+  loading.classList.remove("hidden");
+  content.classList.add("hidden");
+  try {
+    const data = await invoke("halter_audit_list", { limit: 100 });
+    state.auditItems = data.audits || [];
+    state.auditLoaded = true;
+    loading.classList.add("hidden");
+    renderAuditList();
+    content.classList.remove("hidden");
+  } catch (err) {
+    loading.classList.add("hidden");
+    showError(errorBox, err);
+  }
+}
+
+function auditKindTone(kind) {
+  if (kind === "turn.failed" || kind === "transaction.rollbackFailed") return "err";
+  if (kind === "approval.response" || kind === "transaction.rolledBack") return "approval";
+  if (kind === "tool.call" || kind === "tool.result") return "tool";
+  if (kind.startsWith("context.")) return "context";
+  return "";
+}
+
+function renderAuditList() {
+  const list = $("audit-list");
+  list.replaceChildren();
+  if (!state.auditItems.length) {
+    const empty = el("div", "empty-state", "暂无原生 Agent 审计轨迹");
+    list.append(empty);
+    return;
+  }
+  for (const item of state.auditItems) {
+    const row = el("div", "audit-item" + (state.selectedAudit?.session_id === item.session_id ? " selected" : ""));
+    const title = el("div", "audit-title", item.title || item.session_id);
+    const meta = el("div", "audit-meta");
+    meta.append(el("span", "tool-badge", item.provider || "native"));
+    meta.append(el("span", "meta-item", `${item.event_count} events`));
+    meta.append(el("span", "meta-item", fmtDate(item.last_event_at)));
+    const kindRow = el("div", "audit-kind-row");
+    const kinds = Object.entries(item.kinds || {}).slice(0, 6);
+    for (const [kind, count] of kinds) {
+      const chip = el("span", `audit-kind-chip ${auditKindTone(kind)}`, `${kind} ×${count}`);
+      chip.addEventListener("click", () => {
+        $("audit-kind-input").value = kind;
+        if (state.selectedAudit) selectAudit(state.selectedAudit);
+      });
+      kindRow.append(chip);
+    }
+    row.append(title, meta, kindRow);
+    row.addEventListener("click", () => selectAudit(item));
+    list.append(row);
+  }
+}
+
+async function selectAudit(item) {
+  state.selectedAudit = item;
+  renderAuditList();
+  const detail = $("audit-detail");
+  detail.className = "audit-detail";
+  detail.replaceChildren(el("div", "loading", "正在读取审计事件…"));
+  const kind = $("audit-kind-input").value.trim();
+  try {
+    const data = await invoke("halter_audit_show", {
+      sessionId: item.session_id,
+      kind: kind || null,
+      tail: 300,
+    });
+    renderAuditDetail(data);
+  } catch (err) {
+    detail.className = "audit-detail";
+    detail.replaceChildren();
+    const box = el("div", "error-box");
+    box.textContent = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
+    detail.append(box);
+  }
+}
+
+function renderAuditDetail(data) {
+  const detail = $("audit-detail");
+  detail.className = "audit-detail";
+  detail.replaceChildren();
+  const summary = data.summary || {};
+  const header = el("div", "detail-header");
+  header.append(el("h2", "detail-title", summary.title || summary.session_id || "Audit"));
+  const meta = el("div", "meta-grid");
+  const fields = [
+    ["Session", summary.session_id],
+    ["Provider", summary.provider],
+    ["Workspace", summary.workspace],
+    ["Events", `${data.returned_events || 0} / ${data.total_events || 0}`],
+    ["First", summary.first_event_at],
+    ["Last", summary.last_event_at],
+    ["Size", `${summary.size_bytes || 0} B`],
+  ];
+  for (const [label, value] of fields) {
+    const cell = el("div", "meta-cell");
+    cell.append(el("div", "meta-label", label));
+    cell.append(el("div", "meta-value", value || "-"));
+    meta.append(cell);
+  }
+  header.append(meta);
+  detail.append(header);
+
+  const events = el("div", "audit-events");
+  for (const event of data.events || []) {
+    const item = el("div", `audit-event ${auditKindTone(event.kind)}`);
+    const head = el("div", "audit-event-head");
+    head.append(el("span", "audit-event-kind", event.kind || "-"));
+    head.append(el("span", "audit-event-time", event.ts || "-"));
+    item.append(head);
+    const body = el("pre", "audit-event-body");
+    const payload = { ...event };
+    delete payload.ts;
+    delete payload.kind;
+    body.textContent = JSON.stringify(payload, null, 2);
+    item.append(body);
+    events.append(item);
+  }
+  detail.append(events);
+}
+
+$("btn-refresh-audit").addEventListener("click", () => {
+  state.auditLoaded = false;
+  state.selectedAudit = null;
+  loadAuditView(true);
+});
+$("audit-kind-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && state.selectedAudit) selectAudit(state.selectedAudit);
 });
 
 /* ---------------- dispatch（多 Harness 任务调度） ---------------- */

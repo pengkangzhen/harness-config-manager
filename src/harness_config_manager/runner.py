@@ -400,6 +400,11 @@ def _spawn(argv: list[str], project: Path, log_path: Path | None) -> subprocess.
     )
 
 
+def _create_private_log(path: Path) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+
+
 def start_detached(
     tool: str,
     prompt: str,
@@ -427,11 +432,7 @@ def start_detached(
     )
     d = task_dir(info.task_id)
     log = d / "output.log"
-    log.touch()
-    try:
-        log.chmod(0o600)
-    except OSError:
-        pass
+    _create_private_log(log)
     proc = _spawn(argv, project, log)
     info.pid = proc.pid
     save_task(info)
@@ -472,11 +473,7 @@ def run_foreground(
     for spec, argv, info in specs:
         d = task_dir(info.task_id)
         log = d / "output.log"
-        log.touch()
-        try:
-            log.chmod(0o600)
-        except OSError:
-            pass
+        _create_private_log(log)
         logs[info.task_id] = log
         proc = _spawn(argv, project, None)
         procs[info.task_id] = proc

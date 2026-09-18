@@ -81,6 +81,10 @@ halter = "openai/gpt-5"       # native AHP provider
 
 安全语义：默认 `--mode safe`（各助手权限受控，能改动的范围由各自沙箱决定）；`--mode yolo` 才映射到各家的“跳过确认”开关。提示词作为独立 argv 元素传递，不经过 shell。任务记录写入 `~/.config/halter/tasks/`（0700/0600 私有权限），输出查看时自动脱敏。前台模式 Ctrl-C 或 `--timeout` 会终止整个进程组。
 
+桌面「模型」视图可配置非敏感的 OpenAI-compatible 路由（base URL 与 API key 环境变量名），不会保存真实密钥。
+
+桌面 App 提供原生 Agent「审计」视图，可检查模型/工具决策、审批、回滚与上下文压缩。
+
 桌面 App 的「调度」视图提供同一能力的图形界面：@提及、可用性徽标、项目选择、任务卡片实时轮询输出。
 
 ## AHP：自建 Agent Host（协议级挂载全部 Harness）
@@ -90,6 +94,8 @@ halter = "openai/gpt-5"       # native AHP provider
 ```bash
 halter ahp serve --port 7433
 ```
+
+AHP host 只绑定本机地址，并会把随机 bearer token 写入 `~/.config/halter/ahp-token`（权限 `0600`）。所有 WebSocket、JSON-RPC 与 SSE 请求都必须通过 `Authorization: Bearer <token>`（或 `?token=`）认证；浏览器请求还必须命中显式 allow-list。桌面端会读取同一个 token 文件，并用一次已认证 ping 验证 host。可用 `HALTER_AHP_ALLOWED_ORIGINS=vscode-webview://...,https://your-app.example` 配置浏览器来源；不要使用 `*`。
 
 任何 AHP 客户端（VS Code Agents 窗口、AHPX、官方 Rust/TS/Go/Swift/Kotlin client 库）连接后即可：
 

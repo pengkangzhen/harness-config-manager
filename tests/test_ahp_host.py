@@ -973,3 +973,34 @@ def test_native_plan_is_broadcast_and_restored(fake_harnesses, fake_home: Path, 
             assert snapshot["state"]["currentPlan"]["steps"][0]["status"] == "in_progress"
 
     asyncio.run(_run())
+
+
+def test_initialize_rekeys_connection_object_and_subscriptions(fake_home: Path) -> None:
+    async def _rekey() -> None:
+        host = AhpHost()
+        conn = host.new_conn("temporary")
+        await host._cmd_initialize("temporary", {
+            "protocolVersions": [PROTOCOL_VERSION],
+            "clientId": "stable-client",
+            "initialSubscriptions": ["ahp-root://"],
+        })
+        assert conn.client_id == "stable-client"
+        assert host.connections["stable-client"] is conn
+        assert "temporary" not in host.connections
+        assert host.subscriptions["stable-client"] == {"ahp-root://"}
+
+    asyncio.run(_rekey())
+
+
+def test_slow_connection_is_dropped_at_outbox_bound(fake_home: Path) -> None:
+    async def _bounded() -> None:
+        host = AhpHost()
+        conn = host.new_conn("slow")
+        for _ in range(1000):
+            conn.outbox.put_nowait("{}")
+        await host._broadcast("action", {"channel": "ahp-root://", "params": {}})
+        assert not conn.alive
+        assert "slow" not in host.connections
+        assert conn.outbox.qsize() == 1000
+
+    asyncio.run(_bounded())

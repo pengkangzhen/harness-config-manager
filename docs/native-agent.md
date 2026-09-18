@@ -5,6 +5,10 @@ Halter now has two kinds of AHP backends:
 1. **External harness adapters** — `claude`, `codex`, `zcode`, and `opencode` are launched through their existing headless CLI contracts. Their stdout is streamed as AHP chat events and each invocation/output is written to the private agent audit log.
 2. **Native `halter` provider** — Halter owns the model/tool decision loop itself. This is the first step toward a controllable, auditable, multi-model local coding harness rather than only a dispatcher.
 
+## Transport security
+
+The AHP host binds to localhost and generates a random bearer token at startup. It writes the token to `~/.config/halter/ahp-token` with mode `0600`; every WS/HTTP-RPC/SSE request must present it. Browser-origin requests are denied unless their exact `Origin` appears in `HALTER_AHP_ALLOWED_ORIGINS`. Slow clients have bounded outboxes and must reconnect after the server drops them, so a stalled browser tab cannot grow host memory indefinitely.
+
 The native runtime defaults to **read-only**. It can also perform workspace writes through `apply_patch`, but only when `workspace-write` mode is explicitly selected and the user approves the exact unified diff in the desktop UI. There is no arbitrary shell tool yet.
 
 ## Model providers
@@ -23,7 +27,7 @@ The model prefix selects an OpenAI-compatible endpoint:
 | `openai/...` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
 | `zhipu/...` | `ZHIPUAI_API_KEY` | `https://open.bigmodel.cn/api/paas/v4` |
 
-Custom OpenAI-compatible providers are declarative and keyless in config; the real key, when required, is read from the named environment variable:
+The desktop **Model** view writes these non-secret fields through `halter model configure` and restarts halter's managed AHP host automatically. Custom OpenAI-compatible providers are declarative and keyless in config; the real key, when required, is read from the named environment variable:
 
 ```toml
 [model_providers.local]
@@ -120,6 +124,15 @@ The directory is mode `0700` and the file mode `0600`. Native runs record:
 - `turn.completed` or `turn.failed`
 
 External adapters additionally record `runner.started`, `runner.finished`, and `runner.failed` with their argv and output. Secret-like values are redacted using the same conservative matcher as the session reader.
+
+Inspect trails locally without starting the model:
+
+```bash
+halter audit list
+halter audit show <session-id> --kind approval.response --tail 100
+```
+
+The desktop **Audit** view uses the same read-only JSON API to list trails and inspect events.
 
 ## AHP event extensions
 

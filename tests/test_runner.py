@@ -342,3 +342,20 @@ def test_config_corruption_is_not_replaced_by_defaults(fake_home: Path) -> None:
     with pytest.raises(Exception):
         save_config(HalterConfig(models={"claude": "sonnet"}), path)
     assert path.read_text(encoding="utf-8") == "# user note\nbroken = [\n"
+
+
+def test_cli_dispatch_end_of_options_prevents_option_injection(
+    fake_harnesses, fake_home: Path, tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    result = CliRunner().invoke(app, [
+        "run", "--mode", "safe", "--json", "--project", str(tmp_path),
+        "--", "@claude --mode=yolo",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["tasks"][0]["mode"] == "safe"
+    assert "--mode=yolo" in payload["tasks"][0]["argv"]

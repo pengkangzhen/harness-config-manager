@@ -26,6 +26,12 @@ app.add_typer(tasks_app, name="tasks")
 ahp_app = typer.Typer(help="AHP（Agent Host Protocol）服务器：把 claude/codex/zcode 挂载为标准 agent backend。")
 app.add_typer(ahp_app, name="ahp")
 
+audit_app = typer.Typer(help="查看原生 Agent 的私有审计轨迹。")
+app.add_typer(audit_app, name="audit")
+
+model_app = typer.Typer(help="配置原生 Agent 的 OpenAI-compatible 模型路由。")
+app.add_typer(model_app, name="model")
+
 
 @app.callback()
 def _root() -> None:
@@ -316,6 +322,7 @@ def models(
         console.print_json(_json.dumps({
             "models": configured,
             "catalog": catalog,
+            "providers": cfg.model_providers,
             "runners": {
                 **{k: {"display": r.display} for k, r in RUNNERS.items()},
                 "halter": {
@@ -340,6 +347,67 @@ def models(
 
 
 # ---------------------------------------------------------------------------
+# model：原生 Agent 模型路由配置
+
+
+@model_app.command()
+def configure(
+    model: str = typer.Option(..., "--model", "-m", help="原生默认模型，如 local/qwen-coder 或 zhipu/glm-4.7"),
+    base_url: str = typer.Option(None, "--base-url", help="OpenAI-compatible base URL；内置 openai/zhipu 可省略"),
+    api_key_env: str = typer.Option(None, "--api-key-env", help="读取 API key 的环境变量名；本地 endpoint 可留空"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """配置 provider 路由元数据；不会写入真实 API key。"""
+    import re as _re
+    from .config import load_config, save_config
+
+    model = model.strip()
+    if not model or any(ch.isspace() for ch in model):
+        console.print("[red]模型名不能为空，也不能包含空白[/red]")
+        raise typer.Exit(code=2)
+    provider, separator, _ = model.partition("/")
+    provider = provider if separator else ""
+    if provider and not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", provider):
+        console.print(f"[red]无效 provider 前缀：{provider}[/red]")
+        raise typer.Exit(code=2)
+
+    cfg = load_config()
+    existing = cfg.model_providers.get(provider, {}) if provider else {}
+    if provider and provider not in {"openai", "zhipu"}:
+        if not base_url and not existing.get("base_url"):
+            console.print("[red]自定义 provider 必须配置 --base-url[/red]")
+            raise typer.Exit(code=2)
+
+    if provider:
+        entry = dict(existing)
+        if base_url is not None:
+            entry["base_url"] = base_url
+        if api_key_env is not None:
+            if api_key_env:
+                entry["api_key_env"] = api_key_env
+            else:
+                entry.pop("api_key_env", None)
+        cfg.model_providers[provider] = entry
+    cfg.models["halter"] = model
+    save_config(cfg)
+
+    result = {
+        "model": model,
+        "provider": provider or None,
+        "providerConfig": cfg.model_providers.get(provider) if provider else None,
+        "apiKeyStored": False,
+    }
+    if json_out:
+        console.print_json(_json.dumps(result, ensure_ascii=False))
+        return
+    console.print("[green]已保存原生模型配置[/green]")
+    console.print(f"[dim]model={model}[/dim]")
+    if provider:
+        console.print(f"[dim]provider={provider} config={cfg.model_providers[provider]}[/dim]")
+    console.print("[dim]API key 只从环境变量读取，不会写入 config.toml[/dim]")
+
+
+# ---------------------------------------------------------------------------
 # model_catalog：内置可选模型列表 + 配置覆盖（下拉选择用）
 
 BUILTIN_MODEL_CATALOG: dict[str, list[str]] = {
@@ -358,6 +426,73 @@ def model_catalog(cfg) -> dict[str, list[str]]:
         configured = cfg.model_catalog.get(key)
         out[key] = list(configured) if configured else list(BUILTIN_MODEL_CATALOG.get(key, []))
     return out
+
+
+# ---------------------------------------------------------------------------
+# audit：原生 Agent 审计查看
+
+
+@audit_app.command("list")
+def audit_list(
+    limit: int = typer.Option(100, "--limit", "-n", min=1, help="最多显示条数"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """列出原生 Agent 的私有审计轨迹。"""
+    from .agent_audit import list_audits
+
+    items = list_audits(limit)
+    if json_out:
+        console.print_json(_json.dumps({
+            "count": len(items),
+            "audits": [item.to_dict() for item in items],
+        }, ensure_ascii=False))
+        return
+    table = Table(title="Native agent audits")
+    table.add_column("Session", style="cyan", no_wrap=True)
+    table.add_column("Updated", style="dim")
+    table.add_column("Events", justify="right")
+    table.add_column("Provider")
+    table.add_column("Title", overflow="fold")
+    for item in items:
+        table.add_row(
+            item.session_id,
+            item.last_event_at or "-",
+            str(item.event_count),
+            item.provider or "-",
+            (item.title or "-")[:100],
+        )
+    console.print(table)
+
+
+@audit_app.command()
+def show(
+    session_id: str = typer.Argument(help="审计 session id"),
+    kind: str = typer.Option(None, "--kind", help="按事件类型过滤"),
+    tail: int = typer.Option(200, "--tail", "-n", min=0, help="仅返回最后 N 条事件；0 表示全部"),
+    json_out: bool = typer.Option(True, "--json/--no-json", help="以 JSON 输出"),
+) -> None:
+    """查看一个原生 Agent 审计轨迹。"""
+    from .agent_audit import show_audit
+
+    try:
+        result = show_audit(session_id, kind=kind, tail=tail)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if json_out:
+        console.print_json(_json.dumps(result, ensure_ascii=False))
+        return
+    table = Table(title=f"Audit — {session_id}")
+    table.add_column("Time", style="dim")
+    table.add_column("Kind", style="cyan")
+    table.add_column("Event", overflow="fold")
+    for event in result["events"]:
+        table.add_row(
+            str(event.get("ts") or "-"),
+            str(event.get("kind") or "-"),
+            _json.dumps({k: v for k, v in event.items() if k not in {"ts", "kind"}}, ensure_ascii=False),
+        )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

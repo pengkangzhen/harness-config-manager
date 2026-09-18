@@ -69,6 +69,7 @@ class AhpChat:
     activity: str | None = None
     turns: list[dict[str, Any]] = field(default_factory=list)
     active_turn: dict[str, Any] | None = None
+    turn_claimed: bool = False
     proc: asyncio.subprocess.Process | None = None
     agent_task: asyncio.Task[None] | None = None
     agent_messages: list[dict[str, Any]] = field(default_factory=list)
@@ -139,7 +140,7 @@ class AhpSession:
 class AhpConn:
     """一条逻辑客户端连接（WS，或 HTTP+SSE 组合）。"""
     client_id: str
-    outbox: asyncio.Queue = field(default_factory=asyncio.Queue)
+    outbox: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1000))
     alive: bool = True
 
 
@@ -156,7 +157,6 @@ class AhpHost:
         self.sessions: dict[str, AhpSession] = {}
         self.connections: dict[str, AhpConn] = {}
         self.subscriptions: dict[str, set[str]] = {}   # client_id -> channel uris
-        self._alias: dict[str, str] = {}               # 原始 id -> 采用的 clientId
         self.server_seq: int = 0
         self._seq_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task[None]] = set()
@@ -289,15 +289,23 @@ class AhpHost:
                 continue
             if not conn.alive:
                 self.connections.pop(client_id, None)
+                self.subscriptions.pop(client_id, None)
                 continue
-            conn.outbox.put_nowait(message)
+            try:
+                conn.outbox.put_nowait(message)
+            except asyncio.QueueFull:
+                # A client that cannot drain its stream must reconnect; keeping it
+                # alive would let one slow browser tab consume unbounded memory.
+                conn.alive = False
+                self.connections.pop(client_id, None)
+                self.subscriptions.pop(client_id, None)
 
     # ------------------------------------------------------------------
     # 连接生命周期
 
     async def route_message(self, conn: AhpConn, msg: dict[str, Any]) -> dict[str, Any] | None:
         """处理一条客户端消息；请求返回响应 dict，通知返回 None。"""
-        client_id = self._alias.get(conn.client_id, conn.client_id)
+        client_id = conn.client_id
         if not isinstance(msg, dict):
             return {"jsonrpc": "2.0", "id": None, "error": {
                 "code": -32600, "message": "Invalid Request: message must be an object"
@@ -323,9 +331,6 @@ class AhpHost:
         conn.alive = False
         self.connections.pop(conn.client_id, None)
         self.subscriptions.pop(conn.client_id, None)
-        for k, v in list(self._alias.items()):
-            if v == conn.client_id:
-                self._alias.pop(k, None)
 
     async def _handle_request(self, client_id: str,
                               msg: dict[str, Any]) -> tuple[Any, dict[str, Any] | None]:
@@ -364,14 +369,22 @@ class AhpHost:
                            {"supportedVersions": [PROTOCOL_VERSION]})
         # 规范：clientId 由客户端在 initialize 提供（重连标识）；服务端采用之
         supplied = params.get("clientId")
-        if supplied and supplied != client_id:
+        if isinstance(supplied, str) and supplied and supplied != client_id:
+            if len(supplied) > 256:
+                raise AhpError(-32002, "clientId is too long")
             conn = self.connections.pop(client_id, None)
+            existing = self.connections.pop(supplied, None)
+            if existing is not None and existing is not conn:
+                existing.alive = False
             subs_existing = self.subscriptions.pop(client_id, set())
             if conn is not None:
+                conn.client_id = supplied
                 self.connections[supplied] = conn
                 self.subscriptions[supplied] = subs_existing
-                self._alias[client_id] = supplied
+                client_id = supplied
         subs = params.get("initialSubscriptions") or [ROOT_URI]
+        if not isinstance(subs, list) or not all(isinstance(item, str) for item in subs):
+            raise AhpError(-32002, "initialSubscriptions must be a string array")
         self.subscriptions[client_id] = set(subs)
         snapshots = [s for s in (self.snapshot(ch) for ch in subs) if s is not None]
         return {
@@ -472,8 +485,11 @@ class AhpHost:
 
         if atype == "chat/turnStarted":
             chat = self._chat(channel)
-            if chat is None or chat.active_turn is not None:
+            if chat is None or chat.active_turn is not None or chat.turn_claimed:
                 return
+            # Claim synchronously: create_task may not start before another
+            # dispatch notification is handled on the same event loop.
+            chat.turn_claimed = True
             # A turn must not consume the inbound message loop: approvals and
             # cancellation arrive as later notifications while it is running.
             turn_task = asyncio.create_task(self._run_turn(chat, action, origin))
@@ -842,6 +858,7 @@ class AhpHost:
                 turn["responseParts"].append(error_part)
             chat.turns.append(turn)
             chat.active_turn = None
+        chat.turn_claimed = False
         chat.status = STATUS_ERROR if state == "error" else STATUS_IDLE
         chat.activity = None
         chat.session.status = chat.status

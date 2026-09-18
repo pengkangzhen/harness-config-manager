@@ -152,13 +152,14 @@ async fn halter_sessions_show(r#ref: String, project: String, tail: u32) -> Resu
     run_json_args(arg(&[
         "sessions",
         "show",
-        &r#ref,
         "--project",
         &project,
         "--transcript",
         "--tail",
         &tail.to_string(),
         "--json",
+        "--",
+        &r#ref,
     ]))
     .await
 }
@@ -173,7 +174,6 @@ async fn halter_sessions_search(
     let mut parts = vec![
         "sessions".to_string(),
         "search".to_string(),
-        query,
         "--limit".to_string(),
         limit.to_string(),
         "--json".to_string(),
@@ -184,6 +184,8 @@ async fn halter_sessions_search(
         parts.push("--project".to_string());
         parts.push(project);
     }
+    parts.push("--".to_string());
+    parts.push(query);
     run_json_args(parts).await
 }
 
@@ -192,11 +194,12 @@ async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> R
     run_text_args(arg(&[
         "sessions",
         "context",
-        &r#ref,
         "--project",
         &project,
         "--tail",
         &tail.to_string(),
+        "--",
+        &r#ref,
     ]))
     .await
 }
@@ -205,6 +208,61 @@ async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> R
 #[tauri::command]
 async fn halter_models() -> Result<Value, String> {
     run_json_args(arg(&["models", "--json"])).await
+}
+
+#[tauri::command]
+async fn halter_model_configure(
+    model: String,
+    base_url: Option<String>,
+    api_key_env: Option<String>,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "model".to_string(),
+        "configure".to_string(),
+        "--model".to_string(),
+        model,
+        "--json".to_string(),
+    ];
+    if let Some(base_url) = base_url.as_deref() {
+        if !base_url.trim().is_empty() {
+            args.push("--base-url".to_string());
+            args.push(base_url.trim().to_string());
+        }
+    }
+    if let Some(api_key_env) = api_key_env.as_deref() {
+        args.push("--api-key-env".to_string());
+        args.push(api_key_env.to_string());
+    }
+    run_json_args(args).await
+}
+
+#[tauri::command]
+async fn halter_audit_list(limit: u32) -> Result<Value, String> {
+    run_json_args(arg(&["audit", "list", "--limit", &limit.to_string(), "--json"])).await
+}
+
+#[tauri::command]
+async fn halter_audit_show(
+    session_id: String,
+    kind: Option<String>,
+    tail: u32,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "audit".to_string(),
+        "show".to_string(),
+        "--tail".to_string(),
+        tail.to_string(),
+        "--json".to_string(),
+    ];
+    if let Some(kind) = kind.as_deref() {
+        if !kind.trim().is_empty() {
+            args.push("--kind".to_string());
+            args.push(kind.trim().to_string());
+        }
+    }
+    args.push("--".to_string());
+    args.push(session_id);
+    run_json_args(args).await
 }
 
 /// AHP client 桥状态：base URL、client id、SSE reader 的取消句柄。
@@ -660,10 +718,11 @@ async fn halter_task_show(task_id: String, tail: u32) -> Result<Value, String> {
     run_json_args(arg(&[
         "tasks",
         "show",
-        &task_id,
         "--json",
         "--tail",
         &tail.to_string(),
+        "--",
+        &task_id,
     ]))
     .await
 }
@@ -702,6 +761,9 @@ fn main() {
             halter_ahp_rpc,
             halter_ahp_notify,
             halter_models,
+            halter_model_configure,
+            halter_audit_list,
+            halter_audit_show,
             halter_task_show,
             halter_sessions_show,
             halter_sessions_search,

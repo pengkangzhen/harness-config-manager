@@ -110,6 +110,10 @@ halter = "openai/gpt-5"       # native AHP provider
 
 Safety: `--mode safe` is the default (each harness keeps its own permission gates); `--mode yolo` maps to each tool's bypass flags. Prompts are passed as single argv elements — never through a shell. Task records live under `~/.config/halter/tasks/` (0700/0600) and output is redacted when displayed. Ctrl-C or `--timeout` kills the whole process group in foreground mode.
 
+The desktop **Model** view configures non-secret OpenAI-compatible routing (base URL plus API-key environment-variable name) without storing credentials.
+
+The desktop app includes a read-only native-agent **Audit** view for model/tool decisions, approvals, rollbacks, and context compaction.
+
 The desktop app's **Dispatch** view wraps the same capability: mention chips, availability badges, project picker, and live task cards.
 
 ## AHP: self-hosted Agent Host (protocol-level harness mounting)
@@ -119,6 +123,8 @@ The desktop app's **Dispatch** view wraps the same capability: mention chips, av
 ```bash
 halter ahp serve --port 7433
 ```
+
+The host binds to localhost and writes a random bearer token to `~/.config/halter/ahp-token` (`0600`). Every WebSocket, JSON-RPC, and SSE request must send it as `Authorization: Bearer <token>` (or `?token=`); browser requests must also match an explicitly configured origin. The desktop reads the same token file and validates the host with an authenticated ping. Browser origins can be allow-listed with `HALTER_AHP_ALLOWED_ORIGINS=vscode-webview://...,https://your-app.example` — do not use `*`.
 
 Any AHP client (VS Code Agents window, AHPX, official Rust/TS/Go/Swift/Kotlin client libraries) can then `initialize` → `createSession(provider="claude")` → `createChat` → dispatch `chat/turnStarted` and receive streaming `chat/delta` actions until `chat/turnComplete`. Model routing flows from `[models]` config and `message.model.id` into each harness's `--model` / `-m` flag. Execution reuses the runner layer (process groups, headless argv building).
 
