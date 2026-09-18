@@ -226,3 +226,125 @@ def test_mcp_allowlist_defaults() -> None:
     read_allow, write_allow = mcp_allowlists(cfg)
     assert read_allow == {"mcp_a_b"}
     assert write_allow == {"mcp_c_d"}
+
+
+HTTP_TOOLS = [
+    {"name": "http_get", "description": "read via http",
+     "inputSchema": {"type": "object", "properties": {}},
+     "annotations": {"readOnlyHint": True}},
+]
+
+
+async def _start_http_mcp_server():
+    from aiohttp import web
+
+    seen: dict = {"requests": []}
+
+    async def handler(request: web.Request) -> web.Response:
+        payload = await request.json()
+        seen["requests"].append({
+            "method": payload.get("method"),
+            "session": request.headers.get("Mcp-Session-Id"),
+            "authorization": request.headers.get("Authorization"),
+        })
+        if payload.get("method") == "initialize":
+            return web.json_response(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "fake-http", "version": "1.0"},
+                }},
+                headers={"Mcp-Session-Id": "sess-42"},
+            )
+        if payload.get("method") == "tools/list":
+            return web.json_response(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": HTTP_TOOLS}},
+                headers={"Mcp-Session-Id": "sess-42"},
+            )
+        if payload.get("method") == "tools/call":
+            arguments = (payload.get("params") or {}).get("arguments") or {}
+            return web.json_response(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {
+                    "content": [{"type": "text", "text": "HTTP:" + str(arguments.get("key"))}],
+                    "isError": False,
+                }},
+            )
+        return web.json_response({"jsonrpc": "2.0", "id": payload.get("id"), "result": {}})
+
+    app = web.Application()
+    app.router.add_post("/mcp", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    return runner, runner.addresses[0][1], seen
+
+
+def _write_http_manifest(fake_home: Path, port: int, extra: str = "") -> None:
+    manifest = fake_home / ".config/halter/mcp.toml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        f'[[server]]\nname = "fake-http"\ntransport = "http"\n'
+        f'url = "http://127.0.0.1:{port}/mcp"\n{extra}\n'
+        f'[[server]]\nname = "legacy-sse"\ntransport = "sse"\n'
+        f'url = "http://127.0.0.1:{port}/sse"\n',
+        encoding="utf-8",
+    )
+
+
+def test_http_transport_lists_and_calls_tools(fake_home: Path) -> None:
+    import harness_config_manager.mcp_bridge as bridge
+
+    async def scenario() -> dict:
+        runner, port, seen = await _start_http_mcp_server()
+        try:
+            _write_http_manifest(fake_home, port)
+            bridge.MCP_LIST_TIMEOUT = 10.0
+            tools = await bridge.list_mcp_tools()
+            result = await bridge.call_mcp_tool("fake-http", "http_get", {"key": "h1"})
+            return {"tools": tools, "result": result, "seen": seen["requests"]}
+        finally:
+            await runner.cleanup()
+
+    outcome = asyncio.run(scenario())
+    names = [tool.name for tool in outcome["tools"]]
+    assert tool_name_for("fake-http", "http_get") in names
+    assert all("legacy-sse" not in name for name in names)  # sse transport 跳过
+    assert outcome["result"]["output"] == "HTTP:h1"
+    assert outcome["result"]["server"] == "fake-http"
+
+    requests = outcome["seen"]
+    methods = [item["method"] for item in requests]
+    assert methods[0] == "initialize" and "tools/list" in methods and "tools/call" in methods
+    assert requests[0]["session"] is None  # 每个 session 的首个请求无会话 id
+    # initialize 之后的所有请求(list/call)都必须携带服务端分配的会话 id
+    assert all(
+        item["session"] == "sess-42"
+        for item in requests if item["method"] != "initialize"
+    )
+
+
+def test_http_transport_error_response_is_runtime_error(fake_home: Path) -> None:
+    from aiohttp import web
+
+    async def scenario() -> None:
+        async def handler(_request: web.Request) -> web.Response:
+            return web.json_response({"error": "denied"}, status=401)
+
+        app = web.Application()
+        app.router.add_post("/mcp", handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = runner.addresses[0][1]
+        try:
+            _write_http_manifest(fake_home, port)
+            await call_mcp_tool("fake-http", "http_get", {}, timeout=5.0)
+            raise AssertionError("unreachable")
+        except RuntimeError as exc:
+            assert "401" in str(exc)
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())

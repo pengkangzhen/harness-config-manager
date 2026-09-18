@@ -5,15 +5,16 @@ into the native agent's tool loop:
 
 - stdio servers are launched as short-lived subprocesses per call, so a
   crashing server can never take down the AHP host or the agent turn
+- ``http`` servers use the streamable-HTTP transport (JSON-RPC POST, with
+  both plain-JSON and SSE responses supported); the legacy SSE-only
+  transport is still skipped
 - tool names are prefixed ``mcp_<server>_<tool>`` to stay addressable in the
   OpenAI tools schema
 - only tools whose annotations declare ``readOnlyHint`` are exposed without
   an explicit per-tool allowlist; state-changing tools must be listed in
   ``[native_agent.mcp] write`` and then go through the normal approval flow
-- secrets from ``${VAR}`` placeholders are expanded into the subprocess env
-  and never appear in events, results, or audit output
-
-HTTP/SSE transports are out of scope for this phase and are skipped.
+- secrets from ``${VAR}`` placeholders are expanded into subprocess env or
+  HTTP headers and never appear in events, results, or audit output
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
+
+import aiohttp
 
 from .mcp_manifest import _load_secrets, expand_placeholders, load_manifest
 
@@ -60,6 +63,21 @@ def _stdio_specs() -> list[Any]:
         spec for spec in load_manifest()
         if spec.transport == "stdio" and spec.command
     ]
+
+
+def _http_specs() -> list[Any]:
+    # Streamable HTTP only; the legacy SSE-only transport stays out of scope.
+    return [
+        spec for spec in load_manifest()
+        if spec.transport == "http" and spec.url
+    ]
+
+
+def _find_spec(server: str) -> Any:
+    for spec in [*_stdio_specs(), *_http_specs()]:
+        if spec.name == server:
+            return spec
+    return None
 
 
 def _expanded_env(spec: Any) -> dict[str, str]:
@@ -152,6 +170,108 @@ class _StdioSession:
         await self.notify("notifications/initialized")
 
 
+class _HttpSession:
+    """Streamable-HTTP MCP conversation: JSON-RPC POST per message.
+
+    Handles both ``application/json`` and ``text/event-stream`` replies and
+    carries the server-assigned ``Mcp-Session-Id`` on follow-up requests.
+    """
+
+    def __init__(self, spec: Any, timeout: float) -> None:
+        self.spec = spec
+        self.timeout = timeout
+        self._next_id = 0
+        self._session_id: str | None = None
+        expanded, _missing = expand_placeholders(spec, _load_secrets())
+        self._url = expanded.url or ""
+        self._extra_headers = dict(expanded.headers)
+
+    async def __aenter__(self) -> "_HttpSession":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    def _result_of(self, message: Any, want_id: int) -> dict[str, Any]:
+        if not isinstance(message, dict) or message.get("id") != want_id:
+            raise RuntimeError(f"MCP HTTP response id mismatch from {self.spec.name!r}")
+        if "error" in message:
+            error = message["error"] or {}
+            raise RuntimeError(
+                f"MCP error from {self.spec.name!r}: "
+                f"{error.get('code')}: {error.get('message')}"
+            )
+        return message.get("result") or {}
+
+    async def _read_sse(self, response: Any, want_id: int) -> dict[str, Any]:
+        data_lines: list[str] = []
+        async for raw in response.content:
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                if data_lines:
+                    message = json.loads("\n".join(data_lines))
+                    if isinstance(message, dict) and message.get("id") == want_id:
+                        return self._result_of(message, want_id)
+                    data_lines = []
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+        raise RuntimeError(f"MCP HTTP stream ended without response from {self.spec.name!r}")
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **self._extra_headers,
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as http:
+            async with http.post(self._url, json=payload, headers=headers) as response:
+                assigned = response.headers.get("Mcp-Session-Id")
+                if assigned:
+                    self._session_id = assigned
+                if payload.get("id") is None:
+                    return None  # notification: server replies 202/empty
+                if response.status >= 400:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"MCP HTTP {response.status} from {self.spec.name!r}: "
+                        f"{body[:200]}"
+                    )
+                content_type = response.headers.get("Content-Type", "")
+                if "text/event-stream" in content_type:
+                    return await self._read_sse(response, payload["id"])
+                return self._result_of(json.loads(await response.text()), payload["id"])
+
+    async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._next_id += 1
+        result = await self._post({
+            "jsonrpc": "2.0", "id": self._next_id,
+            "method": method, "params": params,
+        })
+        return result or {}
+
+    async def notify(self, method: str) -> None:
+        await self._post({"jsonrpc": "2.0", "method": method})
+
+    async def handshake(self) -> None:
+        await self.request("initialize", {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": CLIENT_INFO,
+        })
+        await self.notify("notifications/initialized")
+
+
+def _open_session(spec: Any, timeout: float):
+    """Context manager for whichever transport the spec declares."""
+    if spec.transport == "http":
+        return _HttpSession(spec, timeout)
+    return _StdioSession(spec, timeout)
+
+
 def _tool_schema(server: str, tool: dict[str, Any]) -> dict[str, Any]:
     name = str(tool.get("name") or "")
     parameters = tool.get("inputSchema")
@@ -171,15 +291,15 @@ def _tool_schema(server: str, tool: dict[str, Any]) -> dict[str, Any]:
 
 
 async def list_mcp_tools() -> list[McpToolDescriptor]:
-    """Discover tools from all declared stdio MCP servers.
+    """Discover tools from all declared stdio/http MCP servers.
 
     Servers that fail to start, handshake, or answer are skipped silently at
     the tool-surface level: a broken server must not break the agent turn.
     """
     descriptors: list[McpToolDescriptor] = []
-    for spec in _stdio_specs():
+    for spec in [*_stdio_specs(), *_http_specs()]:
         try:
-            async with _StdioSession(spec, MCP_LIST_TIMEOUT) as session:
+            async with _open_session(spec, MCP_LIST_TIMEOUT) as session:
                 await session.handshake()
                 result = await session.request("tools/list", {})
         except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
@@ -201,13 +321,11 @@ async def call_mcp_tool(
     server: str, tool: str, arguments: dict[str, Any],
     timeout: float = MCP_CALL_TIMEOUT,
 ) -> dict[str, Any]:
-    """Invoke one MCP tool; the server process exists only for this call."""
-    spec = next(
-        (item for item in _stdio_specs() if item.name == server), None,
-    )
+    """Invoke one MCP tool (stdio: per-call process; http: fresh session)."""
+    spec = _find_spec(server)
     if spec is None:
-        raise RuntimeError(f"MCP server {server!r} is not declared as stdio")
-    async with _StdioSession(spec, timeout) as session:
+        raise RuntimeError(f"MCP server {server!r} is not declared as stdio/http")
+    async with _open_session(spec, timeout) as session:
         await session.handshake()
         result = await session.request("tools/call", {
             "name": tool, "arguments": arguments,
