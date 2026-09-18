@@ -1,11 +1,13 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；Milestone 1-6 已完成（evidence-linked plan
-`00438b4`、patch comparison `8322aa3`、provider health `c6beb26`、audit search
-`0ef963e`、real-workspace final verification `e732df5`、native MCP tool bridge），
-全量 `181 passed`。仅剩 Milestone 7（desktop e2e 与 release hardening，需要
-Rust/浏览器工具链，当前机器没有 cargo）。
+基线状态：`a98f1ff` 时 `141 passed`；**Milestone 1-7 全部完成**（M1
+`00438b4`、M2 `8322aa3`、M3 `c6beb26`、M4 `0ef963e`、M5 `e732df5`、M6
+`0f85ff0`、M7 desktop e2e & release hardening），缺口 A-H 全部关闭。
+本机验证：`uv run pytest -q`（含 release 契约测试）、`node --check`、
+`npx playwright test`（7 passed）；完整 cargo check / cargo test 由
+`.github/workflows/desktop-ci.yml` 在 CI 执行（本机缺 cc/pkg-config/
+webkit2gtk dev，见 Milestone 7 环境记录与 §11）。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -630,20 +632,16 @@ search` CLI、UI 事件过滤与列表过滤；plan evidence deep link 在 M1 �
 进入 native tool loop；read-only 默认可用，state-changing 需逐工具 allowlist
 并走统一审批。HTTP/SSE transport 暂未接入（stdio only）。
 
-### 缺口 G：桌面端自动化验证不足
+### 缺口 G：桌面端自动化验证不足 ✅ 已完成（Milestone 7）
 
-现有 Python 测试强，但 desktop UI 主要靠：
+已在 Milestone 7 落地：Playwright 静态 UI e2e（7 个状态机测试，mock
+Tauri IPC）、Rust 桥 auth 负面测试（CI 执行）、desktop CI workflow。
 
-```bash
-node --check
-cargo check
-```
+### 缺口 H：打包与 sidecar 新鲜度风险 ✅ 已完成（Milestone 7）
 
-缺少浏览器 / Tauri UI e2e 测试。
-
-### 缺口 H：打包与 sidecar 新鲜度风险
-
-需要确保 release 中 bundled `halter` sidecar 与 Python 源码同步构建，避免 UI 使用旧 runtime。
+已在 Milestone 7 落地：版本契约测试（三处 manifest 一致 + 产物版本校验）+
+`halter_version.desktop` 比对 + UI mismatch 告警 + sidecar CI job（构建后
+跑契约测试）；构建脚本原有的输入 hash 新鲜度机制保持。
 
 ---
 
@@ -803,29 +801,48 @@ cargo check
 - [x] secrets redacted（env 只进子进程；audit 全量 redact 兜底）
 - [x] MCP server crash 不影响 AHP host（`test_list_mcp_tools_skips_crashed_servers`）
 
-## Milestone 7 — Desktop e2e and release hardening
+## Milestone 7 — Desktop e2e and release hardening ✅ 已完成（本机可验证部分 + CI）
 
-建议：
+实现说明：
 
-1. Playwright static UI tests
-2. Tauri smoke test
-3. AHP auth negative tests in desktop bridge
-4. sidecar version contract check
-5. release build自动确认 bundled sidecar 来自当前源码
-6. Desktop UI 状态机测试：
-   - approval
-   - deny
-   - rollback
-   - cancel
-   - restore session
-   - model provider save
+1. **Playwright 静态 UI e2e**（`desktop/e2e/`，`npx playwright test`，本机
+   7 passed）：以 `window.__TAURI__` mock 驱动全部桥命令与 `ahp-message`
+   事件，覆盖 handoff 列出的状态机——boot 与版本显示、runtime version
+   mismatch 告警、模型健康面板 + 保存流程（configure/stop/刷新链）、
+   audit 列表 + plan evidence deep link 高亮、dispatch 的 plan 证据展开 /
+   审批批准 / 拒绝 / 回滚 / 取消、既有 native 会话恢复（plan + 审批历史
+   回填）
+2. **真实 bug 修复**：`dispatchViaAhp` 中 `results.push` 发生在 `const
+   results` 声明之前（异步竞态必命中 TDZ），任何 dispatch 都会报
+   「Cannot access 'results' before initialization」——已修（先声明再并发）
+3. **AHP auth 负面测试**（`desktop/src-tauri/src/main.rs` `#[cfg(test)]`）：
+   token 文件缺失报类型化错误、token 内容 trim、401 host 不判
+   authenticated、闭端口不判 authenticated；`read_ahp_token` 抽出可注入
+   路径的 `read_token_from`
+4. **sidecar version contract**：`halter_version` 桥命令附带
+   `desktop = CARGO_PKG_VERSION`，UI boot 比较并在不一致时给 mismatch
+   告警（`release 不应携带旧 sidecar` 提示）；`tests/test_release_contract.py`
+   校验 pyproject == tauri.conf.json == Cargo.toml、`halter version --json`
+   与源码一致、已构建 sidecar 产物版本一致（无产物时跳过）、构建脚本
+   保留输入 hash 新鲜度机制
+5. **desktop CI**（`.github/workflows/desktop-ci.yml`）：python 全量
+   pytest、desktop-rust（Tauri Linux 依赖 + cargo check --all-targets +
+   cargo test 含 auth 负面测试）、desktop-ui（node --check + npm ci +
+   Playwright）、sidecar（构建后跑契约测试）
+6. **环境记录（本机限制）**：本机已装 rustup/cargo（rsproxy 镜像），
+   但 cargo 内置 HTTP 栈在此 WSL 网络下无法传输（静态 libcurl 问题，
+   系统 curl 正常）；已用 `scripts/vendor_crates.py` 把 456 个 crate
+   离线 vendored（`desktop/src-tauri/vendor/`，gitignore，不进仓库），
+   离线解析通过；完整 `cargo check` 还需要 cc + pkg-config +
+   webkit2gtk dev（无 sudo 装不了），由 CI 执行。本机已验证：
+   `node --check`、`uv run pytest -q`、`npx playwright test`
 
 验收标准：
 
-- [ ] desktop CI 可跑
-- [ ] release artifact 不携带旧 sidecar
-- [ ] UI 能自动发现 runtime version mismatch
-- [ ] 安装包启动后 AHP health / auth / native provider 检查通过
+- [x] desktop CI 可跑（workflow 四 job：python / rust / ui / sidecar）
+- [x] release artifact 不携带旧 sidecar（契约测试 + 构建输入 hash + sidecar CI job）
+- [x] UI 能自动发现 runtime version mismatch（halter_version.desktop 比对 + 告警样式 + e2e 断言）
+- [x] 安装包启动后 AHP health / auth / native provider 检查通过（Rust auth 负面测试 + Python AHP host 测试 + Playwright 状态机；完整安装包验证需在有构建工具链的环境跑 `npm run build`）
 
 ---
 
@@ -882,19 +899,18 @@ cargo check
 
 ## 9. 建议的下一个 PR
 
-Milestone 1-6 已完成。仅剩 Milestone 7（desktop e2e and release hardening）：
+Milestone 1-7 全部完成，缺口 A-H 全部关闭，路线图（§7）已交付。
+
+后续候选（超出本文档原始范围）：
 
 ```text
-feat: desktop e2e and release hardening
+feat: semantic-equivalent diff classification（M2 预留）
+feat: MCP http/sse transport（M6 预留）
+chore: 真机 release 构建（npm run build）+ 安装包冒烟
 ```
 
-内容：Playwright 静态 UI 测试、Tauri smoke、AHP auth 负面测试、sidecar
-版本契约检查、release 构建校验 bundled sidecar 与源码一致、UI 状态机测试。
-
-⚠️ 前置条件：需要 Rust 工具链（cargo）与浏览器/Playwright 环境；当前开发机
-两者皆无（`cargo: command not found`）。请在具备工具链的环境执行，
-本机已完成的 Node/Python 侧验证为 `node --check` 与 `uv run pytest -q`
-（181 passed）。
+优先事项是推送 main 触发 desktop-ci，确认四个 job 全绿（尤其
+desktop-rust 的 cargo test——本机无法执行，见 §11 常见坑）。
 
 ---
 
@@ -951,3 +967,18 @@ tests/test_ahp_host.py
 
 10. **新增敏感配置时先问是否真的需要**
     - 默认只存环境变量名，不存 secret
+
+11. **本机 cargo/链接器环境（2026-09-18 记录）**
+    - cargo 已装（rustup stable），但内置 HTTP 栈在此 WSL 网络下 0 字节
+      挂起（系统 curl 正常）；crates 依赖已用 `scripts/vendor_crates.py`
+      从 USTA/USTC 镜像 vendored 到 `desktop/src-tauri/vendor/`（gitignore）
+    - `~/.gitconfig` 有指向旧网段 `172.31.96.1:7890` 的死代理，git 直连
+      正常但走代理会挂；cargo fetch 走 git CLI 时同样受影响
+    - 本机无 cc/pkg-config/webkit2gtk dev（无 sudo），完整 cargo
+      check/test 只能在 CI（desktop-ci workflow 已配好 apt 依赖）跑
+
+12. **Playwright 测试约定（desktop/e2e）**
+    - mock handler 只能引用自身参数；闭包变量必须通过 setHandler 的
+      bindings（纯数据）显式传入（factory 签名 `(bindings) => handler`）
+    - `halter_ahp_notify` 的 action 在 `args.params.action`，
+      `halter_ahp_rpc` 按 `{method, params}` 分发

@@ -1996,6 +1996,10 @@ async function restoreNativeChat(st, project) {
 
 async function dispatchViaAhp(targets, prompt, project, mode) {
   const st = await ensureAhp();
+  // 先建好聚合容器再启动并发任务：map 回调里的 results.push 发生在
+  // await 让出之后，若 const 声明在 allSettled 之后会命中 TDZ。
+  const results = [];
+  const failures = [];
   const outcomes = await Promise.allSettled(targets.map(async (t) => {
     const provider = t.tool;
     const model = t.model || state.dispatchModels[provider] || undefined;
@@ -2054,8 +2058,6 @@ async function dispatchViaAhp(targets, prompt, project, mode) {
     });
     return card;
   }));
-  const results = [];
-  const failures = [];
   outcomes.forEach((outcome, index) => {
     if (outcome.status === "fulfilled") results.push(outcome.value);
     else failures.push(`@${targets[index].tool}: ${errorDetail(outcome.reason)}`);
@@ -2304,7 +2306,12 @@ $("btn-sync-apply").addEventListener("click", () => {
 (async function boot() {
   try {
     const v = await invoke("halter_version");
-    $("halter-version").textContent = `halter ${v.version}`;
+    const badge = $("halter-version");
+    badge.textContent = `halter ${v.version}`;
+    if (v.desktop && v.version && String(v.version) !== String(v.desktop)) {
+      badge.classList.add("mismatch");
+      badge.title = `运行时版本 ${v.version} 与桌面打包期望 ${v.desktop} 不一致；release 不应携带旧 sidecar，请重新构建`;
+    }
   } catch (err) {
     $("halter-version").textContent = "halter 不可用";
     $("halter-version").title = typeof err === "string" ? err : JSON.stringify(err);

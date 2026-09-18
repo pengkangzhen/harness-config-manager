@@ -112,7 +112,16 @@ fn arg(parts: &[&str]) -> Vec<String> {
 
 #[tauri::command]
 async fn halter_version() -> Result<Value, String> {
-    run_json_args(arg(&["version", "--json"])).await
+    let mut value = run_json_args(arg(&["version", "--json"])).await?;
+    // Attach the desktop-bundled expectation so the UI can flag a stale
+    // sidecar without trusting the sidecar's own report alone.
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "desktop".to_string(),
+            serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
+    }
+    Ok(value)
 }
 
 #[tauri::command]
@@ -282,10 +291,14 @@ fn ahp_token_path() -> PathBuf {
     PathBuf::from(home).join(".config").join("halter").join("ahp-token")
 }
 
-fn read_ahp_token() -> Result<String, String> {
-    std::fs::read_to_string(ahp_token_path())
+fn read_token_from(path: &std::path::Path) -> Result<String, String> {
+    std::fs::read_to_string(path)
         .map(|value| value.trim().to_string())
         .map_err(|e| format!("failed to read AHP token: {e}"))
+}
+
+fn read_ahp_token() -> Result<String, String> {
+    read_token_from(&ahp_token_path())
 }
 
 fn abort_ahp_bridge(bridge: Option<AhpBridge>) {
@@ -780,4 +793,65 @@ fn main() {
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Missing or unreadable token file must surface a typed error instead of
+    /// an empty token that would silently authenticate against nothing.
+    #[test]
+    fn read_token_from_missing_file_is_error() {
+        let missing = std::env::temp_dir().join("halter-desktop-no-such-token");
+        let _ = std::fs::remove_file(&missing);
+        let err = read_token_from(&missing).expect_err("missing token file must fail");
+        assert!(err.starts_with("failed to read AHP token"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn read_token_from_trims_whitespace() {
+        let path = std::env::temp_dir().join(format!("halter-desktop-token-{}", std::process::id()));
+        std::fs::write(&path, "  token-value \n").unwrap();
+        assert_eq!(read_token_from(&path).unwrap(), "token-value");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// AHP auth negative path: a host that answers 401 must not be accepted,
+    /// even when a token is presented.
+    #[test]
+    fn ahp_token_valid_rejects_unauthorized_host() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let responder = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0u8; 2048];
+                let _ = stream.read(&mut buffer);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+        let valid = tauri::async_runtime::block_on(ahp_token_valid(
+            &format!("http://127.0.0.1:{port}"),
+            "some-token",
+        ));
+        assert!(!valid, "401 must never count as an authenticated host");
+        let _ = responder.join();
+    }
+
+    /// A closed port is not a valid AHP host either (refused connections).
+    #[test]
+    fn ahp_token_valid_rejects_closed_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let valid = tauri::async_runtime::block_on(ahp_token_valid(
+            &format!("http://127.0.0.1:{port}"),
+            "some-token",
+        ));
+        assert!(!valid);
+    }
 }

@@ -88,6 +88,11 @@ body {
   border: 1px solid var(--border);
   text-align: center;
 }
+.version-pill.mismatch {
+  color: var(--red);
+  border-color: rgba(255, 107, 129, .55);
+  cursor: help;
+}
 
 /* ---------- Main ---------- */
 .main { flex: 1; overflow-y: auto; padding: 26px 30px; }
