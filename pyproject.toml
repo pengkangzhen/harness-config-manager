@@ -25,6 +25,7 @@ classifiers = [
 requires-python = ">=3.12"
 dependencies = [
     "websockets>=12,<16",
+    "aiohttp>=3.9,<4",
     "rich>=15.0.0",
     "tomlkit>=0.15.1",
     "typer>=0.27.1",
@@ -38,11 +39,16 @@ Issues = "https://github.com/pengkangzhen/harness-config-manager/issues"
 halter = "harness_config_manager:main"
 harness-config-manager = "harness_config_manager:cli_main"
 
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
 [build-system]
 requires = ["uv_build>=0.11.20,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
 ]

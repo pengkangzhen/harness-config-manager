@@ -2,6 +2,7 @@
 "use strict";
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
+const tauriListen = (...a) => window.__TAURI__.event.listen(...a);
 const $ = (id) => document.getElementById(id);
 
 /* ---------------- helpers ---------------- */
@@ -61,6 +62,7 @@ const TOOL_COLORS = {
   codex: "#10a37f",
   zcode: "#a78bfa",
   opencode: "#4cc2ff",
+  halter: "#f59e0b",
   cursor: "#5ba8ff",
   gemini: "#7bd88f",
   vscode: "#5aa0e8",
@@ -95,7 +97,9 @@ const state = {
   projectMatches: [],
   dispatchLoaded: false,
   dispatchModels: {},      // harness -> 默认模型（config.toml [models]）
+  dispatchCatalog: {},     // harness -> 可选模型列表（[model_catalog] 或内置 GLM 系）
   dispatchProjects: [],
+  ahp: null,               // {ready, agents, sessions, cards, nativeChats}
   dispatchCards: new Map(),   // task_id -> {node, timer}
 };
 
@@ -1018,6 +1022,7 @@ const DISPATCH_RUNNERS = [
   { key: "codex", label: "Codex", aliases: ["codex", "cx"] },
   { key: "zcode", label: "ZCode", aliases: ["zcode", "z"] },
   { key: "opencode", label: "OpenCode", aliases: ["opencode", "oc"] },
+  { key: "halter", label: "halter（原生 Agent）", aliases: ["halter", "h"] },
 ];
 
 function parseDispatchMentions(text) {
@@ -1046,7 +1051,6 @@ async function loadDispatchView() {
     state.dispatchLoaded = true;
   }
   loadDispatchModels();
-  renderDispatchHarnesses();
   await loadDispatchProjects();
   updateDispatchHint();
 }
@@ -1055,10 +1059,64 @@ async function loadDispatchModels() {
   try {
     const data = await invoke("halter_models");
     state.dispatchModels = data.models || {};
-    renderDispatchHarnesses();
+    state.dispatchCatalog = data.catalog || {};
+    renderDispatchSelectors();
   } catch {
     state.dispatchModels = {};
+    state.dispatchCatalog = {};
   }
+}
+
+function renderDispatchSelectors() {
+  const harnessSel = $("dispatch-harness-select");
+  const modelSel = $("dispatch-model-select");
+  if (!harnessSel || !modelSel) return;
+
+  const prevHarness = harnessSel.value;
+  harnessSel.replaceChildren(new Option("选择 Harness…", ""));
+  for (const spec of DISPATCH_RUNNERS) {
+    harnessSel.append(new Option(spec.label, spec.key));
+  }
+  harnessSel.value = prevHarness && [...harnessSel.options].some((o) => o.value === prevHarness)
+    ? prevHarness : "";
+
+  const key = harnessSel.value;
+  const models = key ? (state.dispatchCatalog[key] || []) : [];
+  modelSel.replaceChildren(new Option(key ? "模型（可选）" : "先选 Harness…", ""));
+  if (key && state.dispatchModels[key] && !models.includes(state.dispatchModels[key])) {
+    modelSel.append(new Option(state.dispatchModels[key] + "（默认）", state.dispatchModels[key]));
+  }
+  for (const m of models) {
+    modelSel.append(new Option(m, m));
+  }
+  modelSel.value = "";
+}
+
+function onHarnessSelect(key) {
+  renderDispatchSelectors();
+  if (!key) return;
+  const input = $("dispatch-input");
+  const { targets } = parseDispatchMentions(input.value);
+  if (!targets.some((t) => t.tool === key)) {
+    input.value = `@${key} ${input.value}`.trim() + " ";
+    const pos = input.value.length;
+    input.focus();
+    input.setSelectionRange(pos, pos);
+  } else {
+    input.focus();
+  }
+  updateDispatchHint();
+}
+
+function onModelSelect(model) {
+  if (!model) return;
+  const input = $("dispatch-input");
+  // 更新第一个 @harness 提及为 @harness/model
+  const re = /(^|[^\w@])@([a-z][a-z0-9-]*)(\/[^\s@]+)?/i;
+  if (re.test(input.value)) {
+    input.value = input.value.replace(re, (m, pre, name) => `${pre}@${name}/${model}`);
+  }
+  updateDispatchHint();
 }
 
 function renderDispatchHarnesses() {
@@ -1068,12 +1126,22 @@ function renderDispatchHarnesses() {
   if (state.scanCache) {
     for (const t of state.scanCache.tools_detected || []) detected.add(t.tool);
   }
+  // AHP 目录优先（含 per-agent models 与可用性）
+  const ahpAgents = new Map();
+  if (state.ahp && state.ahp.ready) {
+    for (const a of state.ahp.agents) ahpAgents.set(a.provider, a);
+  }
   for (const spec of DISPATCH_RUNNERS) {
-    const chip = el("span", "dispatch-harness-chip" + (detected.has(spec.key) ? "" : " off"));
+    const ahpAgent = ahpAgents.get(spec.key);
+    const available = ahpAgent
+      ? !(ahpAgent._meta && ahpAgent._meta["halter:available"] === false)
+      : detected.has(spec.key);
+    const chip = el("span", "dispatch-harness-chip" + (available ? "" : " off"));
     const dot = el("span", "dispatch-harness-dot");
     dot.style.background = toolColor(spec.key);
     chip.append(dot, el("span", "", spec.label));
-    const model = state.dispatchModels[spec.key];
+    const ahpModel = ahpAgent && ahpAgent.models && ahpAgent.models[0] && ahpAgent.models[0].id;
+    const model = (ahpModel && ahpModel !== "default") || state.dispatchModels[spec.key];
     if (model) chip.append(el("span", "dispatch-harness-model", model));
     chip.title = detected.has(spec.key)
       ? `@${spec.key} 可用${model ? `（默认模型 ${model}）` : ""}；点击插入提及，可加 /model 指定模型`
@@ -1120,11 +1188,29 @@ function insertDispatchMention(key) {
   updateDispatchHint();
 }
 
+function dispatchTargets() {
+  const input = $("dispatch-input");
+  const parsed = parseDispatchMentions(input.value);
+  if (parsed.targets.length) return parsed;
+  // 输入框没有 @提及时，回退到下拉选择（Harness + 模型）
+  const harness = $("dispatch-harness-select") ? $("dispatch-harness-select").value : "";
+  if (!harness) return { targets: [], prompt: parsed.prompt };
+  const model = $("dispatch-model-select") ? $("dispatch-model-select").value : "";
+  return { targets: [{ tool: harness, model: model || null }], prompt: parsed.prompt };
+}
+
 function updateDispatchHint() {
   const hint = $("dispatch-mention-hint");
-  const { targets, prompt } = parseDispatchMentions($("dispatch-input").value);
-  if (!targets.length) {
-    hint.textContent = "未识别到 @harness，可用：@claude @codex @zcode @opencode（支持 @harness/model 指定模型）";
+  const input = $("dispatch-input");
+  const raw = input.value.trim();
+  const { targets, prompt } = dispatchTargets();
+  if (!targets.length && !raw) {
+    // 空输入：中性引导（不是警告）
+    hint.textContent = "用 @claude / @codex / @zcode / @opencode / @halter 选择执行者；@halter 是可审计的原生 Agent；默认只读，可开启逐 patch 写入";
+    hint.className = "dispatch-mention-hint";
+  } else if (!targets.length) {
+    // 有内容但没识别到提及：提示可用项
+    hint.textContent = "未识别到 @harness，可用：@claude @codex @zcode @opencode @halter；指定模型如 @claude/opus";
     hint.className = "dispatch-mention-hint none";
   } else {
     const labels = targets.map((t) => "@" + t.tool + (t.model ? "/" + t.model : ""));
@@ -1134,7 +1220,10 @@ function updateDispatchHint() {
 }
 
 function bindDispatchEvents() {
-  $("dispatch-input").addEventListener("input", updateDispatchHint);
+  // input 覆盖大多数场景；keyup/compositionend/change 兜底 IME、粘贴与自动化注入
+  for (const evt of ["input", "keyup", "compositionend", "change"]) {
+    $("dispatch-input").addEventListener(evt, updateDispatchHint);
+  }
   $("dispatch-input").addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
@@ -1142,17 +1231,318 @@ function bindDispatchEvents() {
     }
   });
   $("btn-dispatch-send").addEventListener("click", sendDispatch);
+  $("dispatch-harness-select").addEventListener("change", (e) => { onHarnessSelect(e.target.value); updateDispatchHint(); });
+  $("dispatch-model-select").addEventListener("change", (e) => { onModelSelect(e.target.value); });
+}
+
+/* ---------- AHP 直连客户端 ---------- */
+
+const AHP_VERSION = "0.9.0";
+
+function ahpState() {
+  return state.ahp;
+}
+
+async function ensureAhp() {
+  if (state.ahp && state.ahp.ready) return state.ahp;
+  const init = await invoke("halter_ahp_connect");
+  const fresh = {
+    ready: true,
+    agents: [],
+    sessions: [],
+    cards: new Map(),       // chatUri -> active output card
+    nativeChats: new Map(), // `${provider}:${project}` -> {sessionUri, chatUri}
+  };
+  state.ahp = fresh;
+  // Rust 桥把 server->client 消息以 ahp-message 事件转发
+  await tauriListen("ahp-message", (ev) => handleAhpData(fresh, ev.payload));
+  const root = ((init.init || {}).snapshots || []).find((x) => x.resource === "ahp-root://");
+  fresh.agents = (root && root.state && root.state.agents) || [];
+  try {
+    const listed = await ahpRequest(fresh, "listSessions", {});
+    fresh.sessions = (listed && listed.items) || [];
+  } catch {
+    fresh.sessions = [];
+  }
+  return fresh;
+}
+
+function ahpRequest(st, method, params) {
+  return invoke("halter_ahp_rpc", { method, params });
+}
+
+function ahpNotify(st, method, params) {
+  return invoke("halter_ahp_notify", { method, params });
+}
+
+function handleAhpData(st, data) {
+  let msg;
+  try { msg = JSON.parse(data); } catch { return; }
+  if (msg.method === "action") ahpApplyAction(st, msg.params);
+}
+
+function updateDispatchToolEvent(entry, part, result) {
+  let node = entry.events.querySelector(`[data-call-id="${CSS.escape(part.id || "")}"]`);
+  if (!node) {
+    node = el("div", "dispatch-event running");
+    node.dataset.callId = part.id || "";
+    entry.events.append(node);
+  }
+  node.className = `dispatch-event ${result ? (part.ok ? "ok" : "err") : "running"}`;
+  node.replaceChildren();
+  const title = el("div", "dispatch-event-title");
+  const badge = el("span", `dispatch-event-dot ${result ? (part.ok ? "ok" : "err") : "run"}`, result ? (part.ok ? "✓" : "×") : "…");
+  const name = el("span", "dispatch-event-name", part.name || "-");
+  title.append(badge, name);
+  node.append(title);
+  const detail = el("pre", "dispatch-event-detail");
+  detail.textContent = result
+    ? JSON.stringify(part.result || {}, null, 2).slice(0, 12000)
+    : JSON.stringify(part.arguments || {}, null, 2);
+  node.append(detail);
+  if (result && part.name === "apply_patch" && part.ok && part.result && part.result.transactionId) {
+    const transactionId = part.result.transactionId;
+    const rollback = el("button", "btn danger dispatch-event-rollback", "回滚此变更");
+    rollback.type = "button";
+    rollback.dataset.transactionId = transactionId;
+    rollback.addEventListener("click", () => {
+      rollback.disabled = true;
+      rollback.textContent = "回滚中…";
+      ahpNotify(null, "dispatchAction", {
+        channel: entry.channel,
+        clientSeq: Date.now(),
+        action: { type: "halter/rollbackRequest", transactionId },
+      }).catch((err) => {
+        rollback.disabled = false;
+        rollback.textContent = "重试回滚";
+        detail.textContent += `\n[rollback failed] ${err && err.message ? err.message : String(err)}`;
+      });
+    });
+    node.append(rollback);
+  }
+  entry.events.scrollTop = entry.events.scrollHeight;
+}
+
+function ahpApplyAction(st, params) {
+  const entry = st.cards.get(params.channel);
+  if (!entry) return;
+  const a = params.action || {};
+  if (a.type === "chat/delta") {
+    entry.output.textContent += a.content || "";
+    entry.output.classList.add("streaming");
+    entry.output.scrollTop = entry.output.scrollHeight;
+  } else if (a.type === "chat/turnComplete") {
+    ahpFinishCard(entry, "done");
+  } else if (a.type === "halter/approvalRequest") {
+    const approval = a.approval || {};
+    const box = el("div", "dispatch-approval");
+    const title = el("div", "dispatch-approval-title",
+      `等待写入审批：${approval.summary || approval.tool || "apply_patch"}`);
+    const rawInput = approval.input || {};
+    const inputText = rawInput.patch !== undefined
+      ? String(rawInput.patch)
+      : JSON.stringify(rawInput, null, 2);
+    const patch = el("pre", "dispatch-approval-patch", inputText);
+    const actions = el("div", "dispatch-approval-actions");
+    const approve = el("button", "btn", "批准应用");
+    const deny = el("button", "btn danger", "拒绝");
+    const respond = (approved) => {
+      [approve, deny].forEach((btn) => { btn.disabled = true; });
+      approve.textContent = approved ? "已批准" : "已拒绝";
+      deny.textContent = approved ? "已批准" : "已拒绝";
+      ahpNotify(null, "dispatchAction", {
+        channel: params.channel,
+        clientSeq: Date.now(),
+        action: {
+          type: "halter/approvalResponse",
+          approvalId: approval.id,
+          approved,
+        },
+      }).catch((err) => {
+        [approve, deny].forEach((btn) => { btn.disabled = false; });
+        approve.textContent = "重试批准";
+        deny.textContent = "重试拒绝";
+        entry.output.textContent += `\n[approval failed] ${err && err.message ? err.message : String(err)}\n`;
+      });
+    };
+    approve.addEventListener("click", () => respond(true));
+    deny.addEventListener("click", () => respond(false));
+    actions.append(approve, deny);
+    box.dataset.approvalId = approval.id || "";
+    box.append(title, patch, actions);
+    entry.root.append(box);
+    box.scrollIntoView({ block: "nearest" });
+  } else if (a.type === "halter/approvalResult") {
+    entry.root.querySelectorAll(".dispatch-approval").forEach((box) => {
+      if (box.dataset.approvalId !== a.approvalId) return;
+      const buttons = box.querySelectorAll("button");
+      buttons.forEach((btn) => { btn.disabled = true; });
+      if (buttons[0]) buttons[0].textContent = a.approved ? "已批准" : "已拒绝";
+      if (buttons[1]) buttons[1].textContent = a.approved ? "已批准" : "已拒绝";
+      box.classList.add(a.approved ? "approved" : "denied");
+    });
+  } else if (a.type === "halter/rollbackResult") {
+    entry.events.querySelectorAll(".dispatch-event-rollback").forEach((btn) => {
+      if (btn.dataset.transactionId !== a.transactionId) return;
+      btn.disabled = true;
+      btn.textContent = a.ok ? "已回滚" : "回滚失败";
+      btn.classList.add(a.ok ? "ok" : "err");
+    });
+  } else if (a.type === "halter/toolCall") {
+    updateDispatchToolEvent(entry, a.part || {}, false);
+  } else if (a.type === "halter/toolResult") {
+    updateDispatchToolEvent(entry, a.part || {}, true);
+  } else if (a.type === "chat/error") {
+    const err = a.part && a.part.error ? `${a.part.error.errorType}: ${a.part.error.message}\n` : "unknown error\n";
+    entry.output.textContent += err;
+    ahpFinishCard(entry, "failed");
+  }
+}
+
+function ahpFinishCard(entry, status) {
+  entry.status.replaceWith(dispatchStatusBadge(status));
+  entry.output.classList.remove("streaming");
+  entry.root.classList.add("finished");
+  entry.root.querySelectorAll(".dispatch-cancel-btn").forEach((btn) => {
+    btn.disabled = true;
+    btn.textContent = status === "done" ? "已完成" : "已结束";
+  });
+}
+
+function addAhpCancelButton(entry, chatUri) {
+  const button = el("button", "btn danger dispatch-cancel-btn", "取消");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    button.textContent = "取消中…";
+    ahpNotify(null, "dispatchAction", {
+      channel: chatUri,
+      clientSeq: Date.now(),
+      action: { type: "chat/turnCancelled" },
+    }).catch((err) => {
+      button.disabled = false;
+      button.textContent = "重试取消";
+      entry.output.textContent += `\n[cancel failed] ${err && err.message ? err.message : String(err)}\n`;
+    });
+  });
+  entry.root.querySelector(".dispatch-card-head")?.append(button);
+}
+
+function uuidAhp(kind) {
+  const id = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `ahp-${kind}:/${id}`;
+}
+
+async function restoreNativeChat(st, project) {
+  const projectUri = project.startsWith("/") ? "file://" + project : project;
+  const session = (st.sessions || []).find((s) =>
+    s.provider === "halter" &&
+    (s.workingDirectories || []).some((dir) => dir === projectUri)
+  );
+  if (!session) return undefined;
+  try {
+    const subscribed = await ahpRequest(st, "subscribe", { channel: session.resource });
+    const state = ((subscribed.snapshot || {}).state || {});
+    const chatUri = state.defaultChat ||
+      (state.chats && state.chats[0] && state.chats[0].resource);
+    if (!chatUri) return undefined;
+    await ahpRequest(st, "subscribe", { channel: chatUri });
+    return { sessionUri: session.resource, chatUri, restored: true };
+  } catch {
+    return undefined;
+  }
+}
+
+async function dispatchViaAhp(targets, prompt, project, mode) {
+  const st = await ensureAhp();
+  const results = [];
+  for (const t of targets) {
+    const provider = t.tool;
+    const model = t.model || state.dispatchModels[provider] || undefined;
+    const writeEnabled = !!($("dispatch-write") && $("dispatch-write").checked);
+    const effectiveMode = provider === "halter" && writeEnabled ? "workspace-write" : mode;
+    const chatKey = `${provider}:${project}`;
+    // Native conversations keep model/tool history in the AHP host, so reuse
+    // the chat for follow-up turns. External CLIs are still one-shot processes.
+    let channels = provider === "halter" ? st.nativeChats.get(chatKey) : undefined;
+    if (!channels && provider === "halter") {
+      channels = await restoreNativeChat(st, project);
+    }
+    if (!channels) {
+      const sessionUri = uuidAhp("session");
+      const chatUri = uuidAhp("chat");
+      await ahpRequest(st, "createSession", {
+        channel: sessionUri,
+        provider,
+        workingDirectories: [project.startsWith("/") ? "file://" + project : project],
+      });
+      await ahpRequest(st, "createChat", { channel: sessionUri, chat: chatUri });
+      await ahpRequest(st, "subscribe", { channel: chatUri });
+      channels = { sessionUri, chatUri };
+      if (provider === "halter") st.nativeChats.set(chatKey, channels);
+    }
+    const { chatUri } = channels;
+
+    const card = makeDispatchCard({
+      tool: provider, model, prompt, project, mode: effectiveMode,
+    });
+    card.channel = chatUri;
+    st.cards.set(chatUri, card);
+    addAhpCancelButton(card, chatUri);
+    results.push(card);
+
+    await ahpNotify(st, "dispatchAction", {
+      channel: chatUri, clientSeq: 1,
+      action: {
+        type: "chat/turnStarted",
+        turnId: `t-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`,
+        startedAt: new Date().toISOString(),
+        message: {
+          text: prompt,
+          origin: { kind: "user" },
+          ...(model && model !== "default" ? { model: { id: model } } : {}),
+          halter: { mode: effectiveMode },
+        },
+      },
+    });
+  }
+  return results;
+}
+
+function makeDispatchCard({ tool, model, prompt, project, mode }) {
+  const list = $("dispatch-tasks");
+  const root = el("div", "dispatch-card");
+  const head = el("div", "dispatch-card-head");
+  const badge = el("span", "dispatch-tool-badge");
+  badge.style.setProperty("--c", toolColor(tool));
+  badge.textContent = "@" + tool;
+  const title = el("span", "dispatch-prompt", prompt);
+  const status = dispatchStatusBadge("running");
+  head.append(badge, title, status);
+  if (model) head.append(el("span", "dispatch-model-tag", model));
+  if (mode === "yolo") head.append(el("span", "dispatch-yolo-tag", "yolo"));
+  if (mode === "workspace-write") head.append(el("span", "dispatch-yolo-tag", "write"));
+  const meta = el("div", "dispatch-card-meta");
+  meta.append(el("span", "", shortenPath(project)));
+  meta.append(el("span", "", new Date().toISOString()));
+  const output = el("pre", "dispatch-output", "");
+  const events = el("div", "dispatch-events");
+  root.append(head, meta, output, events);
+  list.prepend(root);
+  return { root, output, events, status };
 }
 
 async function sendDispatch() {
   const errBox = $("dispatch-error");
   errBox.classList.add("hidden");
   const message = $("dispatch-input").value.trim();
-  const { targets, prompt } = parseDispatchMentions(message);
+  const { targets, prompt } = dispatchTargets();
   if (!targets.length || !prompt) {
     errBox.textContent = !targets.length
-      ? "消息中未找到 @harness 提及（可用：@claude @codex @zcode @opencode）"
-      : "@提及之外还需要任务描述";
+      ? "未选择执行者：在输入框 @claude，或在上拉选择 Harness"
+      : "还需要任务描述";
     errBox.classList.remove("hidden");
     return;
   }
@@ -1161,9 +1551,37 @@ async function sendDispatch() {
   const btn = $("btn-dispatch-send");
   btn.disabled = true;
   btn.textContent = "派发中…";
+
+  // AHP 直连优先：结构化 action 流；host 不可用时回退 sidecar 轮询
+  try {
+    await dispatchViaAhp(targets, prompt, project, mode);
+    $("dispatch-input").value = "";
+    $("dispatch-harness-select").value = "";
+    renderDispatchSelectors();
+    updateDispatchHint();
+    return;
+  } catch (ahpErr) {
+    if (targets.some((t) => t.tool === "halter")) {
+      showError(errBox, new Error(
+        "halter 原生 Agent 需要 AHP host：" +
+        (ahpErr && ahpErr.message ? ahpErr.message : String(ahpErr))
+      ));
+      btn.disabled = false;
+      btn.textContent = "⏵ 派发 ⌘↵";
+      return;
+    }
+    // 回退：老路径（halter run --detached + tasks show 轮询）；显示 AHP 失败原因
+    const dbg = document.createElement("div");
+    dbg.className = "dispatch-mention-hint none";
+    dbg.textContent = "AHP 直连失败已回退: " + (ahpErr && ahpErr.message ? ahpErr.message : String(ahpErr));
+    $("dispatch-tasks").prepend(dbg);
+  }
+
   try {
     const data = await invoke("halter_dispatch_run", { message, project, mode });
     $("dispatch-input").value = "";
+    $("dispatch-harness-select").value = "";
+    renderDispatchSelectors();
     updateDispatchHint();
     for (const t of data.tasks || []) {
       try {

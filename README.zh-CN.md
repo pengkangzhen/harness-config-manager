@@ -74,6 +74,7 @@ halter tasks show <task-id>          # 查看输出末尾（已脱敏）
 claude = "sonnet"
 codex = "o3"
 opencode = "zhipu/glm-4.7"
+halter = "openai/gpt-5"       # native AHP provider
 ```
 
 `halter models` 查看当前配置。模型映射：claude `--model`、codex `-m`、opencode `-m`；ZCode 无公开无头模型开关，v1 仅记录不注入（用其自身默认模型）。
@@ -81,6 +82,40 @@ opencode = "zhipu/glm-4.7"
 安全语义：默认 `--mode safe`（各助手权限受控，能改动的范围由各自沙箱决定）；`--mode yolo` 才映射到各家的“跳过确认”开关。提示词作为独立 argv 元素传递，不经过 shell。任务记录写入 `~/.config/halter/tasks/`（0700/0600 私有权限），输出查看时自动脱敏。前台模式 Ctrl-C 或 `--timeout` 会终止整个进程组。
 
 桌面 App 的「调度」视图提供同一能力的图形界面：@提及、可用性徽标、项目选择、任务卡片实时轮询输出。
+
+## AHP：自建 Agent Host（协议级挂载全部 Harness）
+
+`halter ahp serve` 启动一个符合 [Agent Host Protocol 0.9.0](https://microsoft.github.io/agent-host-protocol/) 的自建服务器（WebSocket + JSON-RPC），把 claude / codex / zcode / opencode 全部挂载为标准 AHP agent backend：
+
+```bash
+halter ahp serve --port 7433
+```
+
+任何 AHP 客户端（VS Code Agents 窗口、AHPX、官方 Rust/TS/Go/Swift/Kotlin client 库）连接后即可：
+
+```
+initialize（版本协商 + agents 目录快照）
+  -> createSession(provider="claude")      # 或 codex / zcode / opencode
+  -> createChat
+  -> dispatchAction(chat/turnStarted)      # message.model.id 自动映射 --model/-m
+  <- chat/responsePart + chat/delta...     # harness 输出逐行流式广播
+  <- chat/turnComplete
+```
+
+实现要点：channel URI 路由（`ahp-root://` / `ahp-session:/<uuid>` / `ahp-chat:/<uuid>`）、服务端单调 `serverSeq` 广播、客户端 action `origin` 回显、`root/sessionAdded` 目录通知、模型路由（`[models]` 配置 + `message.model` 覆盖）。任务执行复用 runner 层的进程组管理与无头 argv 组装。
+
+第五个 backend 是 `provider="halter"`：Halter 自己拥有 model/tool 决策循环，并持久化脱敏后的 session 与模型/工具历史。当前暴露被限制在 workspace 内的只读/项目记忆工具（`read_file`、`list_dir`、`search_files`、`git_status`、`git_diff`、`list_project_sessions`、`read_project_session`）、需要逐 diff 审批且可按事务回滚的 `apply_patch`、固定命令且需审批的 `run_tests`，以及把 Claude/Codex/ZCode/OpenCode 并发委派到一次性 git clone（含 tracked+untracked 快照）的 `delegate_harness`，支持 OpenAI / Zhipu 兼容模型流式路由，广播结构化 `halter/toolCall` / `halter/toolResult` 事件，并把每个模型响应与工具调用写入私有 JSONL 审计日志；外部 runner 的调用与输出同样留档。详见 [docs/native-agent.md](docs/native-agent.md)。
+
+```bash
+uv run pytest tests/test_agent_runtime.py tests/test_ahp_host.py   # 原生 runtime + 协议级端到端
+```
+
+**桌面 App 直连**：调度视图经 Tauri Rust 桥（`halter_ahp_connect/rpc/notify` IPC + `ahp-message` 事件流）连接 AHP host 的 HTTP+SSE 传输，任务卡由 `chat/delta`/`chat/turnComplete` action 流驱动（WebView 禁止明文 ws/http，网络由 Rust 侧代理）。GUI 环境部署用 PyInstaller onefile（绕过 venv python 在 launchd/GUI 会话的 getpath 启动问题，并自动补 homebrew PATH）：
+
+```bash
+uv run pyinstaller --onefile --name halter \
+  --hidden-import websockets --hidden-import aiohttp desktop/pyinstaller_entry.py
+```
 
 ## Session 连续性
 
@@ -183,4 +218,4 @@ cd desktop
 npm run build
 ```
 
-正式打包时可把 PyInstaller 产出的 `halter` 二进制放入 `desktop/src-tauri/binaries/halter-<target-triple>` 并在 `tauri.conf.json` 的 `bundle` 中声明 `externalBin`，使其随 App 分发。
+`npm run build` 已自动化整个流程：`build:sidecar` 脚本（`scripts/build_sidecar.sh`）先用 PyInstaller 打出 onefile 二进制到 `desktop/src-tauri/binaries/halter-<target-triple>`（源码未变时增量跳过，`FORCE_SIDECAR=1` 强制重打），`tauri.conf.json` 已声明 `externalBin`，Tauri 自动把它带进 .app/.dmg。

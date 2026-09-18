@@ -6,7 +6,8 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "npm run build:sidecar && tauri build",
+    "build:sidecar": "cd .. && ./scripts/build_sidecar.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"

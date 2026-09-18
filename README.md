@@ -103,6 +103,7 @@ Routing targets and headless invocation:
 claude = "sonnet"
 codex = "o3"
 opencode = "zhipu/glm-4.7"
+halter = "openai/gpt-5"       # native AHP provider
 ```
 
 `halter models` shows the current mapping. Flags: claude `--model`, codex `-m`, opencode `-m`; ZCode has no public headless model switch in v1 (recorded, not injected).
@@ -110,6 +111,22 @@ opencode = "zhipu/glm-4.7"
 Safety: `--mode safe` is the default (each harness keeps its own permission gates); `--mode yolo` maps to each tool's bypass flags. Prompts are passed as single argv elements — never through a shell. Task records live under `~/.config/halter/tasks/` (0700/0600) and output is redacted when displayed. Ctrl-C or `--timeout` kills the whole process group in foreground mode.
 
 The desktop app's **Dispatch** view wraps the same capability: mention chips, availability badges, project picker, and live task cards.
+
+## AHP: self-hosted Agent Host (protocol-level harness mounting)
+
+`halter ahp serve` starts a standalone server speaking [Agent Host Protocol 0.9.0](https://microsoft.github.io/agent-host-protocol/) (WebSocket + JSON-RPC), mounting claude / codex / zcode / opencode as standard AHP agent backends:
+
+```bash
+halter ahp serve --port 7433
+```
+
+Any AHP client (VS Code Agents window, AHPX, official Rust/TS/Go/Swift/Kotlin client libraries) can then `initialize` → `createSession(provider="claude")` → `createChat` → dispatch `chat/turnStarted` and receive streaming `chat/delta` actions until `chat/turnComplete`. Model routing flows from `[models]` config and `message.model.id` into each harness's `--model` / `-m` flag. Execution reuses the runner layer (process groups, headless argv building).
+
+A fifth backend, `provider="halter"`, runs Halter's native auditable agent loop with durable, redacted session/model-tool history. It exposes workspace-confined read/project-memory tools (`read_file`, `list_dir`, `search_files`, `git_status`, `git_diff`, `list_project_sessions`, `read_project_session`) plus approval-gated `apply_patch` with per-transaction rollback and fixed `run_tests`, can concurrently delegate Claude/Codex/ZCode/OpenCode to disposable git clones with tracked+untracked snapshots, supports streaming OpenAI- and Zhipu-compatible model routing, emits structured tool/approval events, and writes every model/tool/permission decision to a private JSONL audit trail. External runner invocations and output are audited too. See [docs/native-agent.md](docs/native-agent.md).
+
+```bash
+uv run pytest tests/test_agent_runtime.py tests/test_ahp_host.py   # native runtime + protocol e2e
+```
 
 ## Session continuity
 

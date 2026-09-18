@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
   <div id="app">
     <aside class="sidebar">
       <div class="brand">
@@ -143,25 +144,29 @@
         <header class="view-header">
           <h1>任务调度</h1>
           <div class="header-actions">
-            <label class="gap-toggle"><input type="checkbox" id="dispatch-yolo" /> yolo（跳过权限确认）</label>
+            <label class="gap-toggle"><input type="checkbox" id="dispatch-yolo" /> yolo（外部 Harness 放行）</label>
+            <label class="gap-toggle"><input type="checkbox" id="dispatch-write" /> 原生写入（逐 patch 审批）</label>
             <select id="dispatch-project" class="dispatch-project" title="任务运行的项目目录"></select>
           </div>
         </header>
 
         <div class="dispatch-layout">
           <div class="dispatch-main">
-            <div id="dispatch-harnesses" class="dispatch-harnesses"></div>
+            <div class="dispatch-picker-row">
+              <select id="dispatch-harness-select" class="dispatch-select" title="选择 Harness（自动插入 @提及）"></select>
+              <select id="dispatch-model-select" class="dispatch-select" title="选择模型（写入 @harness/model）"></select>
+            </div>
 
             <div class="dispatch-composer">
               <textarea
                 id="dispatch-input"
                 class="dispatch-input"
                 rows="3"
-                placeholder="在同一个界面 @ 不同 Harness 完成任务…&#10;例如：@claude 修复失败的测试　@codex @zcode 分别给出实现方案"
+                placeholder="在同一个界面 @ 不同 Harness 完成任务…&#10;例如：@claude 修复测试　@codex @zcode 并发审查　@opencode/zhipu/glm-4.7 第二意见　@halter/openai/gpt-5 原生审查或审批写入"
                 spellcheck="false"
               ></textarea>
               <div class="dispatch-composer-foot">
-                <span id="dispatch-mention-hint" class="dispatch-mention-hint">未识别到 @harness，可用：@claude @codex @zcode @opencode（支持 @harness/model 指定模型）</span>
+                <span id="dispatch-mention-hint" class="dispatch-mention-hint">用 @claude / @codex / @zcode / @opencode / @halter 选择执行者；@halter 是可审计的原生 Agent；默认只读，可开启逐 patch 写入</span>
                 <button id="btn-dispatch-send" class="btn">⏵ 派发 ⌘↵</button>
               </div>
             </div>

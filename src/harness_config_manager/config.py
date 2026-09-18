@@ -25,6 +25,10 @@ class HalterConfig:
     exclude_agents: list[str] = field(default_factory=list)
     # 每个 harness 的默认模型（@harness/model 内联指定优先于此）
     models: dict[str, str] = field(default_factory=dict)
+    # 每个 harness 的可选模型列表（下拉选择用；缺省用内置 GLM 系列表）
+    model_catalog: dict[str, list[str]] = field(default_factory=dict)
+    # OpenAI-compatible 模型端点；真实 key 仍只存环境变量 / secrets，不入 config
+    model_providers: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def load_config(path: Path | None = None) -> HalterConfig:
@@ -43,6 +47,17 @@ def load_config(path: Path | None = None) -> HalterConfig:
         agents_library=doc.get("agents_library"),
         exclude_agents=list(doc.get("exclude_agents", [])),
         models={str(k): str(v) for k, v in dict(doc.get("models", {})).items()},
+        model_catalog={
+            str(k): [str(x) for x in list(v)]
+            for k, v in dict(doc.get("model_catalog", {})).items()
+        },
+        model_providers={
+            str(k): {
+                str(field): str(value)
+                for field, value in dict(v).items()
+            }
+            for k, v in dict(doc.get("model_providers", {})).items()
+        },
     )
 
 
@@ -67,4 +82,20 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
         for k in sorted(cfg.models):
             models[k] = cfg.models[k]
         doc["models"] = models
+    if cfg.model_providers:
+        providers = tomlkit.table()
+        for k in sorted(cfg.model_providers):
+            inner = tomlkit.table()
+            for field in sorted(cfg.model_providers[k]):
+                inner[field] = cfg.model_providers[k][field]
+            providers[k] = inner
+        doc["model_providers"] = providers
+    if cfg.model_catalog:
+        catalog = tomlkit.table()
+        for k in sorted(cfg.model_catalog):
+            inner = tomlkit.array()
+            for item in cfg.model_catalog[k]:
+                inner.append(item)
+            catalog[k] = inner
+        doc["model_catalog"] = catalog
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")

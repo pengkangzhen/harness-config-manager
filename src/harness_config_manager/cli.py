@@ -23,6 +23,9 @@ app.add_typer(sessions_app, name="sessions")
 tasks_app = typer.Typer(help="查看/跟踪通过 halter run 派发的多 Harness 任务。")
 app.add_typer(tasks_app, name="tasks")
 
+ahp_app = typer.Typer(help="AHP（Agent Host Protocol）服务器：把 claude/codex/zcode 挂载为标准 agent backend。")
+app.add_typer(ahp_app, name="ahp")
+
 
 @app.callback()
 def _root() -> None:
@@ -307,11 +310,20 @@ def models(
     from .runner import RUNNERS
 
     cfg = load_config()
-    configured = {k: v for k, v in cfg.models.items() if k in RUNNERS}
+    configured = {k: v for k, v in cfg.models.items() if k in RUNNERS or k == "halter"}
+    catalog = model_catalog(cfg)
     if json_out:
         console.print_json(_json.dumps({
             "models": configured,
-            "runners": {k: {"display": r.display} for k, r in RUNNERS.items()},
+            "catalog": catalog,
+            "runners": {
+                **{k: {"display": r.display} for k, r in RUNNERS.items()},
+                "halter": {
+                    "display": "halter Native",
+                    "native": True,
+                    "permissions": ["read-only"],
+                },
+            },
         }, ensure_ascii=False))
         return
     if not configured:
@@ -320,10 +332,56 @@ def models(
         return
     table = Table(title="Default models")
     table.add_column("Harness", style="cyan")
-    table.add_column("Model")
-    for k in sorted(configured):
-        table.add_row(f"@{k}", configured[k])
+    table.add_column("Default")
+    table.add_column("Options", overflow="fold")
+    for k in sorted(set(configured) | set(catalog)):
+        table.add_row(f"@{k}", configured.get(k, "-"), ", ".join(catalog.get(k, [])))
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# model_catalog：内置可选模型列表 + 配置覆盖（下拉选择用）
+
+BUILTIN_MODEL_CATALOG: dict[str, list[str]] = {
+    "claude": ["glm-4.7", "glm-4.6", "glm-4.5", "opus", "sonnet", "haiku"],
+    "codex": ["glm-4.7", "glm-4.6", "o3", "o4-mini"],
+    "zcode": ["glm-4.7", "glm-4.6", "glm-4.5"],
+    "opencode": ["zhipu/glm-4.7", "zhipu/glm-4.6", "zhipu/glm-4.5"],
+    "halter": ["openai/gpt-5", "openai/gpt-5-mini", "zhipu/glm-4.7", "zhipu/glm-4.6"],
+}
+
+
+def model_catalog(cfg) -> dict[str, list[str]]:
+    """合并内置 GLM 系列表与 [model_catalog] 配置（配置覆盖整组）。"""
+    out: dict[str, list[str]] = {}
+    for key in {**BUILTIN_MODEL_CATALOG, **cfg.model_catalog}:
+        configured = cfg.model_catalog.get(key)
+        out[key] = list(configured) if configured else list(BUILTIN_MODEL_CATALOG.get(key, []))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ahp：自建 Agent Host Protocol 服务器
+
+
+@ahp_app.command("serve")
+def ahp_serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="监听地址"),
+    port: int = typer.Option(7433, "--port", "-p", help="监听端口"),
+) -> None:
+    """启动 halter AHP host（WebSocket JSON-RPC，协议 0.9.0）。
+
+    任何 AHP 客户端（VS Code Agents 窗口、AHPX、官方 client 库）连接后可
+    createSession(provider=claude/codex/zcode/opencode) 并流式驱动对话。
+    """
+    import asyncio
+
+    from .ahp_host import serve as run_ahp_serve
+
+    try:
+        asyncio.run(run_ahp_serve(host, port))
+    except KeyboardInterrupt:
+        console.print("[dim]AHP host 已停止[/dim]")
 
 
 # ---------------------------------------------------------------------------

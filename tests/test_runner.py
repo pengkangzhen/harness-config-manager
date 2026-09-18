@@ -281,3 +281,30 @@ def test_zcode_model_recorded_not_mapped(fake_harnesses, tmp_path):
     infos = dispatch("@zcode/glm-4.7 干活", project=tmp_path, detached=True)
     assert infos[0].model == "glm-4.7"
     assert "--model" not in infos[0].argv and "-m" not in infos[0].argv
+
+
+def test_model_catalog_config_override(fake_home: Path) -> None:
+    """[model_catalog] 覆盖整组内置列表；未配置的用内置 GLM 系。"""
+    from harness_config_manager.cli import model_catalog
+    from harness_config_manager.config import load_config
+
+    # 未配置：内置
+    cfg = load_config()
+    cat = model_catalog(cfg)
+    assert "glm-4.7" in cat["claude"]
+    assert "zhipu/glm-4.7" in cat["opencode"]
+
+    # 配置覆盖：claude 整组替换，codex 保留内置
+    cfg_path = fake_home / ".config/halter/config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        '[models]\nclaude = "glm-4.6"\n\n'
+        '[model_catalog.claude]\nclaude__unused = 0\n', encoding="utf-8")
+    # TOML 数组写法
+    cfg_path.write_text(
+        '[models]\nclaude = "glm-4.6"\n\n'
+        '[model_catalog]\nclaude = ["glm-5", "glm-4.7"]\n', encoding="utf-8")
+    cfg2 = load_config()
+    cat2 = model_catalog(cfg2)
+    assert cat2["claude"] == ["glm-5", "glm-4.7"]
+    assert "glm-4.7" in cat2["codex"]
