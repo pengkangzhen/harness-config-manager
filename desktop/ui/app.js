@@ -1694,6 +1694,7 @@ function renderDispatchPlan(entry, plan) {
 const COMPARISON_LABELS = {
   identical: "一致",
   conflicting: "冲突",
+  semantic_equivalent: "仅空白差异",
   overlapping: "不同区域",
   unique: "独有",
 };

@@ -147,6 +147,42 @@ def test_deleted_line_starting_with_dashes_is_not_a_file_header() -> None:
     assert hunk.added == ()
 
 
+def test_whitespace_only_overlap_is_semantic_equivalent() -> None:
+    claude = _patch("source.txt", ("line2",), ("line2-fixed   ",))  # 尾随空格
+    codex = _patch("source.txt", ("line2",), ("line2-fixed",))
+    report = compare_provider_diffs({"claude": claude, "codex": codex})
+    entry = report.files[0]
+    assert entry["classification"] == "semantic_equivalent"
+    assert entry["conflictCount"] == 0
+    assert not report.conflicts
+    assert report.equivalences and report.equivalences[0]["kind"] == "whitespace"
+    assert "semantic_equivalent" in report.strategy
+    assert "可任取一份" in report.strategy
+
+
+def test_semantic_equivalent_loses_to_real_conflict_in_same_file() -> None:
+    # hunk1 区域:仅空白差异;hunk2 区域(不同行):真实内容冲突
+    def _two_hunk_diff(spacey: bool, marker: str) -> str:
+        added1 = "line2-fixed   " if spacey else "line2-fixed"
+        added2 = f"line8-{marker}"
+        return (
+            "diff --git a/source.txt b/source.txt\n"
+            "--- a/source.txt\n+++ b/source.txt\n"
+            "@@ -2,2 +2,2 @@\n ctx\n-line2\n" f"+{added1}\n"
+            "@@ -8,2 +8,2 @@\n ctx\n-line8\n" f"+{added2}\n"
+        )
+
+    report = compare_provider_diffs({
+        "claude": _two_hunk_diff(True, "claude"),
+        "codex": _two_hunk_diff(False, "codex"),
+    })
+    entry = report.files[0]
+    assert entry["classification"] == "conflicting"
+    assert entry["conflictCount"] == 1
+    assert report.equivalences and report.equivalences[0]["kind"] == "whitespace"
+    assert report.conflicts[0]["kind"] == "content"
+
+
 def test_more_than_two_providers_take_worst_classification() -> None:
     base = _patch("source.txt", ("line2",), ("line2-fixed",))
     divergent = _patch("source.txt", ("line2",), ("line2-other",))

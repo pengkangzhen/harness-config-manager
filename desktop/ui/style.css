@@ -1231,6 +1231,7 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 }
 .dispatch-compare-class.identical { border-color: rgba(61, 220, 151, .45); color: var(--green); }
 .dispatch-compare-class.conflicting { border-color: rgba(255, 107, 129, .5); color: var(--red); }
+.dispatch-compare-class.semantic_equivalent { border-color: rgba(230, 180, 80, .5); color: #e6b450; }
 .dispatch-compare-class.overlapping { border-color: rgba(76, 194, 255, .5); color: var(--accent); }
 .dispatch-compare-class.unique { border-color: var(--border); }
 .dispatch-compare-output {
