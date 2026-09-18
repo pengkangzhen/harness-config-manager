@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import tomlkit
+import pytest
 
 from harness_config_manager.plugin_sync import (
     PluginSpec,
@@ -116,3 +117,16 @@ def test_vscode_only_ai_extensions(fake_home: Path, monkeypatch) -> None:
     got = {p.plugin_id for p in pl.read_vscode_plugins()}
     assert got == {"openai.chatgpt", "nuriyev.claude-code-katex",
                    "ms-vscode.vscode-websearchforcopilot"}
+
+
+def test_zcode_plugin_invalid_config_is_not_reset(fake_home: Path) -> None:
+    from harness_config_manager.plugin_sync import PluginSpec, _install_zcode
+
+    path = fake_home / ".zcode/cli/config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken", encoding="utf-8")
+    cache = fake_home / ".claude/plugins/cache/market/demo/1.10.0"
+    cache.mkdir(parents=True)
+    with pytest.raises(ValueError):
+        _install_zcode(PluginSpec("demo@market", targets=["zcode"]))
+    assert path.read_text(encoding="utf-8") == "{broken"

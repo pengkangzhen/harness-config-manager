@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 from typing import Callable
 
+from .io_utils import version_key
 from .model import McpServerInfo, redact
 from .registry import expand
 
@@ -192,13 +193,16 @@ def plugin_provided_mcp(tool: str) -> list[McpServerInfo]:
                     name=bundled, transport="stdio", command=None,
                     extra={"via": f"插件 {plugin_dir.name}（宿主内置注入）"}))
             # 插件 .mcp.json 声明（取最新版本目录）
-            versions = sorted((d for d in plugin_dir.iterdir() if d.is_dir()), key=lambda d: d.name)
+            versions = sorted((d for d in plugin_dir.iterdir() if d.is_dir()), key=lambda item: version_key(item.name))
             if not versions:
                 continue
             decl = _load_json(versions[-1] / ".mcp.json")
             if not decl:
                 continue
-            for srv, entry in (decl.get("mcpServers") or {}).items():
+            declared_servers = decl.get("mcpServers")
+            if not isinstance(declared_servers, dict):
+                continue
+            for srv, entry in declared_servers.items():
                 if not isinstance(entry, dict):
                     continue
                 transport, command, url = _parse_common(entry)

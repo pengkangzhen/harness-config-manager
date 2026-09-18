@@ -199,7 +199,7 @@ class TaskInfo:
             "task_id": self.task_id,
             "tool": self.tool,
             "display": RUNNERS[self.tool].display if self.tool in RUNNERS else self.tool,
-            "prompt": self.prompt,
+            "prompt": redact_text(self.prompt),
             "project": self.project,
             "argv": [redact_text(a) for a in self.argv],
             "pid": self.pid,
@@ -230,11 +230,38 @@ def tasks_root(home: Path | None = None) -> Path:
     return base
 
 
+
+def validate_task_id(task_id: str) -> str:
+    """Validate a task id before it is joined into the private tasks root."""
+    if (
+        not isinstance(task_id, str)
+        or task_id in {".", ".."}
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", task_id)
+    ):
+        raise ValueError(f"invalid task id: {task_id!r}")
+    return task_id
+
+
+def _atomic_write_private(path: Path, data: str) -> None:
+    """Write private task metadata without exposing a partially written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
 def task_dir(task_id: str, home: Path | None = None) -> Path:
     root = tasks_root(home)
-    # 防路径穿越：task_id 只允许 [A-Za-z0-9._-]
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", task_id):
-        raise ValueError(f"invalid task id: {task_id!r}")
+    validate_task_id(task_id)
     d = root / task_id
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -248,15 +275,14 @@ def new_task_id() -> str:
 def save_task(info: TaskInfo) -> Path:
     d = task_dir(info.task_id)
     meta = d / "task.json"
-    meta.write_text(json.dumps(info.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        meta.chmod(0o600)
-    except OSError:
-        pass
+    _atomic_write_private(
+        meta, json.dumps(info.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    )
     return meta
 
 
 def load_task(task_id: str) -> TaskInfo:
+    validate_task_id(task_id)
     meta = tasks_root() / task_id / "task.json"
     if not meta.is_file():
         raise FileNotFoundError(f"task not found: {task_id}")
@@ -285,6 +311,7 @@ def list_tasks(limit: int = 50) -> list[TaskInfo]:
 
 
 def read_output_tail(task_id: str, max_chars: int) -> str:
+    validate_task_id(task_id)
     log = tasks_root() / task_id / "output.log"
     if not log.is_file() or max_chars <= 0:
         return ""
@@ -456,7 +483,7 @@ def run_foreground(
         info.pid = proc.pid
         save_task(info)
         if on_line:
-            on_line(tool, f"$ {' '.join(shlex.quote(a) for a in argv)}")
+            on_line(tool, f"$ {' '.join(shlex.quote(redact_text(a)) for a in argv)}")
 
     def _pump(tool_key: str, task_id: str, proc: subprocess.Popen[bytes]) -> None:
         stream = proc.stdout

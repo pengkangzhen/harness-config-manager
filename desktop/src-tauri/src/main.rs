@@ -6,13 +6,16 @@ use tauri::Emitter;
 use serde_json::Value;
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use std::time::Duration;
 
 /// 托管的 `halter ahp serve` 进程（桌面 App 生命周期内复用）。
 static AHP_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static AHP_PORT: Mutex<Option<u16>> = Mutex::new(None);
+static AHP_TOKEN: Mutex<Option<String>> = Mutex::new(None);
+static AHP_ENSURE_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 
 /// Raw result of one `halter` sidecar invocation, surfaced to the UI as-is.
 #[derive(Debug, Serialize)]
@@ -214,30 +217,120 @@ struct AhpBridge {
 
 static AHP_BRIDGE: Mutex<Option<AhpBridge>> = Mutex::new(None);
 
+fn ahp_token_path() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".config").join("halter").join("ahp-token")
+}
+
+fn read_ahp_token() -> Result<String, String> {
+    std::fs::read_to_string(ahp_token_path())
+        .map(|value| value.trim().to_string())
+        .map_err(|e| format!("failed to read AHP token: {e}"))
+}
+
+fn abort_ahp_bridge(bridge: Option<AhpBridge>) {
+    if let Some(bridge) = bridge {
+        if let Some(task) = bridge.sse_task.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+}
+
+async fn port_open(port: u16) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().expect("valid socket address"),
+            Duration::from_millis(150),
+        )
+        .is_ok()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+fn ahp_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("failed to create AHP HTTP client: {e}"))
+}
+
+async fn ahp_health(base: &str) -> Result<Value, String> {
+    let client = ahp_client()?;
+    let value: Value = client
+        .get(format!("{base}/healthz"))
+        .send()
+        .await
+        .map_err(|e| format!("AHP health check failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("AHP health check HTTP: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("AHP health check decode: {e}"))?;
+    let name = value
+        .get("serverInfo")
+        .and_then(|item| item.get("name"))
+        .and_then(|item| item.as_str())
+        .unwrap_or_default();
+    if name != "halter-agent-host" {
+        return Err(format!("port is not a halter AHP host: {name}"));
+    }
+    Ok(value)
+}
+
+async fn ahp_token_valid(base: &str, token: &str) -> bool {
+    let Ok(client) = ahp_client() else { return false };
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 0, "method": "ping", "params": {}
+    });
+    let Ok(resp) = client
+        .post(format!("{base}/rpc"))
+        .query(&[("client", "halter-desktop-probe")])
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+    else {
+        return false;
+    };
+    resp.status().is_success()
+}
+
 /// 连接 AHP host（HTTP+SSE 传输）：initialize 并启动 action 事件流，
 /// 每个 server->client 消息以 `ahp-message` 事件转发给前端。
 #[tauri::command]
 async fn halter_ahp_connect(app: tauri::AppHandle) -> Result<Value, String> {
-    // 先确保 host 在跑（外部已起则采用）
-    let _ = halter_ahp_ensure().await;
+    halter_ahp_ensure().await?;
     let port = AHP_PORT.lock().unwrap().ok_or("no AHP host available")?;
+    let token = AHP_TOKEN
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("no AHP authentication token available")?;
     let base = format!("http://127.0.0.1:{port}");
-    let client_id = format!("halter-desktop-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    let client_id = format!(
+        "halter-desktop-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
 
-    // 已连接则复用
+    // 已连接则复用；连接不同 host 前先停止旧的 reconnect task。
     {
-        let guard = AHP_BRIDGE.lock().unwrap();
-        if let Some(b) = guard.as_ref() {
-            if b.base == base {
+        let old = AHP_BRIDGE.lock().unwrap();
+        if let Some(bridge) = old.as_ref() {
+            if bridge.base == base {
                 return Ok(serde_json::json!({ "base": base, "connected": true, "reused": true }));
             }
         }
     }
+    abort_ahp_bridge(AHP_BRIDGE.lock().unwrap().take());
 
-    let client = reqwest::Client::new();
-
-    // initialize（拿 agents 目录快照）
+    let client = ahp_client()?;
     let init_body = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -248,62 +341,87 @@ async fn halter_ahp_connect(app: tauri::AppHandle) -> Result<Value, String> {
             "initialSubscriptions": ["ahp-root://"],
         }
     });
-    let resp = client.post(format!("{base}/rpc"))
+    let resp = client
+        .post(format!("{base}/rpc"))
         .query(&[("client", client_id.as_str())])
+        .bearer_auth(&token)
         .json(&init_body)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("AHP initialize failed: {e}"))?
         .error_for_status()
         .map_err(|e| format!("AHP initialize HTTP: {e}"))?;
-    let init: Value = resp.json().await
+    let init: Value = resp
+        .json()
+        .await
         .map_err(|e| format!("AHP initialize decode: {e}"))?;
 
     // SSE 事件流 -> 前端事件
     let sse_client = client.clone();
     let sse_base = base.clone();
     let sse_client_id = client_id.clone();
+    let sse_token = token.clone();
     let app2 = app.clone();
     let sse_task = tauri::async_runtime::spawn(async move {
-        let url = format!("{sse_base}/rpc/stream?client={sse_client_id}");
+        let url = format!("{sse_base}/rpc/stream");
         loop {
-            let resp = match sse_client.get(&url).send().await {
-                Ok(r) => r,
-                Err(_) => { tokio::time::sleep(Duration::from_secs(2)).await; continue; }
+            let resp = match sse_client
+                .get(&url)
+                .query(&[("client", sse_client_id.as_str())])
+                .bearer_auth(&sse_token)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
             };
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                let _ = app2.emit("ahp-message", "{\"unauthorized\":true}");
+                break;
+            }
             let mut stream = resp.bytes_stream();
             use futures_util::StreamExt;
             let mut buf: Vec<u8> = Vec::new();
             while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(bytes) => {
-                        buf.extend_from_slice(&bytes);
-                        while let Some(pos) = find_double_newline(&buf) {
-                            let frame: Vec<u8> = buf.drain(..pos).collect();
-                            buf.drain(..2); //
-
-
-                            let text = String::from_utf8_lossy(&frame).to_string();
-                            for line in text.lines() {
-                                if let Some(data) = line.strip_prefix("data: ") {
-                                    let _ = app2.emit("ahp-message", data.to_string());
-                                }
-                            }
+                let bytes = match chunk {
+                    Ok(bytes) => bytes,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&bytes);
+                while let Some((pos, delimiter_len)) = find_frame_end(&buf) {
+                    let frame: Vec<u8> = buf.drain(..pos).collect();
+                    for _ in 0..delimiter_len {
+                        buf.remove(0);
+                    }
+                    let text = String::from_utf8_lossy(&frame).to_string();
+                    let mut data_lines: Vec<String> = Vec::new();
+                    for line in text.lines() {
+                        let line = line.trim_end_matches('\r');
+                        if let Some(data) = line.strip_prefix("data:") {
+                            data_lines.push(data.strip_prefix(' ').unwrap_or(data).to_string());
                         }
                     }
-                    Err(_) => break,
+                    if !data_lines.is_empty() {
+                        let data = data_lines.join("\n");
+                        let _ = app2.emit("ahp-message", data);
+                    }
+                }
+                if buf.len() > 1024 * 1024 {
+                    let _ = app2.emit("ahp-message", "{\"error\":\"SSE frame too large\"}");
+                    break;
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
 
-    if let Some(old_bridge) = AHP_BRIDGE.lock().unwrap().take() {
-        if let Some(task) = old_bridge.sse_task.lock().unwrap().take() {
-            task.abort();
-        }
-    }
     *AHP_BRIDGE.lock().unwrap() = Some(AhpBridge {
-        client, base: base.clone(), client_id,
+        client,
+        base: base.clone(),
+        client_id,
         sse_task: Mutex::new(Some(sse_task)),
     });
 
@@ -313,33 +431,61 @@ async fn halter_ahp_connect(app: tauri::AppHandle) -> Result<Value, String> {
     }))
 }
 
-fn find_double_newline(buf: &[u8]) -> Option<usize> {
-    buf.windows(2).position(|w| w == b"\n\n")
+fn find_frame_end(buf: &[u8]) -> Option<(usize, usize)> {
+    if buf.len() < 2 {
+        return None;
+    }
+    if buf.len() >= 4 {
+        if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+            return Some((pos, 4));
+        }
+    }
+    if let Some(pos) = buf.windows(2).position(|window| window == b"\n\n") {
+        return Some((pos, 2));
+    }
+    buf.windows(2).position(|window| window == b"\r\r").map(|pos| (pos, 2))
 }
 
 /// 经 Rust 桥发送 AHP 请求（带 id，返回 result）。
 #[tauri::command]
 async fn halter_ahp_rpc(method: String, params: Value) -> Result<Value, String> {
-    let (client, base, client_id) = {
+    let (client, base, client_id, token) = {
         let guard = AHP_BRIDGE.lock().unwrap();
-        let b = guard.as_ref().ok_or("AHP not connected")?;
-        (b.client.clone(), b.base.clone(), b.client_id.clone())
+        let bridge = guard.as_ref().ok_or("AHP not connected")?;
+        (
+            bridge.client.clone(),
+            bridge.base.clone(),
+            bridge.client_id.clone(),
+            AHP_TOKEN.lock().unwrap().clone().ok_or("no AHP token")?,
+        )
     };
     let id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(1);
-    let body = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-    let resp = client.post(format!("{base}/rpc"))
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(1);
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": method, "params": params
+    });
+    let resp = client
+        .post(format!("{base}/rpc"))
         .query(&[("client", client_id.as_str())])
+        .bearer_auth(&token)
         .json(&body)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("AHP rpc failed: {e}"))?
         .error_for_status()
         .map_err(|e| format!("AHP rpc HTTP: {e}"))?;
-    let msg: Value = resp.json().await
+    let msg: Value = resp
+        .json()
+        .await
         .map_err(|e| format!("AHP rpc decode: {e}"))?;
     if let Some(err) = msg.get("error") {
-        return Err(err.get("message").and_then(|m| m.as_str())
-            .unwrap_or("AHP error").to_string());
+        return Err(err
+            .get("message")
+            .and_then(|message| message.as_str())
+            .unwrap_or("AHP error")
+            .to_string());
     }
     Ok(msg.get("result").cloned().unwrap_or(Value::Null))
 }
@@ -347,81 +493,147 @@ async fn halter_ahp_rpc(method: String, params: Value) -> Result<Value, String> 
 /// 经 Rust 桥发送 AHP 通知（dispatchAction / unsubscribe，无响应）。
 #[tauri::command]
 async fn halter_ahp_notify(method: String, params: Value) -> Result<(), String> {
-    let (client, base, client_id) = {
+    let (client, base, client_id, token) = {
         let guard = AHP_BRIDGE.lock().unwrap();
-        let b = guard.as_ref().ok_or("AHP not connected")?;
-        (b.client.clone(), b.base.clone(), b.client_id.clone())
+        let bridge = guard.as_ref().ok_or("AHP not connected")?;
+        (
+            bridge.client.clone(),
+            bridge.base.clone(),
+            bridge.client_id.clone(),
+            AHP_TOKEN.lock().unwrap().clone().ok_or("no AHP token")?,
+        )
     };
     let body = serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params });
-    let resp = client.post(format!("{base}/rpc"))
+    let resp = client
+        .post(format!("{base}/rpc"))
         .query(&[("client", client_id.as_str())])
+        .bearer_auth(&token)
         .json(&body)
-        .send().await
+        .send()
+        .await
         .map_err(|e| format!("AHP notify failed: {e}"))?;
     let status = resp.status();
-    if status.is_success() || status == 204 {
+    if status.is_success() || status == reqwest::StatusCode::NO_CONTENT {
         Ok(())
     } else {
         Err(format!("AHP notify HTTP {status}"))
     }
 }
 
-fn port_in_use(port: u16) -> bool {
-    TcpStream::connect(("127.0.0.1", port)).is_ok()
-}
-
-/// 确保本机有一个 `halter ahp serve` 在跑：
-/// 1) 已托管 -> 直接返回端口；
-/// 2) 7433..=7439 有服务在监听 -> 视为外部已启动，直接连；
-/// 3) 否则 spawn sidecar 并等待端口就绪。
+/// 确保本机有一个可认证的 `halter ahp serve` 在跑：
+/// 1) 已托管 -> 校验进程与 token；
+/// 2) 7433..=7439 只采用健康检查和 token 均匹配的外部 halter host；
+/// 3) 否则 spawn sidecar 并等待健康与认证检查通过。
 #[tauri::command]
 async fn halter_ahp_ensure() -> Result<Value, String> {
-    if let Some(port) = *AHP_PORT.lock().unwrap() {
-        if port_in_use(port) {
-            return Ok(serde_json::json!({ "port": port, "started": false, "managed": true }));
+    let _guard = AHP_ENSURE_LOCK.lock().await;
+
+    let managed_port = *AHP_PORT.lock().unwrap();
+    if let Some(port) = managed_port {
+        if port_open(port).await {
+            let token = read_ahp_token().ok();
+            let authenticated = match token {
+                Some(ref token) => ahp_token_valid(&format!("http://127.0.0.1:{port}"), token).await,
+                None => false,
+            };
+            if authenticated {
+                if let Some(token) = token {
+                    *AHP_TOKEN.lock().unwrap() = Some(token);
+                }
+                return Ok(serde_json::json!({ "port": port, "started": false, "managed": true }));
+            }
         }
+        let _ = halter_ahp_stop().await;
     }
+
     for port in 7433..=7439u16 {
-        if port_in_use(port) {
-            // 外部已启动的 host（用户手动 halter ahp serve）
-            *AHP_PORT.lock().unwrap() = Some(port);
-            return Ok(serde_json::json!({ "port": port, "started": false, "managed": false }));
+        if !port_open(port).await {
+            continue;
         }
+        let base = format!("http://127.0.0.1:{port}");
+        if ahp_health(&base).await.is_err() {
+            continue;
+        }
+        let Ok(token) = read_ahp_token() else { continue };
+        if !ahp_token_valid(&base, &token).await {
+            continue;
+        }
+        *AHP_PORT.lock().unwrap() = Some(port);
+        *AHP_TOKEN.lock().unwrap() = Some(token);
+        return Ok(serde_json::json!({ "port": port, "started": false, "managed": false }));
     }
-    let port: u16 = 7433;
+
+    // The synchronous probe is intentionally run off the async runtime below.
+    let port = {
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            (7433..=7439u16).find(|port| !TcpStream::connect(("127.0.0.1", *port)).is_ok())
+        })
+        .await
+        .map_err(|e| format!("AHP port probe failed: {e}"))?;
+        result.ok_or("no available AHP port in 7433..=7439")?
+    };
+
+    let token_path = ahp_token_path();
+    if let Some(parent) = token_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create AHP config dir: {e}"))?;
+    }
+    let _ = std::fs::remove_file(&token_path);
     let program = resolve_halter();
+    let port_text = port.to_string();
+    let token_path_text = token_path.to_string_lossy().into_owned();
     let child = Command::new(&program)
-        .args(["ahp", "serve", "--host", "127.0.0.1", "--port", &port.to_string()])
+        .args([
+            "ahp",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port_text,
+            "--token-file",
+            &token_path_text,
+        ])
         .env("HALTER_UI", "1")
         .env("NO_COLOR", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("failed to spawn halter ahp serve `{program}`: {e}"))?;
     *AHP_CHILD.lock().unwrap() = Some(child);
     *AHP_PORT.lock().unwrap() = Some(port);
-    // 等待端口就绪（最多 ~3s）
+
     for _ in 0..30 {
-        if port_in_use(port) {
-            return Ok(serde_json::json!({ "port": port, "started": true, "managed": true }));
+        if !port_open(port).await {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        let base = format!("http://127.0.0.1:{port}");
+        if ahp_health(&base).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        if let Ok(token) = read_ahp_token() {
+            if ahp_token_valid(&base, &token).await {
+                *AHP_TOKEN.lock().unwrap() = Some(token);
+                return Ok(serde_json::json!({ "port": port, "started": true, "managed": true }));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err("halter ahp serve did not become ready within 3s".into())
+    let _ = halter_ahp_stop().await;
+    Err("halter ahp serve did not become ready and authenticated within 3s".into())
 }
 
-/// 停止托管的 AHP host（App 退出或用户手动停止）。
+/// 停止托管的 AHP host，并释放桌面端桥接资源。
 #[tauri::command]
 async fn halter_ahp_stop() -> Result<Value, String> {
-    if let Some(bridge) = AHP_BRIDGE.lock().unwrap().take() {
-        if let Some(task) = bridge.sse_task.lock().unwrap().take() {
-            task.abort();
-        }
-    }
+    abort_ahp_bridge(AHP_BRIDGE.lock().unwrap().take());
     let mut guard = AHP_CHILD.lock().unwrap();
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
         let _ = child.wait();
     }
     *AHP_PORT.lock().unwrap() = None;
+    *AHP_TOKEN.lock().unwrap() = None;
     Ok(serde_json::json!({ "stopped": true }))
 }
 
@@ -436,6 +648,7 @@ async fn halter_dispatch_run(message: String, project: String, mode: String) -> 
         "--json",
         "--mode", mode,
         "--project", &project,
+        "--",
         &message,
     ]))
     .await
@@ -476,7 +689,7 @@ async fn halter_sync(apply: bool, layers: Vec<String>) -> Result<SidecarOutput, 
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             halter_version,
             halter_scan,
@@ -495,6 +708,14 @@ fn main() {
             halter_sessions_context,
             halter_sync,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running halter desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building halter desktop");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            tauri::async_runtime::block_on(async {
+                let _ = halter_ahp_stop().await;
+            });
+        }
+    });
 }

@@ -2,30 +2,23 @@
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 import tomlkit
 
+from .io_utils import atomic_write_json, atomic_write_text, load_json_object
 from .mcp_manifest import McpSpec
 from .registry import expand
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_json(path, data)
 
 
 def _load_json_dict(path: Path) -> dict:
-    try:
-        with path.open("rb") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    # Invalid JSON must abort the read-modify-write; returning {} here would
+    # cause callers to reconstruct and replace the user's entire config.
+    return load_json_object(path)
 
 
 def _canonical_to_common(spec: McpSpec) -> dict:
@@ -136,7 +129,7 @@ def write_codex(specs: list[McpSpec]) -> list[str]:
                 env[k] = v
             tbl["env"] = env
         doc.setdefault("mcp_servers", {})[s.name] = tbl
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    atomic_write_text(path, tomlkit.dumps(doc))
     return [f"codex: 写入 {', '.join(s.name for s in specs)}"]
 
 

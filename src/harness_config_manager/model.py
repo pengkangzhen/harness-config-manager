@@ -15,17 +15,31 @@ SENSITIVE_KEYS = {
     "x-api-key",
     "api_key",
     "apikey",
+    "access_key_id",
+    "secret_access_key",
+    "session_token",
     "token",
     "secret",
     "password",
 }
 
 
+def is_sensitive_key(key: str) -> bool:
+    """Match credential names without redacting names like max_tokens."""
+    normalized = key.strip().lower()
+    return any(
+        normalized == sensitive
+        or normalized.endswith("_" + sensitive)
+        or normalized.endswith("-" + sensitive)
+        for sensitive in SENSITIVE_KEYS
+    )
+
+
 def redact(value: object) -> object:
     """递归脱敏：疑似密钥的值替换为 <REDACTED>。"""
     if isinstance(value, dict):
         return {
-            k: ("<REDACTED>" if any(s in k.lower() for s in SENSITIVE_KEYS) else redact(v))
+            k: ("<REDACTED>" if is_sensitive_key(str(k)) else redact(v))
             for k, v in value.items()
         }
     if isinstance(value, list):

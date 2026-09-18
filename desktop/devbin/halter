@@ -1,5 +1,18 @@
 #!/bin/sh
-# Dev sidecar: run halter from this repo's venv so `tauri dev` uses local code,
-# regardless of which halter version is installed globally.
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-exec "$REPO/.venv/bin/halter" "$@"
+# Development sidecar: run halter from this repository's virtual environment.
+set -eu
+script=$0
+while [ -L "$script" ]; do
+    link=$(readlink "$script")
+    case $link in
+        /*) script=$link ;;
+        *) script=$(dirname "$script")/$link ;;
+    esac
+done
+REPO=$(CDPATH= cd -- "$(dirname -- "$script")/../.." && pwd)
+BIN="$REPO/.venv/bin/halter"
+if [ ! -x "$BIN" ]; then
+    echo "halter dev wrapper: missing executable: $BIN (run uv sync)" >&2
+    exit 127
+fi
+exec "$BIN" "$@"

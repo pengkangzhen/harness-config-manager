@@ -20,6 +20,7 @@ from pathlib import Path
 
 import tomlkit
 
+from .io_utils import atomic_write_json, atomic_write_text, load_json_object, version_key
 from .registry import expand
 
 PLUGINS_MANIFEST = lambda: expand(".config/halter/plugins.toml")  # noqa: E731
@@ -71,7 +72,7 @@ def save_plugin_manifest(specs: list[PluginSpec]) -> None:
             tbl["targets"] = s.targets
         aot.append(tbl)
     doc["plugin"] = aot
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    atomic_write_text(path, tomlkit.dumps(doc))
 
 
 def auto_plugin_source() -> str:
@@ -127,10 +128,7 @@ def _installed_ids(tool: str) -> set[str]:
         path = expand(".claude/plugins/installed_plugins.json")
     else:
         path = expand(".zcode/cli/plugins/installed_plugins.json")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return set()
+    data = load_json_object(path)
     plugins_field = data.get("plugins")
     if isinstance(plugins_field, dict):
         return set(plugins_field.keys())
@@ -140,10 +138,13 @@ def _installed_ids(tool: str) -> set[str]:
 
 
 def _install_claude(spec: PluginSpec) -> str:
-    proc = subprocess.run(
-        ["claude", "plugin", "install", spec.plugin_id, "-s", "user", "-y"],
-        capture_output=True, text=True, timeout=300,
-    )
+    try:
+        proc = subprocess.run(
+            ["claude", "plugin", "install", spec.plugin_id, "-s", "user", "-y"],
+            capture_output=True, text=True, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"claude: 安装 {spec.plugin_id} 失败: {exc}"
     if proc.returncode != 0:
         return f"claude: 安装 {spec.plugin_id} 失败: {(proc.stderr or proc.stdout).strip()[:200]}"
     return f"claude: 已安装 {spec.plugin_id}"
@@ -156,19 +157,23 @@ def _install_zcode(spec: PluginSpec) -> str:
     if not src_root.is_dir():
         return (f"zcode: 跳过 {spec.plugin_id}（claude 侧缓存不存在，"
                 f"请先在 claude 目标安装或手动处理）")
-    versions = sorted(d.name for d in src_root.iterdir() if d.is_dir())
-    version = spec.version if spec.version in versions else (versions[-1] if versions else "0.0.0")
+    versions = sorted(
+        (item.name for item in src_root.iterdir() if item.is_dir()),
+        key=version_key,
+    )
+    if not versions:
+        return f"zcode: 跳过 {spec.plugin_id}（claude 侧缓存没有可用版本目录）"
+    version = spec.version if spec.version in versions else versions[-1]
     src = src_root / version
     dst = expand(f".zcode/cli/plugins/cache/{marketplace}/{name}/{version}")
     if not dst.exists():
         shutil.copytree(src, dst)
 
     installed_path = expand(".zcode/cli/plugins/installed_plugins.json")
-    try:
-        data = json.loads(installed_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    data = load_json_object(installed_path)
+    if not data:
         data = {"version": 1, "plugins": []}
-    ids = {p.get("id") for p in data.get("plugins", [])}
+    ids = {p.get("id") for p in data.get("plugins", []) if isinstance(p, dict)}
     if spec.plugin_id not in ids:
         now = datetime.now(timezone.utc).isoformat()
         data.setdefault("plugins", []).append({
@@ -182,16 +187,12 @@ def _install_zcode(spec: PluginSpec) -> str:
             "scope": "user",
             "source": f"./plugins/{name}",
         })
-        installed_path.parent.mkdir(parents=True, exist_ok=True)
-        installed_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(installed_path, data)
 
     cfg_path = expand(".zcode/cli/config.json")
-    try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        cfg = {}
+    cfg = load_json_object(cfg_path)
     cfg.setdefault("plugins", {}).setdefault("enabledPlugins", {})[spec.plugin_id] = True
-    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(cfg_path, cfg)
     return f"zcode: 已镜像 {spec.plugin_id}@{version}"
 
 
@@ -201,15 +202,23 @@ def _install_codex(spec: PluginSpec) -> str:
         return f"codex: 跳过（{path} 不存在）"
     doc = tomlkit.parse(path.read_text(encoding="utf-8"))
     doc.setdefault("plugins", {})[spec.plugin_id] = {"enabled": True}  # 含 @ 的键序列化时自动加引号
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    atomic_write_text(path, tomlkit.dumps(doc))
     return f"codex: 已启用 {spec.plugin_id}"
 
 
 def _install_vscode(spec: PluginSpec) -> str:
-    proc = subprocess.run(
-        ["code", "--install-extension", spec.plugin_id],
-        capture_output=True, text=True, timeout=300,
-    )
+    executable = shutil.which("code")
+    if executable is None:
+        return f"vscode: 安装 {spec.plugin_id} 失败：未找到 code 命令"
+    command = [executable, "--install-extension", spec.plugin_id]
+    # Windows VS Code is normally a code.cmd shim, which needs cmd.exe when
+    # CreateProcess is invoked without a shell.
+    if executable.lower().endswith((".cmd", ".bat")):
+        command = ["cmd", "/c", *command]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"vscode: 安装 {spec.plugin_id} 失败: {exc}"
     if proc.returncode != 0:
         return f"vscode: 安装 {spec.plugin_id} 失败: {(proc.stderr or proc.stdout).strip()[:200]}"
     return f"vscode: 已安装 {spec.plugin_id}"

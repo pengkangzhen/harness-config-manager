@@ -104,7 +104,7 @@ initialize（版本协商 + agents 目录快照）
 
 实现要点：channel URI 路由（`ahp-root://` / `ahp-session:/<uuid>` / `ahp-chat:/<uuid>`）、服务端单调 `serverSeq` 广播、客户端 action `origin` 回显、`root/sessionAdded` 目录通知、模型路由（`[models]` 配置 + `message.model` 覆盖）。任务执行复用 runner 层的进程组管理与无头 argv 组装。
 
-第五个 backend 是 `provider="halter"`：Halter 自己拥有 model/tool 决策循环，并持久化脱敏后的 session 与模型/工具历史。当前暴露被限制在 workspace 内的只读/项目记忆工具（`read_file`、`list_dir`、`search_files`、`git_status`、`git_diff`、`list_project_sessions`、`read_project_session`）、需要逐 diff 审批且可按事务回滚的 `apply_patch`、固定命令且需审批的 `run_tests`，以及把 Claude/Codex/ZCode/OpenCode 并发委派到一次性 git clone（含 tracked+untracked 快照）的 `delegate_harness`，支持 OpenAI / Zhipu 兼容模型流式路由，广播结构化 `halter/toolCall` / `halter/toolResult` 事件，并把每个模型响应与工具调用写入私有 JSONL 审计日志；外部 runner 的调用与输出同样留档。详见 [docs/native-agent.md](docs/native-agent.md)。
+第五个 backend 是 `provider="halter"`：Halter 自己拥有 model/tool 决策循环，并持久化脱敏后的 session 与模型/工具历史。当前提供可持久展示的结构化计划工具（`update_plan`）以及被限制在 workspace 内的只读/项目记忆工具（`read_file`、`list_dir`、`search_files`、`git_status`、`git_diff`、`list_project_sessions`、`read_project_session`）、需要逐 diff 审批且可按事务回滚的 `apply_patch`、固定命令且需审批的 `run_tests`，以及把 Claude/Codex/ZCode/OpenCode 并发委派到一次性 git clone（含 tracked+untracked 快照）并 side-by-side 对比 diff的 `delegate_harness`，支持 OpenAI / Zhipu 兼容模型流式路由，广播结构化 `halter/toolCall` / `halter/toolResult` 事件，并把每个模型响应与工具调用写入私有 JSONL 审计日志；外部 runner 的调用与输出同样留档。详见 [docs/native-agent.md](docs/native-agent.md)。
 
 ```bash
 uv run pytest tests/test_agent_runtime.py tests/test_ahp_host.py   # 原生 runtime + 协议级端到端

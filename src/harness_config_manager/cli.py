@@ -368,6 +368,11 @@ def model_catalog(cfg) -> dict[str, list[str]]:
 def ahp_serve(
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址"),
     port: int = typer.Option(7433, "--port", "-p", help="监听端口"),
+    token_file: Path | None = typer.Option(
+        None,
+        "--token-file",
+        help="AHP bearer token 输出文件（默认 ~/.config/halter/ahp-token，权限 0600）",
+    ),
 ) -> None:
     """启动 halter AHP host（WebSocket JSON-RPC，协议 0.9.0）。
 
@@ -379,7 +384,7 @@ def ahp_serve(
     from .ahp_host import serve as run_ahp_serve
 
     try:
-        asyncio.run(run_ahp_serve(host, port))
+        asyncio.run(run_ahp_serve(host, port, token_file=token_file))
     except KeyboardInterrupt:
         console.print("[dim]AHP host 已停止[/dim]")
 

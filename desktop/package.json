@@ -5,9 +5,9 @@
   "description": "Harness Config Manager desktop app (Tauri + halter sidecar)",
   "scripts": {
     "tauri": "tauri",
-    "dev": "tauri dev",
+    "dev": "npm run build:sidecar && tauri dev",
     "build": "npm run build:sidecar && tauri build",
-    "build:sidecar": "cd .. && ./scripts/build_sidecar.sh"
+    "build:sidecar": "cd .. && sh scripts/build_sidecar.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"

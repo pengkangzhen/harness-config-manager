@@ -13,6 +13,7 @@ import pytest
 from harness_config_manager.runner import (
     HarnessRunError,
     dispatch,
+    read_output_tail,
     list_tasks,
     load_task,
     parse_mentions,
@@ -308,3 +309,36 @@ def test_model_catalog_config_override(fake_home: Path) -> None:
     cat2 = model_catalog(cfg2)
     assert cat2["claude"] == ["glm-5", "glm-4.7"]
     assert "glm-4.7" in cat2["codex"]
+
+
+def test_task_ids_reject_traversal(fake_home: Path) -> None:
+    from harness_config_manager.runner import task_dir
+
+    for task_id in ("..", ".", "../outside", "a/b", "/tmp", ""):
+        with pytest.raises(ValueError):
+            task_dir(task_id)
+        with pytest.raises(ValueError):
+            load_task(task_id)
+        with pytest.raises(ValueError):
+            read_output_tail(task_id, 10)
+
+
+def test_task_metadata_redacts_sensitive_prompt(fake_harnesses, fake_home: Path, tmp_path: Path) -> None:
+    prompt = "use api_key=super-secret-value-123 please"
+    results = run_foreground([("claude", None)], prompt, tmp_path)
+    data = json.loads((fake_home / ".config/halter/tasks" / results[0].task_id / "task.json").read_text())
+    assert "super-secret-value-123" not in json.dumps(data)
+    assert "<REDACTED>" in data["prompt"]
+
+
+def test_config_corruption_is_not_replaced_by_defaults(fake_home: Path) -> None:
+    from harness_config_manager.config import HalterConfig, load_config, save_config
+
+    path = fake_home / ".config/halter/config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text("# user note\nbroken = [\n", encoding="utf-8")
+    with pytest.raises(Exception):
+        load_config(path)
+    with pytest.raises(Exception):
+        save_config(HalterConfig(models={"claude": "sonnet"}), path)
+    assert path.read_text(encoding="utf-8") == "# user note\nbroken = [\n"

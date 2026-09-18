@@ -49,11 +49,14 @@ function relTime(iso) {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+function errorDetail(err) {
+  if (typeof err === "string") return err;
+  return (err && (err.message || (err.toString && err.toString()))) ||
+    JSON.stringify(err, null, 2);
+}
+
 function showError(box, err) {
-  const detail = typeof err === "string"
-    ? err
-    : (err && (err.message || err.toString && err.toString())) || JSON.stringify(err, null, 2);
-  box.textContent = detail;
+  box.textContent = errorDetail(err);
   box.classList.remove("hidden");
 }
 
@@ -107,9 +110,13 @@ const state = {
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach((b) => {
+      b.classList.remove("active");
+      b.removeAttribute("aria-current");
+    });
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     btn.classList.add("active");
+    btn.setAttribute("aria-current", "page");
     $(`view-${btn.dataset.view}`).classList.add("active");
     if (btn.dataset.view === "overview") loadOverview();
     if (btn.dataset.view === "matrix") loadMatrix();
@@ -446,6 +453,11 @@ $("btn-refresh-matrix").addEventListener("click", () => loadMatrix(true));
 
 /* ---------------- sessions ---------------- */
 
+let sessionsRequestId = 0;
+let projectsRequestId = 0;
+let sessionDetailRequestId = 0;
+let searchRequestId = 0;
+
 function currentProject() {
   // 维度面板接管项目选择后，这里仅作为 CLI --project 标记参数
   return ".";
@@ -465,16 +477,19 @@ async function loadSessionsView() {
 /* ---------- dimension 3: project picker ---------- */
 
 async function loadSessionProjects() {
+  const requestId = ++projectsRequestId;
   state.projectsError = null;
   let data;
   try {
     data = await invoke("halter_sessions_projects", { project: currentProject() });
   } catch (err) {
-    state.projectsError = typeof err === "string" ? err : JSON.stringify(err);
+    if (requestId !== projectsRequestId) return;
+    state.projectsError = errorDetail(err);
     renderProjectInput();
     if (projectDropdownOpen) renderProjectDropdownList($("project-input").value);
     return;
   }
+  if (requestId !== projectsRequestId) return;
   state.projects = data.projects || [];
   renderProjectInput();
   if (projectDropdownOpen) renderProjectDropdownList($("project-input").value);
@@ -641,6 +656,7 @@ document.addEventListener("click", (e) => {
 });
 
 async function loadSessions() {
+  const requestId = ++sessionsRequestId;
   const list = $("sessions-list");
   list.replaceChildren(el("div", "loading", "读取会话…"));
   const allProjects = state.projectFilter === null;
@@ -652,12 +668,14 @@ async function loadSessions() {
       allProjects,
     });
   } catch (err) {
+    if (requestId !== sessionsRequestId) return;
     list.replaceChildren();
     const box = el("div", "error-box");
-    box.textContent = typeof err === "string" ? err : JSON.stringify(err);
+    box.textContent = errorDetail(err);
     list.append(box);
     return;
   }
+  if (requestId !== sessionsRequestId) return;
   state.sessionsLoaded = true;
   state.sessions = data.sessions || [];
   renderToolFilter();
@@ -825,7 +843,9 @@ function dateLabel(key) {
 function setViewMode(mode) {
   state.viewMode = mode;
   $("btn-view-list").classList.toggle("active", mode === "list");
+  $("btn-view-list").setAttribute("aria-pressed", String(mode === "list"));
   $("btn-view-timeline").classList.toggle("active", mode === "timeline");
+  $("btn-view-timeline").setAttribute("aria-pressed", String(mode === "timeline"));
   renderSessions(state.sessions);
 }
 
@@ -835,6 +855,7 @@ $("btn-view-timeline").addEventListener("click", () => setViewMode("timeline"));
 /* ---------- session detail ---------- */
 
 async function selectSession(session, itemEl) {
+  const requestId = ++sessionDetailRequestId;
   document.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
   if (itemEl) itemEl.classList.add("selected");
 
@@ -851,13 +872,14 @@ async function selectSession(session, itemEl) {
       tail: 120,
     });
   } catch (err) {
+    if (requestId !== sessionDetailRequestId) return;
     detail.replaceChildren();
     const box = el("div", "error-box");
-    box.textContent = typeof err === "string" ? err : JSON.stringify(err);
+    box.textContent = errorDetail(err);
     detail.append(box);
     return;
   }
-
+  if (requestId !== sessionDetailRequestId) return;
   renderSessionDetail(data);
 }
 
@@ -917,7 +939,7 @@ function renderSessionDetail(data) {
       block.append(pre);
     } catch (err) {
       const box = el("div", "error-box");
-      box.textContent = typeof err === "string" ? err : JSON.stringify(err);
+      box.textContent = errorDetail(err);
       detail.append(box);
     } finally {
       handoffBtn.disabled = false;
@@ -959,6 +981,7 @@ $("btn-refresh-sessions").addEventListener("click", loadSessionsView);
 /* ---------- session search (follows project + harness filters) ---------- */
 
 async function runSearch() {
+  const requestId = ++searchRequestId;
   const query = $("search-input").value.trim();
   if (!query) return;
   const list = $("sessions-list");
@@ -973,12 +996,14 @@ async function runSearch() {
       allProjects,
     });
   } catch (err) {
+    if (requestId !== searchRequestId) return;
     list.replaceChildren();
     const box = el("div", "error-box");
-    box.textContent = typeof err === "string" ? err : JSON.stringify(err);
+    box.textContent = errorDetail(err);
     list.append(box);
     return;
   }
+  if (requestId !== searchRequestId) return;
   const allHits = data.hits || [];
   const hits = applyToolFilter(allHits);
   updateSessionCount(hits.length, allHits.length, `搜索“${query}”`);
@@ -1119,38 +1144,6 @@ function onModelSelect(model) {
   updateDispatchHint();
 }
 
-function renderDispatchHarnesses() {
-  const box = $("dispatch-harnesses");
-  box.replaceChildren();
-  const detected = new Set();
-  if (state.scanCache) {
-    for (const t of state.scanCache.tools_detected || []) detected.add(t.tool);
-  }
-  // AHP 目录优先（含 per-agent models 与可用性）
-  const ahpAgents = new Map();
-  if (state.ahp && state.ahp.ready) {
-    for (const a of state.ahp.agents) ahpAgents.set(a.provider, a);
-  }
-  for (const spec of DISPATCH_RUNNERS) {
-    const ahpAgent = ahpAgents.get(spec.key);
-    const available = ahpAgent
-      ? !(ahpAgent._meta && ahpAgent._meta["halter:available"] === false)
-      : detected.has(spec.key);
-    const chip = el("span", "dispatch-harness-chip" + (available ? "" : " off"));
-    const dot = el("span", "dispatch-harness-dot");
-    dot.style.background = toolColor(spec.key);
-    chip.append(dot, el("span", "", spec.label));
-    const ahpModel = ahpAgent && ahpAgent.models && ahpAgent.models[0] && ahpAgent.models[0].id;
-    const model = (ahpModel && ahpModel !== "default") || state.dispatchModels[spec.key];
-    if (model) chip.append(el("span", "dispatch-harness-model", model));
-    chip.title = detected.has(spec.key)
-      ? `@${spec.key} 可用${model ? `（默认模型 ${model}）` : ""}；点击插入提及，可加 /model 指定模型`
-      : `@${spec.key} 未检测到（点击仍会尝试派发）`;
-    chip.addEventListener("click", () => insertDispatchMention(spec.key));
-    box.append(chip);
-  }
-}
-
 async function loadDispatchProjects() {
   const select = $("dispatch-project");
   try {
@@ -1174,18 +1167,6 @@ async function loadDispatchProjects() {
   select.value = prev && [...select.options].some((o) => o.value === prev)
     ? prev
     : (busiest ? busiest.path : "");
-}
-
-function insertDispatchMention(key) {
-  const input = $("dispatch-input");
-  const at = input.value.slice(0, input.selectionStart);
-  const rest = input.value.slice(input.selectionStart);
-  const glue = at && !/\s$/.test(at) ? " " : "";
-  input.value = `${at}${glue}@${key} ${rest}`;
-  input.focus();
-  const pos = (at + glue + "@" + key + " ").length;
-  input.setSelectionRange(pos, pos);
-  updateDispatchHint();
 }
 
 function dispatchTargets() {
@@ -1237,26 +1218,29 @@ function bindDispatchEvents() {
 
 /* ---------- AHP 直连客户端 ---------- */
 
-const AHP_VERSION = "0.9.0";
-
-function ahpState() {
-  return state.ahp;
-}
+let ahpConnecting = null;
 
 async function ensureAhp() {
   if (state.ahp && state.ahp.ready) return state.ahp;
-  const init = await invoke("halter_ahp_connect");
-  const fresh = {
-    ready: true,
-    agents: [],
-    sessions: [],
-    cards: new Map(),       // chatUri -> active output card
-    nativeChats: new Map(), // `${provider}:${project}` -> {sessionUri, chatUri}
-  };
-  state.ahp = fresh;
-  // Rust 桥把 server->client 消息以 ahp-message 事件转发
-  await tauriListen("ahp-message", (ev) => handleAhpData(fresh, ev.payload));
-  const root = ((init.init || {}).snapshots || []).find((x) => x.resource === "ahp-root://");
+  if (ahpConnecting) return ahpConnecting;
+  ahpConnecting = (async () => {
+    if (state.ahp && state.ahp.stop) {
+      try { state.ahp.stop(); } catch { /* listener already gone */ }
+      state.ahp = null;
+    }
+    const init = await invoke("halter_ahp_connect");
+    const fresh = {
+      ready: false,
+      agents: [],
+      sessions: [],
+      cards: new Map(),       // chatUri -> active output card
+      nativeChats: new Map(), // `${provider}:${project}` -> {sessionUri, chatUri}
+      stop: null,
+    };
+    // Rust 桥把 server->client 消息以 ahp-message 事件转发
+    fresh.stop = await tauriListen("ahp-message", (ev) => handleAhpData(fresh, ev.payload));
+    state.ahp = fresh;
+    const root = ((init.init || {}).snapshots || []).find((x) => x.resource === "ahp-root://");
   fresh.agents = (root && root.state && root.state.agents) || [];
   try {
     const listed = await ahpRequest(fresh, "listSessions", {});
@@ -1264,7 +1248,14 @@ async function ensureAhp() {
   } catch {
     fresh.sessions = [];
   }
+  fresh.ready = true;
   return fresh;
+  })();
+  try {
+    return await ahpConnecting;
+  } finally {
+    ahpConnecting = null;
+  }
 }
 
 function ahpRequest(st, method, params) {
@@ -1279,6 +1270,101 @@ function handleAhpData(st, data) {
   let msg;
   try { msg = JSON.parse(data); } catch { return; }
   if (msg.method === "action") ahpApplyAction(st, msg.params);
+}
+
+function updateApprovalHistory(entry, record) {
+  if (!entry.approvalHistory) entry.approvalHistory = [];
+  const existing = entry.approvalHistory.find((item) => item.id === record.id);
+  if (existing) Object.assign(existing, record);
+  else entry.approvalHistory.push(record);
+  if (!entry.approvalPanel) {
+    entry.approvalPanel = el("section", "dispatch-approval-history");
+    entry.root.insertBefore(entry.approvalPanel, entry.output);
+  }
+  entry.approvalPanel.replaceChildren(
+    el("div", "dispatch-approval-history-title", `审批历史（${entry.approvalHistory.length}）`)
+  );
+  const list = el("div", "dispatch-approval-history-list");
+  for (const item of entry.approvalHistory) {
+    const row = el("div", `dispatch-approval-history-item ${item.status || "pending"}`);
+    const marker = el("span", "dispatch-approval-history-marker", {
+      pending: "…", approved: "✓", denied: "×",
+    }[item.status] || "…");
+    const body = el("div", "dispatch-approval-history-body");
+    body.append(el("div", "dispatch-approval-history-tool", item.tool || "-"));
+    if (item.summary) body.append(el("div", "dispatch-approval-history-summary", item.summary));
+    if (item.decidedAt) body.append(el("div", "dispatch-approval-history-time", new Date(item.decidedAt).toLocaleString()));
+    row.append(marker, body);
+    list.append(row);
+  }
+  entry.approvalPanel.append(list);
+}
+
+function renderDispatchPlan(entry, plan) {
+  if (!entry.plan) return;
+  entry.plan.replaceChildren();
+  if (!plan || !(plan.steps || []).length) {
+    entry.plan.classList.add("empty");
+    entry.plan.append(el("div", "dispatch-plan-empty", "尚无结构化计划"));
+    return;
+  }
+  entry.plan.classList.remove("empty");
+  if (plan.note) entry.plan.append(el("div", "dispatch-plan-note", plan.note));
+  const list = el("div", "dispatch-plan-list");
+  for (const step of plan.steps) {
+    const item = el("div", `dispatch-plan-item ${step.status || "pending"}`);
+    item.append(el("span", "dispatch-plan-marker", {
+      pending: "○", in_progress: "◐", done: "●", blocked: "✕",
+    }[step.status] || "○"));
+    const body = el("div", "dispatch-plan-body");
+    body.append(el("div", "dispatch-plan-title", step.title || "-"));
+    if (step.detail) body.append(el("div", "dispatch-plan-detail", step.detail));
+    item.append(body);
+    list.append(item);
+  }
+  entry.plan.append(list);
+}
+
+function updateDelegateComparison(entry, part, result) {
+  const args = part.arguments || {};
+  const payload = part.result || {};
+  const provider = payload.provider || args.provider || "delegate";
+  const id = part.id || "";
+  let panel = entry.compareGrid?.querySelector(`[data-compare-id="${CSS.escape(id)}"]`);
+  if (!entry.compareGrid) {
+    entry.compare = el("section", "dispatch-compare");
+    const title = el("div", "dispatch-compare-title", "多 Harness 结果对比");
+    entry.compareGrid = el("div", "dispatch-compare-grid");
+    entry.compare.append(title, entry.compareGrid);
+    entry.root.insertBefore(entry.compare, entry.output);
+  }
+  if (!panel) {
+    panel = el("article", "dispatch-compare-panel running");
+    panel.dataset.compareId = id;
+    entry.compareGrid.append(panel);
+  }
+  panel.className = `dispatch-compare-panel ${result ? (part.ok ? "ok" : "err") : "running"}`;
+  panel.replaceChildren();
+  const head = el("div", "dispatch-compare-head");
+  head.append(el("span", "dispatch-compare-provider", provider));
+  head.append(el("span", "dispatch-compare-state", result
+    ? (part.ok ? `exit ${payload.exitCode ?? "-"}` : "失败")
+    : "运行中"));
+  panel.append(head);
+  const diff = String(payload.diff || "").trim();
+  const body = el("pre", "dispatch-compare-diff", diff || (result
+    ? "（该子代理没有产生 diff）"
+    : "（等待 sandbox 结果…）"));
+  panel.append(body);
+  if (result) {
+    const output = el("pre", "dispatch-compare-output", String(payload.stdout || payload.stderr || "").slice(0, 8000));
+    panel.append(output);
+    const snapshot = payload.snapshot || {};
+    if (snapshot.untrackedCopied || snapshot.untrackedSkipped) {
+      panel.append(el("div", "dispatch-compare-meta",
+        `untracked: ${snapshot.untrackedCopied?.length || 0} copied / ${snapshot.untrackedSkipped?.length || 0} skipped`));
+    }
+  }
 }
 
 function updateDispatchToolEvent(entry, part, result) {
@@ -1300,6 +1386,9 @@ function updateDispatchToolEvent(entry, part, result) {
     ? JSON.stringify(part.result || {}, null, 2).slice(0, 12000)
     : JSON.stringify(part.arguments || {}, null, 2);
   node.append(detail);
+  if (part.name === "delegate_harness") {
+    updateDelegateComparison(entry, part, result);
+  }
   if (result && part.name === "apply_patch" && part.ok && part.result && part.result.transactionId) {
     const transactionId = part.result.transactionId;
     const rollback = el("button", "btn danger dispatch-event-rollback", "回滚此变更");
@@ -1333,8 +1422,16 @@ function ahpApplyAction(st, params) {
     entry.output.scrollTop = entry.output.scrollHeight;
   } else if (a.type === "chat/turnComplete") {
     ahpFinishCard(entry, "done");
+  } else if (a.type === "halter/planChanged") {
+    renderDispatchPlan(entry, a.plan || {});
   } else if (a.type === "halter/approvalRequest") {
     const approval = a.approval || {};
+    updateApprovalHistory(entry, {
+      id: approval.id,
+      tool: approval.tool,
+      summary: approval.summary,
+      status: "pending",
+    });
     const box = el("div", "dispatch-approval");
     const title = el("div", "dispatch-approval-title",
       `等待写入审批：${approval.summary || approval.tool || "apply_patch"}`);
@@ -1373,6 +1470,11 @@ function ahpApplyAction(st, params) {
     entry.root.append(box);
     box.scrollIntoView({ block: "nearest" });
   } else if (a.type === "halter/approvalResult") {
+    updateApprovalHistory(entry, {
+      id: a.approvalId,
+      status: a.approved ? "approved" : "denied",
+      decidedAt: new Date().toISOString(),
+    });
     entry.root.querySelectorAll(".dispatch-approval").forEach((box) => {
       if (box.dataset.approvalId !== a.approvalId) return;
       const buttons = box.querySelectorAll("button");
@@ -1400,6 +1502,7 @@ function ahpApplyAction(st, params) {
 }
 
 function ahpFinishCard(entry, status) {
+  if (state.ahp) state.ahp.cards.delete(entry.channel);
   entry.status.replaceWith(dispatchStatusBadge(status));
   entry.output.classList.remove("streaming");
   entry.root.classList.add("finished");
@@ -1448,8 +1551,15 @@ async function restoreNativeChat(st, project) {
     const chatUri = state.defaultChat ||
       (state.chats && state.chats[0] && state.chats[0].resource);
     if (!chatUri) return undefined;
-    await ahpRequest(st, "subscribe", { channel: chatUri });
-    return { sessionUri: session.resource, chatUri, restored: true };
+    const chatSubscription = await ahpRequest(st, "subscribe", { channel: chatUri });
+    const chatState = ((chatSubscription.snapshot || {}).state || {});
+    return {
+      sessionUri: session.resource,
+      chatUri,
+      restored: true,
+      currentPlan: chatState.currentPlan || null,
+      approvalHistory: chatState.approvalHistory || [],
+    };
   } catch {
     return undefined;
   }
@@ -1457,8 +1567,7 @@ async function restoreNativeChat(st, project) {
 
 async function dispatchViaAhp(targets, prompt, project, mode) {
   const st = await ensureAhp();
-  const results = [];
-  for (const t of targets) {
+  const outcomes = await Promise.allSettled(targets.map(async (t) => {
     const provider = t.tool;
     const model = t.model || state.dispatchModels[provider] || undefined;
     const writeEnabled = !!($("dispatch-write") && $("dispatch-write").checked);
@@ -1489,6 +1598,8 @@ async function dispatchViaAhp(targets, prompt, project, mode) {
       tool: provider, model, prompt, project, mode: effectiveMode,
     });
     card.channel = chatUri;
+    if (channels.currentPlan) renderDispatchPlan(card, channels.currentPlan);
+    for (const record of channels.approvalHistory || []) updateApprovalHistory(card, record);
     st.cards.set(chatUri, card);
     addAhpCancelButton(card, chatUri);
     results.push(card);
@@ -1507,6 +1618,18 @@ async function dispatchViaAhp(targets, prompt, project, mode) {
         },
       },
     });
+    return card;
+  }));
+  const results = [];
+  const failures = [];
+  outcomes.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") results.push(outcome.value);
+    else failures.push(`@${targets[index].tool}: ${errorDetail(outcome.reason)}`);
+  });
+  if (failures.length) {
+    const error = new Error(`AHP 派发部分失败（不会自动重发已成功的目标）：\n${failures.join("\n")}`);
+    error.anySucceeded = results.length > 0;
+    throw error;
   }
   return results;
 }
@@ -1527,14 +1650,20 @@ function makeDispatchCard({ tool, model, prompt, project, mode }) {
   const meta = el("div", "dispatch-card-meta");
   meta.append(el("span", "", shortenPath(project)));
   meta.append(el("span", "", new Date().toISOString()));
+  const plan = el("div", "dispatch-plan empty");
   const output = el("pre", "dispatch-output", "");
   const events = el("div", "dispatch-events");
-  root.append(head, meta, output, events);
+  root.append(head, meta, plan, output, events);
   list.prepend(root);
-  return { root, output, events, status };
+  return { root, output, events, plan, status };
 }
 
+let dispatchBusy = false;
+
 async function sendDispatch() {
+  if (dispatchBusy) return;
+  dispatchBusy = true;
+
   const errBox = $("dispatch-error");
   errBox.classList.add("hidden");
   const message = $("dispatch-input").value.trim();
@@ -1544,56 +1673,57 @@ async function sendDispatch() {
       ? "未选择执行者：在输入框 @claude，或在上拉选择 Harness"
       : "还需要任务描述";
     errBox.classList.remove("hidden");
+    dispatchBusy = false;
     return;
   }
+
   const project = $("dispatch-project").value || ".";
   const mode = $("dispatch-yolo").checked ? "yolo" : "safe";
   const btn = $("btn-dispatch-send");
   btn.disabled = true;
   btn.textContent = "派发中…";
 
-  // AHP 直连优先：结构化 action 流；host 不可用时回退 sidecar 轮询
   try {
-    await dispatchViaAhp(targets, prompt, project, mode);
-    $("dispatch-input").value = "";
-    $("dispatch-harness-select").value = "";
-    renderDispatchSelectors();
-    updateDispatchHint();
-    return;
-  } catch (ahpErr) {
-    if (targets.some((t) => t.tool === "halter")) {
-      showError(errBox, new Error(
-        "halter 原生 Agent 需要 AHP host：" +
-        (ahpErr && ahpErr.message ? ahpErr.message : String(ahpErr))
-      ));
-      btn.disabled = false;
-      btn.textContent = "⏵ 派发 ⌘↵";
+    let dispatched = false;
+    try {
+      await dispatchViaAhp(targets, prompt, project, mode);
+      dispatched = true;
+    } catch (ahpErr) {
+      if (targets.some((t) => t.tool === "halter") || dispatched || ahpErr?.anySucceeded) {
+        showError(errBox, ahpErr);
+        return;
+      }
+      const dbg = document.createElement("div");
+      dbg.className = "dispatch-mention-hint none";
+      dbg.textContent = "AHP 直连失败已回退: " + errorDetail(ahpErr);
+      $("dispatch-tasks").prepend(dbg);
+    }
+
+    if (dispatched) {
+      $("dispatch-input").value = "";
+      $("dispatch-harness-select").value = "";
+      renderDispatchSelectors();
+      updateDispatchHint();
       return;
     }
-    // 回退：老路径（halter run --detached + tasks show 轮询）；显示 AHP 失败原因
-    const dbg = document.createElement("div");
-    dbg.className = "dispatch-mention-hint none";
-    dbg.textContent = "AHP 直连失败已回退: " + (ahpErr && ahpErr.message ? ahpErr.message : String(ahpErr));
-    $("dispatch-tasks").prepend(dbg);
-  }
 
-  try {
     const data = await invoke("halter_dispatch_run", { message, project, mode });
     $("dispatch-input").value = "";
     $("dispatch-harness-select").value = "";
     renderDispatchSelectors();
     updateDispatchHint();
-    for (const t of data.tasks || []) {
+    for (const task of data.tasks || []) {
       try {
-        addDispatchCard(t);
-        pollDispatchTask(t.task_id);
+        addDispatchCard(task);
+        pollDispatchTask(task.task_id);
       } catch (cardErr) {
-        showError(errBox, "任务卡渲染失败: " + (cardErr && cardErr.message ? cardErr.message : String(cardErr)));
+        showError(errBox, "任务卡渲染失败: " + errorDetail(cardErr));
       }
     }
   } catch (err) {
     showError(errBox, err);
   } finally {
+    dispatchBusy = false;
     btn.disabled = false;
     btn.textContent = "⏵ 派发 ⌘↵";
   }
@@ -1637,7 +1767,14 @@ function addDispatchCard(task) {
 function pollDispatchTask(taskId) {
   const entry = state.dispatchCards.get(taskId);
   if (!entry) return;
+  const deadline = Date.now() + 30 * 60 * 1000;
   const tick = async () => {
+    if (Date.now() > deadline) {
+      const stale = state.dispatchCards.get(taskId);
+      if (stale?.timer) clearInterval(stale.timer);
+      state.dispatchCards.delete(taskId);
+      return;
+    }
     try {
       const t = await invoke("halter_task_show", { taskId, tail: 8000 });
       const card = state.dispatchCards.get(taskId);
@@ -1650,6 +1787,7 @@ function pollDispatchTask(taskId) {
       if (t.status !== "running") {
         clearInterval(card.timer);
         card.timer = null;
+        state.dispatchCards.delete(taskId);
         card.node.classList.add("finished");
       }
     } catch (err) {
@@ -1657,7 +1795,8 @@ function pollDispatchTask(taskId) {
       if (card) {
         clearInterval(card.timer);
         card.timer = null;
-        card.output.textContent = "轮询失败：" + (typeof err === "string" ? err : JSON.stringify(err));
+        state.dispatchCards.delete(taskId);
+        card.output.textContent = "轮询失败：" + errorDetail(err);
       }
     }
   };

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import stat
 
 import tomlkit
 
@@ -13,6 +14,7 @@ from harness_config_manager.mcp_manifest import (
     adopt_mcp,
     expand_placeholders,
     load_manifest,
+    collect_secret,
     spec_from_tool_entry,
 )
 from harness_config_manager.mcp_write import (
@@ -238,3 +240,42 @@ def test_doctor_dead_mcp_detection(fake_home: Path) -> None:
     issues = [(lvl, where) for lvl, where, _ in run_doctor() if lvl == "error"]
     dead = [w for _, w in issues if "dead" in w]
     assert dead and all("disabled" not in w and "relative" not in w for w in dead)
+
+
+def test_save_secrets_is_private_and_atomic(fake_home: Path, tmp_path: Path) -> None:
+    from harness_config_manager.mcp_manifest import save_secrets
+
+    path = tmp_path / "config" / "secrets.toml"
+    save_secrets({"API_TOKEN": "super-secret"}, path)
+    assert path.read_text(encoding="utf-8").count("super-secret") == 1
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert not list(path.parent.glob(".secrets.toml.*.tmp"))
+
+
+def test_url_credentials_become_placeholders_and_secret_values() -> None:
+    spec = spec_from_tool_entry("remote", {
+        "type": "http",
+        "url": "https://user:pass@example.test/mcp?client_id=abc&token=secret-token-value",
+    })
+    assert "user:pass" not in spec.url
+    assert "secret-token-value" not in spec.url
+    assert spec.url == (
+        "https://${HALTER_MCP_REMOTE_USER}:"
+        "${HALTER_MCP_REMOTE_PASSWORD}@example.test/mcp"
+        "?client_id=abc&token=${HALTER_MCP_REMOTE_TOKEN}"
+    )
+    assert collect_secret(spec, {}) == {
+        "HALTER_MCP_REMOTE_USER": "user",
+        "HALTER_MCP_REMOTE_PASSWORD": "pass",
+        "HALTER_MCP_REMOTE_TOKEN": "secret-token-value",
+    }
+
+
+def test_redaction_does_not_treat_max_tokens_as_secret() -> None:
+    from harness_config_manager.model import redact
+
+    assert redact({"max_tokens": 4096, "tokenizer": "cl100k"}) == {
+        "max_tokens": 4096,
+        "tokenizer": "cl100k",
+    }
+    assert redact({"AWS_ACCESS_KEY_ID": "AKIATEST"})["AWS_ACCESS_KEY_ID"] == "<REDACTED>"

@@ -14,7 +14,9 @@ import aiohttp.web
 import pytest
 import websockets
 
-from harness_config_manager.ahp_host import PROTOCOL_VERSION, AhpHost, build_web_app
+from harness_config_manager.ahp_host import (
+    PROTOCOL_VERSION, AhpHost, build_web_app, write_auth_token,
+)
 
 
 async def _start_host(ahp: AhpHost) -> int:
@@ -24,6 +26,14 @@ async def _start_host(ahp: AhpHost) -> int:
     site = aiohttp.web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     return runner.addresses[0][1]
+
+
+def _connect(host: AhpHost, port: int):
+    """Authenticated test WebSocket connection."""
+    return websockets.connect(
+        f"ws://127.0.0.1:{port}",
+        additional_headers={"Authorization": f"Bearer {host.auth_token}"},
+    )
 
 
 def _make_exec(dir_path: Path, name: str, body: str) -> Path:
@@ -108,7 +118,7 @@ async def _scenario(fake_home: Path, tmp_path: Path) -> None:
     host = AhpHost()
     port = await _start_host(host)
     if True:
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
 
             # --- initialize：版本协商 + root 快照（含 4 个 agent） ---
@@ -213,7 +223,7 @@ def test_initialize_version_mismatch(fake_harnesses, fake_home: Path) -> None:
     async def _neg() -> dict:
         host = AhpHost()
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
                 await ws.send(json.dumps({
                     "jsonrpc": "2.0", "id": 1, "method": "initialize",
                     "params": {
@@ -234,7 +244,7 @@ def test_create_session_unknown_provider(fake_harnesses, fake_home: Path) -> Non
     async def _bad() -> dict:
         host = AhpHost()
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
                 await ws.send(json.dumps({
                     "jsonrpc": "2.0", "id": 2, "method": "initialize",
                     "params": {
@@ -267,10 +277,11 @@ async def _http_scenario(fake_home: Path, tmp_path: Path) -> None:
     port = await _start_host(host)
     base = f"http://127.0.0.1:{port}"
     client_id = "http-test"
+    headers = {"Authorization": f"Bearer {host.auth_token}"}
 
     async with aiohttp.ClientSession() as http:
         async def rpc(method: str, params: dict) -> dict:
-            async with http.post(f"{base}/rpc", params={"client": client_id},
+            async with http.post(f"{base}/rpc", params={"client": client_id}, headers=headers,
                                  json={"jsonrpc": "2.0", "id": _uuid.uuid4().hex[:6],
                                        "method": method, "params": params}) as r:
                 assert r.status == 200, await r.text()
@@ -279,7 +290,7 @@ async def _http_scenario(fake_home: Path, tmp_path: Path) -> None:
         # SSE 流（后台收集）
         events: list[str] = []
         async def sse() -> None:
-            async with http.get(f"{base}/rpc/stream", params={"client": client_id}) as r:
+            async with http.get(f"{base}/rpc/stream", params={"client": client_id}, headers=headers) as r:
                 while True:
                     line = await r.content.readline()
                     if not line:
@@ -304,7 +315,7 @@ async def _http_scenario(fake_home: Path, tmp_path: Path) -> None:
         await rpc("createChat", {"channel": su, "chat": cu})
         await rpc("subscribe", {"channel": cu})
         # dispatch 是通知：POST 返回 204
-        async with http.post(f"{base}/rpc", params={"client": client_id}, json={
+        async with http.post(f"{base}/rpc", params={"client": client_id}, headers=headers, json={
             "jsonrpc": "2.0", "method": "dispatchAction",
             "params": {"channel": cu, "clientSeq": 1, "action": {
                 "type": "chat/turnStarted", "turnId": "t-http",
@@ -354,7 +365,7 @@ def test_ahp_native_halter_runtime_audits_read_only_tools(
     async def _native() -> None:
         host = AhpHost(model_client_factory=factory)
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             init = await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -446,7 +457,7 @@ def test_ahp_external_runner_respects_dispatch_mode(
     async def _mode() -> None:
         host = AhpHost()
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -508,7 +519,7 @@ def test_ahp_can_cancel_native_turn(fake_harnesses, fake_home: Path, tmp_path: P
     async def _cancel() -> None:
         host = AhpHost(model_client_factory=factory)
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -568,7 +579,7 @@ def test_ahp_native_sessions_restore_after_host_restart(
 
     async def _run(host: AhpHost, prompt: str, turn_id: str) -> None:
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -662,7 +673,7 @@ def test_native_apply_patch_requires_and_records_user_approval(
     async def _approved() -> None:
         host = AhpHost(model_client_factory=factory)
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -741,6 +752,15 @@ def test_native_apply_patch_requires_and_records_user_approval(
             assert rollback["ok"] is True
             assert (tmp_path / "source.txt").read_text(encoding="utf-8") == "before\n"
 
+            chat_snapshot = await client.request("subscribe", {"channel": cu})
+            history = chat_snapshot["snapshot"]["state"]["approvalHistory"]
+            assert history[0]["tool"] == "apply_patch"
+            assert history[0]["status"] == "approved"
+            restored = AhpHost(model_client_factory=factory)
+            restored_snapshot = restored.snapshot(cu)
+            assert restored_snapshot is not None
+            assert restored_snapshot["state"]["approvalHistory"][0]["status"] == "approved"
+
     asyncio.run(_approved())
     transaction_files = list((fake_home / ".config/halter/agent-transactions").rglob("*.json"))
     assert len(transaction_files) == 1
@@ -792,7 +812,7 @@ def test_native_apply_patch_is_denied_without_workspace_write_mode(
     async def _denied() -> None:
         host = AhpHost(model_client_factory=factory)
         port = await _start_host(host)
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+        async with _connect(host, port) as ws:
             client = Client(ws)
             await client.request("initialize", {
                 "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
@@ -844,3 +864,112 @@ def test_native_availability_accepts_configured_local_provider(fake_home: Path) 
         a for a in host.root_state()["agents"] if a["provider"] == "halter"
     )
     assert native["_meta"]["halter:available"] is True
+
+
+async def _auth_failure_scenario() -> None:
+    host = AhpHost(auth_token="test-token")
+    port = await _start_host(host)
+    base = f"http://127.0.0.1:{port}"
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            f"{base}/rpc", json={"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+        ) as response:
+            assert response.status == 401
+        async with http.post(
+            f"{base}/rpc",
+            headers={"Authorization": "Bearer wrong", "Origin": "https://evil.example"},
+            json={"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}},
+        ) as response:
+            assert response.status == 403
+
+
+def test_ahp_rejects_missing_token_and_browser_origin(fake_home: Path) -> None:
+    asyncio.run(_auth_failure_scenario())
+
+
+def test_ahp_rejects_browser_origin_even_with_token(fake_home: Path) -> None:
+    async def _evil_origin() -> None:
+        host = AhpHost(auth_token="test-token")
+        port = await _start_host(host)
+        try:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{port}",
+                origin="https://evil.example",
+                additional_headers={"Authorization": f"Bearer {host.auth_token}"},
+            ):
+                raise AssertionError("disallowed browser origin connected")
+        except Exception as exc:
+            assert "403" in str(exc)
+
+    asyncio.run(_evil_origin())
+
+
+def test_ahp_token_file_is_private_and_atomic(fake_home: Path, tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "ahp-token"
+    write_auth_token(path, "secret-token")
+    assert path.read_text(encoding="utf-8") == "secret-token"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not list(path.parent.glob(".ahp-token.*.tmp"))
+
+
+def test_native_plan_is_broadcast_and_restored(fake_harnesses, fake_home: Path, tmp_path: Path) -> None:
+    from harness_config_manager.agent import FunctionModelClient, ModelResponse, ToolCall
+
+    responses = iter([
+        ModelResponse(tool_calls=(ToolCall(
+            "plan", "update_plan",
+            {"steps": [{"title": "Inspect", "status": "in_progress"}], "note": "active"},
+        ),)),
+        ModelResponse(content="plan ready"),
+    ])
+
+    def factory() -> FunctionModelClient:
+        async def complete(**_kwargs):
+            return next(responses)
+        return FunctionModelClient(complete)
+
+    async def _run() -> None:
+        host = AhpHost(model_client_factory=factory)
+        port = await _start_host(host)
+        async with _connect(host, port) as ws:
+            client = Client(ws)
+            await client.request("initialize", {
+                "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
+                "clientId": "plan-test",
+            })
+            su = f"ahp-session:/{uuid.uuid4()}"
+            await client.request("createSession", {
+                "channel": su, "provider": "halter",
+                "workingDirectories": [tmp_path.as_uri()],
+            })
+            cu = f"ahp-chat:/{uuid.uuid4()}"
+            await client.request("createChat", {"channel": su, "chat": cu})
+            await client.request("subscribe", {"channel": cu})
+            await client.notify("dispatchAction", {
+                "channel": cu, "clientSeq": 1,
+                "action": {
+                    "type": "chat/turnStarted", "turnId": "plan-turn",
+                    "message": {"text": "plan", "origin": {"kind": "user"}},
+                },
+            })
+            actions = await client.collect("action", timeout=10)
+            while not any(
+                p["params"]["action"]["type"] == "halter/planChanged" for p in actions
+            ):
+                actions += await client.collect("action", timeout=10)
+            plan = next(
+                p["params"]["action"]["plan"] for p in actions
+                if p["params"]["action"]["type"] == "halter/planChanged"
+            )
+            assert plan["steps"][0]["title"] == "Inspect"
+            while not any(
+                p["params"]["action"]["type"] == "chat/turnComplete" for p in actions
+            ):
+                actions += await client.collect("action", timeout=10)
+
+            restored = AhpHost(model_client_factory=factory)
+            snapshot = restored.snapshot(cu)
+            assert snapshot is not None
+            assert snapshot["state"]["currentPlan"]["steps"][0]["status"] == "in_progress"
+
+    asyncio.run(_run())

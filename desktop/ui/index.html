@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" />
   <title>Harness Config Manager</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -19,7 +18,7 @@
         </div>
       </div>
       <nav class="nav">
-        <button class="nav-item active" data-view="overview">
+        <button class="nav-item active" data-view="overview" aria-current="page">
           <span class="nav-icon">◎</span> 总览
         </button>
         <button class="nav-item" data-view="matrix">
@@ -106,7 +105,7 @@
                 <div class="facet-value facet-dropdown-wrap">
                   <div class="facet-combobox">
                     <input id="project-input" class="facet-input" placeholder="输入项目名/路径筛选，回车选中…" spellcheck="false" autocomplete="off" />
-                    <button id="project-clear" class="facet-clear hidden" title="清除，回到全部项目">✕</button>
+                    <button id="project-clear" type="button" class="facet-clear hidden" title="清除，回到全部项目" aria-label="清除项目筛选">✕</button>
                     <span class="facet-caret">▾</span>
                   </div>
                   <div id="project-dropdown" class="project-dropdown hidden">
@@ -122,8 +121,8 @@
                 <div class="facet-label">视图</div>
                 <div class="facet-value">
                   <div class="view-toggle">
-                    <button id="btn-view-list" class="toggle-btn">列表</button>
-                    <button id="btn-view-timeline" class="toggle-btn active">时间线</button>
+                    <button id="btn-view-list" type="button" class="toggle-btn" aria-pressed="false">列表</button>
+                    <button id="btn-view-timeline" type="button" class="toggle-btn active" aria-pressed="true">时间线</button>
                   </div>
                 </div>
                 <div id="session-count" class="session-count"></div>
@@ -167,7 +166,7 @@
               ></textarea>
               <div class="dispatch-composer-foot">
                 <span id="dispatch-mention-hint" class="dispatch-mention-hint">用 @claude / @codex / @zcode / @opencode / @halter 选择执行者；@halter 是可审计的原生 Agent；默认只读，可开启逐 patch 写入</span>
-                <button id="btn-dispatch-send" class="btn">⏵ 派发 ⌘↵</button>
+                <button id="btn-dispatch-send" type="button" class="btn">⏵ 派发 ⌘↵</button>
               </div>
             </div>
 

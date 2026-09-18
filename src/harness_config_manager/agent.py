@@ -33,7 +33,8 @@ from .sessions import build_context, redact_text, scan_sessions
 
 SYSTEM_PROMPT = (
     "You are halter, a careful local coding agent. Work only with the supplied "
-    "workspace. Inspect files before making claims, prefer small verifiable "
+    "workspace. Start multi-step work by calling update_plan, update the plan as "
+    "state changes, and inspect files before making claims. Prefer small verifiable "
     "steps, and state uncertainty. Use project session tools to recall prior "
     "workspace history, and delegate_harness for an independent "
     "external-agent review in a disposable clone, then apply only approved "
@@ -50,6 +51,7 @@ MAX_PATCH_LINES = 5_000
 MAX_HISTORY_TURNS = 12
 MAX_HISTORY_CHARS = 100_000
 WRITE_TOOL_NAMES = {"apply_patch", "run_tests"}
+PLAN_STATUSES = {"pending", "in_progress", "done", "blocked"}
 TEST_COMMANDS = {
     "pytest": ["pytest"],
     "npm-test": ["npm", "test", "--silent"],
@@ -58,6 +60,34 @@ TEST_COMMANDS = {
 }
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan",
+            "description": "Replace the visible execution plan with a concise, ordered set of task steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "done", "blocked"]},
+                                "detail": {"type": "string"},
+                            },
+                            "required": ["title", "status"],
+                        },
+                    },
+                    "note": {"type": "string"},
+                },
+                "required": ["steps"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -370,6 +400,31 @@ class WorkspaceTools:
             raise PermissionError(f"path escapes workspace: {raw}") from exc
         return resolved
 
+    async def update_plan(self, args: dict[str, Any]) -> dict[str, Any]:
+        raw_steps = args.get("steps")
+        if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= 20:
+            raise ValueError("plan steps must contain between 1 and 20 items")
+        steps: list[dict[str, str]] = []
+        for index, raw in enumerate(raw_steps):
+            if not isinstance(raw, dict):
+                raise ValueError(f"plan step {index + 1} must be an object")
+            title = str(raw.get("title") or "").strip()
+            status = str(raw.get("status") or "pending")
+            if not title or len(title) > 200:
+                raise ValueError(f"plan step {index + 1} has an invalid title")
+            if status not in PLAN_STATUSES:
+                raise ValueError(f"plan step {index + 1} has invalid status: {status}")
+            steps.append({
+                "title": title[:200],
+                "status": status,
+                "detail": _truncate_text(str(raw.get("detail") or ""), 1000),
+            })
+        return {
+            "updated": True,
+            "steps": steps,
+            "note": _truncate_text(str(args.get("note") or ""), 2000),
+        }
+
     async def read_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args.get("path", "")))
         if not path.is_file():
@@ -488,6 +543,60 @@ class WorkspaceTools:
         if not saw_header:
             raise ValueError("patch has no ---/+++ file headers")
 
+    async def workspace_context(self) -> dict[str, Any]:
+        """Build a compact, read-only bootstrap context for the selected project."""
+        manifests: dict[str, str] = {}
+        for name, limit in (
+            ("pyproject.toml", 6000),
+            ("package.json", 6000),
+            ("Cargo.toml", 4000),
+            ("go.mod", 3000),
+        ):
+            path = self.workspace / name
+            if path.is_file():
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")[:limit]
+                    manifests[name] = redact_text(text)
+                except OSError:
+                    continue
+        readme = self.workspace / "README.md"
+        readme_text = ""
+        if readme.is_file():
+            try:
+                readme_text = redact_text(readme.read_text(encoding="utf-8", errors="replace")[:6000])
+            except OSError:
+                readme_text = ""
+
+        try:
+            top_entries = [
+                {"name": item.name, "kind": "dir" if item.is_dir() else "file"}
+                for item in sorted(self.workspace.iterdir(), key=lambda item: item.name)[:80]
+            ]
+        except OSError:
+            top_entries = []
+
+        git = await self._git("status", "--porcelain=v1", "--branch")
+        sessions = scan_sessions(project=self.workspace)
+        sessions.sort(
+            key=lambda item: item.updated_at or datetime.fromtimestamp(0, timezone.utc),
+            reverse=True,
+        )
+        return {
+            "manifests": manifests,
+            "readme": readme_text,
+            "topEntries": top_entries,
+            "git": git,
+            "recentSessions": [
+                {
+                    "ref": item.ref,
+                    "tool": item.tool,
+                    "title": item.title,
+                    "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
+                }
+                for item in sessions[:5]
+            ],
+        }
+
     async def list_project_sessions(self, args: dict[str, Any]) -> dict[str, Any]:
         limit = min(max(int(args.get("limit") or 20), 1), 50)
         items = scan_sessions(project=self.workspace)
@@ -521,31 +630,140 @@ class WorkspaceTools:
             "content": _truncate_text(text, 60_000),
         }
 
+    def _prepare_sandbox(self, root: Path) -> tuple[Path, dict[str, Any]]:
+        """Clone the workspace plus bounded untracked state into *root*."""
+        workspace_diff = subprocess.run(
+            ["git", "diff", "--binary", "HEAD"], cwd=self.workspace,
+            text=False, capture_output=True, timeout=15, check=False,
+        )
+        if workspace_diff.returncode != 0:
+            raise RuntimeError(
+                _truncate_text(
+                    workspace_diff.stderr.decode("utf-8", errors="replace")
+                    or "workspace is not a git repository"
+                )
+            )
+        clone = root / "workspace"
+        cloned = subprocess.run(
+            ["git", "clone", "--quiet", str(self.workspace), str(clone)],
+            text=True, capture_output=True, timeout=60, check=False,
+        )
+        if cloned.returncode != 0:
+            raise RuntimeError(_truncate_text(cloned.stderr or "git clone failed"))
+        if workspace_diff.stdout:
+            applied = subprocess.run(
+                ["git", "apply", "--binary"], cwd=clone, input=workspace_diff.stdout,
+                text=False, capture_output=True, timeout=15, check=False,
+            )
+            if applied.returncode != 0:
+                raise RuntimeError(
+                    _truncate_text(
+                        applied.stderr.decode("utf-8", errors="replace")
+                        or "failed to snapshot workspace changes"
+                    )
+                )
+
+        copied: list[str] = []
+        skipped: list[str] = []
+        total_bytes = 0
+        listed = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=self.workspace, text=False, capture_output=True, timeout=15, check=False,
+        )
+        if listed.returncode == 0:
+            for raw_path in listed.stdout.split(b"\0"):
+                if not raw_path:
+                    continue
+                rel = raw_path.decode("utf-8", errors="replace")
+                source = self.resolve_path(rel)
+                relative = source.relative_to(self.workspace)
+                if (
+                    relative.parts
+                    and (
+                        relative.parts[0] in self.EXCLUDED_DIRS
+                        or any(
+                            relative.parts[i:i + 2] == (".config", "halter")
+                            for i in range(len(relative.parts) - 1)
+                        )
+                    )
+                ):
+                    skipped.append(rel)
+                    continue
+                try:
+                    mode = source.lstat().st_mode
+                except OSError:
+                    skipped.append(rel)
+                    continue
+                if not stat.S_ISREG(mode):
+                    skipped.append(rel)
+                    continue
+                try:
+                    size = source.stat().st_size
+                    if len(copied) >= 5000 or total_bytes + size > 200 * 1024 * 1024:
+                        skipped.append(rel)
+                        continue
+                    target = clone / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                    copied.append(rel)
+                    total_bytes += size
+                except OSError:
+                    skipped.append(rel)
+        return clone, {
+            "untrackedCopied": copied,
+            "untrackedSkipped": skipped,
+            "untrackedBytes": total_bytes,
+        }
+
     async def run_tests(self, args: dict[str, Any]) -> dict[str, Any]:
         key = str(args.get("command") or "")
         if key not in TEST_COMMANDS:
             raise ValueError(f"unsupported test command: {key}")
         argv = list(TEST_COMMANDS[key])
         timeout = min(max(int(args.get("timeout_seconds") or 600), 5), 900)
-        proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=self.workspace,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            output, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+
+        with tempfile.TemporaryDirectory(prefix="halter-tests-") as raw_root:
+            clone, snapshot = await asyncio.to_thread(
+                self._prepare_sandbox, Path(raw_root)
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *argv, cwd=clone,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
             try:
-                os.killpg(os.getpgid(proc.pid), 15)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
-            await proc.wait()
-            raise RuntimeError(f"test command timed out after {timeout}s")
-        return {
-            "command": argv,
-            "exitCode": proc.returncode,
-            "output": _truncate_text(output.decode("utf-8", errors="replace"), 40_000),
-        }
+                output, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(os.getpgid(proc.pid), 15)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                await proc.wait()
+                raise RuntimeError(f"test command timed out after {timeout}s")
+
+            def _sandbox_changes() -> dict[str, Any]:
+                diff = subprocess.run(
+                    ["git", "diff", "--binary"], cwd=clone, text=True,
+                    capture_output=True, timeout=15, check=False,
+                )
+                status = subprocess.run(
+                    ["git", "status", "--porcelain=v1"], cwd=clone, text=True,
+                    capture_output=True, timeout=15, check=False,
+                )
+                return {"diff": diff.stdout, "status": status.stdout}
+
+            changes = await asyncio.to_thread(_sandbox_changes)
+            return {
+                "command": argv,
+                "exitCode": proc.returncode,
+                "output": _truncate_text(output.decode("utf-8", errors="replace"), 40_000),
+                "sandbox": "disposable-git-clone",
+                "snapshot": snapshot,
+                "sandboxChanges": {
+                    "diff": _truncate_text(changes["diff"], 20_000),
+                    "status": _truncate_text(changes["status"], 10_000),
+                },
+            }
 
     async def delegate_harness(self, args: dict[str, Any]) -> dict[str, Any]:
         """Consult an external harness in a disposable git clone.
@@ -567,83 +785,9 @@ class WorkspaceTools:
         model = str(args.get("model") or "") or None
         timeout = min(max(int(args.get("timeout_seconds") or 120), 5), 300)
 
-        def _prepare(root: Path) -> tuple[Path, dict[str, Any]]:
-            workspace_diff = subprocess.run(
-                ["git", "diff", "--binary", "HEAD"], cwd=self.workspace,
-                text=False, capture_output=True, timeout=15, check=False,
-            )
-            if workspace_diff.returncode != 0:
-                raise RuntimeError(_truncate_text(workspace_diff.stderr.decode("utf-8", errors="replace") or "workspace is not a git repository"))
-            clone = root / "workspace"
-            cloned = subprocess.run(
-                ["git", "clone", "--quiet", str(self.workspace), str(clone)],
-                text=True, capture_output=True, timeout=60, check=False,
-            )
-            if cloned.returncode != 0:
-                raise RuntimeError(_truncate_text(cloned.stderr or "git clone failed"))
-            if workspace_diff.stdout:
-                applied = subprocess.run(
-                    ["git", "apply", "--binary"], cwd=clone, input=workspace_diff.stdout,
-                    text=False, capture_output=True, timeout=15, check=False,
-                )
-                if applied.returncode != 0:
-                    raise RuntimeError(_truncate_text(applied.stderr.decode("utf-8", errors="replace") or "failed to snapshot workspace changes"))
-
-            copied: list[str] = []
-            skipped: list[str] = []
-            total_bytes = 0
-            listed = subprocess.run(
-                ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-                cwd=self.workspace, text=False, capture_output=True, timeout=15, check=False,
-            )
-            if listed.returncode == 0:
-                for raw_path in listed.stdout.split(b"\0"):
-                    if not raw_path:
-                        continue
-                    rel = raw_path.decode("utf-8", errors="replace")
-                    source = self.resolve_path(rel)
-                    relative = source.relative_to(self.workspace)
-                    if (
-                        relative.parts
-                        and (
-                            relative.parts[0] in self.EXCLUDED_DIRS
-                            or any(
-                                relative.parts[i:i + 2] == (".config", "halter")
-                                for i in range(len(relative.parts) - 1)
-                            )
-                        )
-                    ):
-                        skipped.append(rel)
-                        continue
-                    try:
-                        mode = source.lstat().st_mode
-                    except OSError:
-                        skipped.append(rel)
-                        continue
-                    if not stat.S_ISREG(mode):
-                        skipped.append(rel)
-                        continue
-                    try:
-                        size = source.stat().st_size
-                        if len(copied) >= 5000 or total_bytes + size > 200 * 1024 * 1024:
-                            skipped.append(rel)
-                            continue
-                        target = clone / relative
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(source, target)
-                        copied.append(rel)
-                        total_bytes += size
-                    except OSError:
-                        skipped.append(rel)
-            return clone, {
-                "untrackedCopied": copied,
-                "untrackedSkipped": skipped,
-                "untrackedBytes": total_bytes,
-            }
-
         with tempfile.TemporaryDirectory(prefix="halter-delegate-") as raw_root:
             root = Path(raw_root)
-            clone, snapshot = await asyncio.to_thread(_prepare, root)
+            clone, snapshot = await asyncio.to_thread(self._prepare_sandbox, root)
             argv = spec.build_argv(prefix, prompt, clone, "safe", model)
             proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=clone,
@@ -1123,6 +1267,14 @@ class AgentRuntime:
             })
             if not approved:
                 raise PermissionError("user denied the tool request")
+        if call.name == "update_plan":
+            validated = await self.tools.execute(call)
+            await self._emit(emit, {
+                "type": "plan_updated",
+                "steps": validated["steps"],
+                "note": validated["note"],
+            })
+            return validated
         return await self.tools.execute(call)
 
     async def run(
@@ -1134,9 +1286,22 @@ class AgentRuntime:
         emit: EventCallback | None = None,
         permission_mode: str = "read-only",
     ) -> AgentResult:
-        original_history = list(history or [])
+        original_history = [
+            message for message in (history or [])
+            if message.get("name") != "halter_workspace_context"
+        ]
         compacted_history, dropped_turns = compact_history(original_history)
-        messages = [self.messages[0], *compacted_history, {"role": "user", "content": prompt}]
+        workspace_context = await self.tools.workspace_context()
+        await self.audit.append("context.workspace", **workspace_context)
+        context_message = {
+            "role": "system",
+            "name": "halter_workspace_context",
+            "content": json.dumps(workspace_context, ensure_ascii=False),
+        }
+        messages = [
+            self.messages[0], context_message, *compacted_history,
+            {"role": "user", "content": prompt},
+        ]
         available_tools = tools_for_permission(permission_mode)
         if dropped_turns:
             await self.audit.append(

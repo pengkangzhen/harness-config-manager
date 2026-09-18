@@ -127,6 +127,8 @@ class AgentSessionStore:
                         turns=turns,
                         active_turn=active,
                         agent_messages=list(raw_chat.get("agentMessages") or []),
+                        current_plan=raw_chat.get("currentPlan") or None,
+                        approval_history=list(raw_chat.get("approvalHistory") or []),
                         modified_at=str(raw_chat.get("modifiedAt") or ""),
                     )
                     if chat.status == 8:
@@ -148,4 +150,6 @@ class AgentSessionStore:
             "turns": chat.turns,
             "activeTurn": chat.active_turn,
             "agentMessages": chat.agent_messages,
+            "currentPlan": chat.current_plan,
+            "approvalHistory": chat.approval_history,
         }

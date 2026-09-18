@@ -7,6 +7,8 @@ from pathlib import Path
 
 import tomlkit
 
+from .io_utils import atomic_write_text
+
 DEFAULT_CONFIG_PATH = Path.home() / ".config/halter/config.toml"  # 兼容引用；运行时走 _config_path()
 
 
@@ -35,10 +37,9 @@ def load_config(path: Path | None = None) -> HalterConfig:
     path = path or _config_path()
     if not path.exists():
         return HalterConfig()
-    try:
-        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    except (OSError, tomlkit.exceptions.ParseError):
-        return HalterConfig()
+    # A corrupt or unreadable file must fail loudly. Returning defaults here
+    # would let a later save overwrite the user's real configuration.
+    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
     return HalterConfig(
         library=doc.get("library"),
         exclude_skills=list(doc.get("exclude_skills", [])),
@@ -62,40 +63,45 @@ def load_config(path: Path | None = None) -> HalterConfig:
 
 
 def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
+    """Save managed fields while preserving unrelated tables and comments."""
     path = path or _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = tomlkit.document()
-    if cfg.library:
-        doc["library"] = cfg.library
-    if cfg.exclude_skills:
-        doc["exclude_skills"] = cfg.exclude_skills
-    if cfg.exclude_mcp:
-        doc["exclude_mcp"] = cfg.exclude_mcp
-    if cfg.exclude_hooks:
-        doc["exclude_hooks"] = cfg.exclude_hooks
-    if cfg.agents_library:
-        doc["agents_library"] = cfg.agents_library
-    if cfg.exclude_agents:
-        doc["exclude_agents"] = cfg.exclude_agents
-    if cfg.models:
-        models = tomlkit.table()
-        for k in sorted(cfg.models):
-            models[k] = cfg.models[k]
-        doc["models"] = models
-    if cfg.model_providers:
-        providers = tomlkit.table()
-        for k in sorted(cfg.model_providers):
-            inner = tomlkit.table()
-            for field in sorted(cfg.model_providers[k]):
-                inner[field] = cfg.model_providers[k][field]
-            providers[k] = inner
-        doc["model_providers"] = providers
-    if cfg.model_catalog:
-        catalog = tomlkit.table()
-        for k in sorted(cfg.model_catalog):
-            inner = tomlkit.array()
-            for item in cfg.model_catalog[k]:
-                inner.append(item)
-            catalog[k] = inner
-        doc["model_catalog"] = catalog
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+
+    scalar_fields = {
+        "library": cfg.library,
+        "agents_library": cfg.agents_library,
+    }
+    for key, value in scalar_fields.items():
+        if value is None:
+            doc.pop(key, None)
+        else:
+            doc[key] = value
+
+    list_fields = {
+        "exclude_skills": cfg.exclude_skills,
+        "exclude_mcp": cfg.exclude_mcp,
+        "exclude_hooks": cfg.exclude_hooks,
+        "exclude_agents": cfg.exclude_agents,
+    }
+    for key, values in list_fields.items():
+        if values:
+            doc[key] = values
+        else:
+            doc.pop(key, None)
+
+    table_fields = {
+        "models": cfg.models,
+        "model_catalog": cfg.model_catalog,
+        "model_providers": cfg.model_providers,
+    }
+    for key, values in table_fields.items():
+        if not values:
+            doc.pop(key, None)
+            continue
+        table = tomlkit.table()
+        for name in sorted(values):
+            table[name] = values[name]
+        doc[key] = table
+
+    atomic_write_text(path, tomlkit.dumps(doc))

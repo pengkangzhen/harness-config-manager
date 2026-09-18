@@ -76,7 +76,7 @@ def test_agent_runtime_executes_audited_tool_calls(fake_home: Path, tmp_path: Pa
     records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
     by_kind = {record["kind"]: record for record in records}
     assert by_kind["turn.started"]["tools"] == sorted({
-        "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness",
+        "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "update_plan",
     })
     assert by_kind["tool.call"]["name"] == "read_file"
     assert "super-secret-value-123" not in audit_path.read_text(encoding="utf-8")
@@ -171,8 +171,14 @@ def test_delegate_harness_runs_in_disposable_clone(fake_home: Path, tmp_path: Pa
 def test_run_tests_requires_approval_and_uses_fixed_argv(fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import os
     import stat
+    import subprocess
 
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "pyproject.toml"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=tmp_path, check=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     pytest_bin = bin_dir / "pytest"
@@ -203,6 +209,7 @@ def test_run_tests_requires_approval_and_uses_fixed_argv(fake_home: Path, tmp_pa
         assert payload["command"] == ["pytest"]
         assert payload["exitCode"] == 0
         assert "TEST-OK" in payload["output"]
+        assert payload["sandbox"] == "disposable-git-clone"
 
     asyncio.run(run())
     assert requests[0]["tool"] == "run_tests"
@@ -322,3 +329,69 @@ def test_history_compaction_preserves_small_history() -> None:
     compacted, dropped = compact_history(history)
     assert compacted == history
     assert dropped == 0
+
+
+def test_update_plan_emits_structured_event(fake_home: Path, tmp_path: Path) -> None:
+    events: list[dict] = []
+    model = _sequential_model([
+        ModelResponse(tool_calls=(ToolCall("plan-1", "update_plan", {
+            "steps": [
+                {"title": "Inspect workspace", "status": "done"},
+                {"title": "Apply approved patch", "status": "pending", "detail": "Needs user approval"},
+            ],
+            "note": "Ready for review",
+        }),)),
+        ModelResponse(content="plan ready"),
+    ])
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=model,
+        session_channel="ahp-session:/plan-test", home=fake_home,
+    )
+
+    async def run() -> None:
+        async def emit(event):
+            events.append(event)
+        result = await runtime.run("make a plan", emit=emit)
+        tool = [m for m in result.messages if m.get("role") == "tool"][0]
+        payload = json.loads(tool["content"])
+        assert payload["updated"] is True
+        assert payload["steps"][1]["status"] == "pending"
+
+    asyncio.run(run())
+    plan_event = next(event for event in events if event["type"] == "plan_updated")
+    assert plan_event["note"] == "Ready for review"
+    assert plan_event["steps"][0]["status"] == "done"
+
+
+def test_workspace_context_is_automatically_bounded_and_redacted(fake_home: Path, tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Demo\\n\\napi_key=super-secret-value-123\\n", encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text('[project]\\nname = "demo"\\n', encoding="utf-8")
+    seen_messages: list[list[dict]] = []
+
+    def factory() -> FunctionModelClient:
+        async def complete(**kwargs):
+            seen_messages.append(list(kwargs["messages"]))
+            return ModelResponse(content="ready")
+        return FunctionModelClient(complete)
+
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=factory(),
+        session_channel="ahp-session:/workspace-context", home=fake_home,
+    )
+    asyncio.run(runtime.run("summarize project"))
+    context = [
+        message for message in seen_messages[0]
+        if message.get("name") == "halter_workspace_context"
+    ]
+    assert len(context) == 1
+    payload = json.loads(context[0]["content"])
+    assert 'name = "demo"' in payload["manifests"]["pyproject.toml"]
+    assert "super-secret-value-123" not in context[0]["content"]
+    assert "<REDACTED>" in context[0]["content"]
+    assert seen_messages[0][-1] == {"role": "user", "content": "summarize project"}
+
+    audit_files = list((fake_home / ".config/halter/agent-audit").rglob("audit.jsonl"))
+    records = [json.loads(line) for line in audit_files[0].read_text(encoding="utf-8").splitlines()]
+    assert any(record["kind"] == "context.workspace" for record in records)

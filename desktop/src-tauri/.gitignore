@@ -1,2 +1,6 @@
 /target
 /gen/schemas
+.env*
+!.env.example
+*.pem
+*.key

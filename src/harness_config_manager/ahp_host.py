@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
+import secrets as secret_token
 import time
 import urllib.parse
 import uuid
@@ -70,7 +72,9 @@ class AhpChat:
     proc: asyncio.subprocess.Process | None = None
     agent_task: asyncio.Task[None] | None = None
     agent_messages: list[dict[str, Any]] = field(default_factory=list)
+    current_plan: dict[str, Any] | None = None
     approvals: dict[str, asyncio.Future[bool]] = field(default_factory=dict)
+    approval_history: list[dict[str, Any]] = field(default_factory=list)
     modified_at: str = field(default_factory=_now_iso)
 
     def state(self) -> dict[str, Any]:
@@ -82,6 +86,8 @@ class AhpChat:
             "modifiedAt": self.modified_at,
             "turns": self.turns,
             "activeTurn": self.active_turn,
+            "currentPlan": self.current_plan,
+            "approvalHistory": self.approval_history,
         }
 
     def summary(self) -> dict[str, Any]:
@@ -140,8 +146,13 @@ class AhpConn:
 class AhpHost:
     """AHP 服务器实例：连接、状态、广播与 harness 执行。"""
 
-    def __init__(self, home: Path | None = None, model_client_factory: Callable[[], ModelClient] | None = None) -> None:
+    def __init__(self, home: Path | None = None, model_client_factory: Callable[[], ModelClient] | None = None,
+                 auth_token: str | None = None) -> None:
         self._home = home
+        # Every transport can execute a local runner, so every transport must
+        # present this process-local bearer token. Non-browser clients may omit
+        # Origin; browser clients must match the explicitly allow-listed origin.
+        self.auth_token = auth_token or secret_token.token_urlsafe(32)
         self.sessions: dict[str, AhpSession] = {}
         self.connections: dict[str, AhpConn] = {}
         self.subscriptions: dict[str, set[str]] = {}   # client_id -> channel uris
@@ -220,7 +231,7 @@ class AhpHost:
                 "halter:available": self._native_injected or self._native_model_available(),
                 "halter:key": "halter",
                 "halter:tools": [
-                    "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "apply_patch", "run_tests",
+                    "update_plan", "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "apply_patch", "run_tests",
                 ],
                 "halter:permissions": ["read-only", "workspace-write (approval required)"],
             },
@@ -287,6 +298,10 @@ class AhpHost:
     async def route_message(self, conn: AhpConn, msg: dict[str, Any]) -> dict[str, Any] | None:
         """处理一条客户端消息；请求返回响应 dict，通知返回 None。"""
         client_id = self._alias.get(conn.client_id, conn.client_id)
+        if not isinstance(msg, dict):
+            return {"jsonrpc": "2.0", "id": None, "error": {
+                "code": -32600, "message": "Invalid Request: message must be an object"
+            }}
         if "id" in msg:
             result, error = await self._handle_request(client_id, msg)
             reply: dict[str, Any] = {"jsonrpc": "2.0", "id": msg["id"]}
@@ -316,6 +331,8 @@ class AhpHost:
                               msg: dict[str, Any]) -> tuple[Any, dict[str, Any] | None]:
         method = msg.get("method", "")
         params = msg.get("params") or {}
+        if not isinstance(params, dict):
+            return None, {"code": -32600, "message": "Invalid params: expected an object"}
         try:
             handler = getattr(self, f"_cmd_{method.replace('/', '_')}", None)
             if handler is None:
@@ -329,6 +346,8 @@ class AhpHost:
     async def _handle_notification(self, client_id: str, msg: dict[str, Any]) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
+        if not isinstance(method, str) or not isinstance(params, dict):
+            return
         if method == "dispatchAction":
             await self._on_dispatch_action(client_id, params)
         elif method == "unsubscribe":
@@ -699,6 +718,19 @@ class AhpHost:
                     "type": "chat/delta", "turnId": turn["id"], "partId": part_id,
                     "content": content,
                 })
+            elif event_type == "plan_updated":
+                plan = {
+                    "steps": event.get("steps") or [],
+                    "note": str(event.get("note") or ""),
+                    "updatedAt": _now_iso(),
+                }
+                chat.current_plan = plan
+                turn["responseParts"].append({
+                    "kind": "halter/plan", "plan": plan,
+                })
+                await self.broadcast_action(chat.uri, {
+                    "type": "halter/planChanged", "turnId": turn["id"], "plan": plan,
+                })
             elif event_type == "approval_request":
                 request = dict(event)
                 request.pop("type", None)
@@ -738,13 +770,27 @@ class AhpHost:
             approval_id = str(request.get("id") or "")
             future = asyncio.get_running_loop().create_future()
             chat.approvals[approval_id] = future
+            record = {
+                "id": approval_id,
+                "tool": str(request.get("tool") or ""),
+                "summary": str(request.get("summary") or ""),
+                "status": "pending",
+                "requestedAt": _now_iso(),
+                "decidedAt": None,
+            }
+            chat.approval_history.append(record)
             await self.broadcast_action(chat.uri, {
                 "type": "halter/approvalRequest",
                 "turnId": turn["id"],
                 "approval": request,
             })
             try:
-                return await future
+                approved = await future
+                record.update({
+                    "status": "approved" if approved else "denied",
+                    "decidedAt": _now_iso(),
+                })
+                return approved
             finally:
                 chat.approvals.pop(approval_id, None)
 
@@ -835,13 +881,50 @@ def _chunks(text: str, size: int = 2000) -> list[str]:
     return [text[i:i + size] for i in range(0, len(text), size)] or [""]
 
 
+def _default_allowed_origins() -> set[str]:
+    origins = {
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    }
+    configured = os.environ.get("HALTER_AHP_ALLOWED_ORIGINS", "")
+    origins.update(item.strip() for item in configured.split(",") if item.strip())
+    return origins
+
+
+def _request_token(request: aiohttp.web.Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    if authorization.startswith("Bearer "):
+        return authorization[len("Bearer "):].strip()
+    return request.headers.get("X-Halter-AHP-Token", request.query.get("token", "")).strip()
+
+
 def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
     """aiohttp 应用：WS（/ 或 /ws）+ HTTP JSON-RPC（POST /rpc）+ SSE（GET /rpc/stream）。
 
     AHP 传输无关（规范：任何有序可靠双向流皆可）；HTTP+SSE 组合用于
-    WebView 等禁止明文 WebSocket 的客户端环境。
+    WebView 等禁止明文 WebSocket 的客户端环境。除健康检查外，所有传输都
+    要求 bearer token；带 Origin 的浏览器请求还必须命中显式 allow-list。
     """
     app = aiohttp.web.Application()
+    allowed_origins = _default_allowed_origins()
+
+    @aiohttp.web.middleware
+    async def authenticate(request: aiohttp.web.Request, handler):
+        origin = request.headers.get("Origin")
+        if origin and origin not in allowed_origins:
+            raise aiohttp.web.HTTPForbidden(text="origin not allowed")
+        if request.path == "/healthz":
+            return await handler(request)
+        supplied = _request_token(request)
+        if not supplied or not hmac.compare_digest(supplied, ahp.auth_token):
+            raise aiohttp.web.HTTPUnauthorized(
+                text="AHP authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return await handler(request)
+
+    app.middlewares.append(authenticate)
 
     async def ws_handler(request: aiohttp.web.Request) -> aiohttp.web.WebSocketResponse:
         ws = aiohttp.web.WebSocketResponse()
@@ -895,7 +978,6 @@ def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
         resp = aiohttp.web.StreamResponse(headers={
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
-            "Access-Control-Allow-Origin": "*",
         })
         await resp.prepare(request)
         try:
@@ -912,7 +994,11 @@ def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
         return resp
 
     async def health(request: aiohttp.web.Request) -> aiohttp.web.Response:
-        return aiohttp.web.json_response({"ok": True, "protocol": PROTOCOL_VERSION})
+        return aiohttp.web.json_response({
+            "ok": True,
+            "protocol": PROTOCOL_VERSION,
+            "serverInfo": SERVER_INFO,
+        })
 
     app.router.add_get("/", ws_handler)
     app.router.add_get("/ws", ws_handler)
@@ -930,13 +1016,37 @@ def _ensure_gui_path() -> None:
     os.environ["PATH"] = ":".join(dict.fromkeys(p for p in parts if p))
 
 
-async def serve(host: str = "127.0.0.1", port: int = 7433) -> None:
+def write_auth_token(path: Path, token: str) -> None:
+    """Atomically persist the AHP token with owner-only permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(token)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+async def serve(host: str = "127.0.0.1", port: int = 7433,
+                auth_token: str | None = None,
+                token_file: Path | None = None) -> None:
     _ensure_gui_path()
-    ahp = AhpHost()
+    ahp = AhpHost(auth_token=auth_token)
+    token_path = token_file or Path.home() / ".config/halter/ahp-token"
+    write_auth_token(token_path, ahp.auth_token)
     runner = aiohttp.web.AppRunner(build_web_app(ahp))
     await runner.setup()
     site = aiohttp.web.TCPSite(runner, host, port)
     await site.start()
     print(f"halter AHP host listening on http://{host}:{port} "
           f"(ws + http-rpc + sse, protocol {PROTOCOL_VERSION})")
+    print(f"AHP auth token written to {token_path}")
     await asyncio.Future()

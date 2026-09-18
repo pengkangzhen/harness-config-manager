@@ -1,13 +1,24 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
+/build/
+/dist/
+/wheels/
 *.egg-info
 
-# Virtual environments
-.venv
+# Virtual environments and tool caches
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Secret material (keep committed *.example templates instead)
+.env*
+!.env.example
+*.pem
+*.key
 
 # Harness local session data
 .zcode/

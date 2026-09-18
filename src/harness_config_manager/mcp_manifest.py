@@ -7,13 +7,17 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunparse
+from uuid import uuid4
 
 import tomlkit
 
-from .model import SENSITIVE_KEYS, redact
+from .io_utils import atomic_write_text
+from .model import is_sensitive_key, redact
 from .registry import expand
 
 MCP_MANIFEST = lambda: expand(".config/halter/mcp.toml")  # noqa: E731
@@ -33,10 +37,62 @@ class McpSpec:
     headers: dict[str, str] = field(default_factory=dict)
     extra: dict = field(default_factory=dict)      # 方言特有字段原样保留
     targets: list[str] | None = None               # None = 所有已装工具
+    _url_secrets: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
 def _looks_secret(key: str) -> bool:
-    return any(s in key.lower() for s in SENSITIVE_KEYS)
+    return is_sensitive_key(key)
+
+
+def _safe_var_part(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in value.upper())
+    return cleaned.strip("_") or "VALUE"
+
+
+def _sanitize_url(name: str, raw_url: str) -> tuple[str, dict[str, str]]:
+    """Move URL userinfo and credential-like query values into placeholders."""
+    try:
+        parsed = urlsplit(raw_url)
+    except ValueError:
+        return raw_url, {}
+
+    secrets: dict[str, str] = {}
+    username = parsed.username
+    password = parsed.password
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    hostport = f"{host}:{parsed.port}" if parsed.port else host
+
+    if username is not None:
+        user_var = f"HALTER_MCP_{_safe_var_part(name)}_USER"
+        secrets[user_var] = username
+        username_placeholder = f"${{{user_var}}}"
+    else:
+        username_placeholder = ""
+    password_placeholder = ""
+    if password is not None:
+        password_var = f"HALTER_MCP_{_safe_var_part(name)}_PASSWORD"
+        secrets[password_var] = password
+        password_placeholder = f":${{{password_var}}}"
+
+    userinfo = username_placeholder + password_placeholder
+    netloc = f"{userinfo}@{hostport}" if userinfo else hostport
+
+    query_items: list[tuple[str, str]] = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        normalized = key.lower().replace("-", "_")
+        credential_query = normalized in {
+            "key", "accesskey", "access_key", "access_token", "sig", "signature"
+        }
+        if value and (_looks_secret(key) or credential_query):
+            var = f"HALTER_MCP_{_safe_var_part(name)}_{_safe_var_part(key)}"
+            secrets[var] = value
+            query_items.append((key, f"${{{var}}}"))
+        else:
+            query_items.append((key, value))
+    query = urlencode(query_items, safe="${}")
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", query, parsed.fragment)), secrets
 
 
 def spec_from_tool_entry(name: str, entry: dict) -> McpSpec:
@@ -45,7 +101,9 @@ def spec_from_tool_entry(name: str, entry: dict) -> McpSpec:
     spec.transport = str(entry.get("type", "http" if "url" in entry else "stdio"))
     spec.command = entry.get("command")
     spec.args = list(entry.get("args") or [])
-    spec.url = entry.get("url")
+    raw_url = entry.get("url")
+    if isinstance(raw_url, str):
+        spec.url, spec._url_secrets = _sanitize_url(name, raw_url)
     if isinstance(spec.command, list):  # opencode 方言
         spec.command = spec.command[0] if spec.command else None
         spec.args = list(entry.get("command") or [])[1:]
@@ -115,7 +173,7 @@ def save_manifest(specs: list[McpSpec], path: Path | None = None) -> None:
             tbl["targets"] = s.targets
         aot.append(tbl)
     doc["server"] = aot
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    atomic_write_text(path, tomlkit.dumps(doc))
 
 
 # ---------------------------------------------------------------------------
@@ -134,15 +192,32 @@ def save_secrets(secrets: dict[str, str], path: Path | None = None) -> None:
     path = path or SECRETS_FILE()
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = tomlkit.document()
-    for k, v in secrets.items():
-        doc[k] = v
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    for key, value in secrets.items():
+        doc[key] = str(value)
+
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(tomlkit.dumps(doc))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def collect_secret(spec: McpSpec, entry: dict) -> dict[str, str]:
     """从工具配置原条目提取密钥真实值（manifest 占位符对应回填）。"""
-    out: dict[str, str] = {}
+    out: dict[str, str] = dict(spec._url_secrets)
     for k, v in (entry.get("env") or {}).items():
         if _looks_secret(k) and k in spec.env:
             out[k] = str(v)
@@ -153,22 +228,29 @@ def collect_secret(spec: McpSpec, entry: dict) -> dict[str, str]:
     return out
 
 
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
+
+
 def expand_placeholders(spec: McpSpec, secrets: dict[str, str]) -> tuple[McpSpec, list[str]]:
     """展开 ${VAR}：os.environ > secrets。返回 (展开后副本, 未解析变量名)。"""
     resolved, missing = dict(spec.__dict__), []
 
+    def lookup(var: str) -> str:
+        if var in os.environ:
+            return os.environ[var]
+        if var in secrets:
+            return secrets[var]
+        missing.append(var)
+        return f"${{{var}}}"
+
     def _expand(value: str) -> str:
-        if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-            var = value[2:-1]
-            if var in os.environ:
-                return os.environ[var]
-            if var in secrets:
-                return secrets[var]
-            missing.append(var)
-        return value
+        if not isinstance(value, str):
+            return value
+        return _PLACEHOLDER_RE.sub(lambda match: lookup(match.group(1)), value)
 
     resolved["env"] = {k: _expand(v) for k, v in spec.env.items()}
     resolved["headers"] = {k: _expand(v) for k, v in spec.headers.items()}
+    resolved["url"] = _expand(spec.url) if spec.url is not None else None
     return McpSpec(**resolved), missing
 
 

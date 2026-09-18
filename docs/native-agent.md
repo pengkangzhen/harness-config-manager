@@ -41,10 +41,23 @@ halter = "local/qwen-coder"
 
 Both can be overridden with `OPENAI_BASE_URL` or `ZHIPU_BASE_URL`. An unprefixed model with `OPENAI_BASE_URL` can target any OpenAI-compatible local server (vLLM, Ollama compatibility endpoints, LM Studio, llama.cpp); localhost endpoints may omit `OPENAI_API_KEY`. A request can override the default with the normal AHP `message.model.id` field (for example, `zhipu/glm-4.7`). Credentials are used only for the outbound request and are never written to AHP events or audit records.
 
+## Automatic workspace bootstrap
+
+Before each native model call, halter injects a bounded, read-only `halter_workspace_context` system message containing:
+
+- manifest excerpts (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`)
+- a README excerpt
+- the first 80 top-level entries
+- git branch/status
+- up to five recent workspace-scoped session titles
+
+The context is redacted and written to the audit log as `context.workspace`. It replaces stale bootstrap contexts from earlier turns rather than accumulating them.
+
 ## Tool surface
 
 The native provider advertises these tools through the model API:
 
+- `update_plan(steps, note?)`
 - `read_file(path, offset?, limit?)`
 - `list_dir(path, limit?)`
 - `search_files(query, path?, regex?, max_results?)`
@@ -72,15 +85,15 @@ Approved transactions are stored under `~/.config/halter/agent-transactions/<ses
 
 Project-session tools reuse halter's existing session inventory and deterministic handoff generator. They list/read only sessions already associated with the selected workspace; transcripts are fetched on demand and pass through the same redaction pipeline.
 
-`delegate_harness` runs Claude Code, Codex, ZCode, or OpenCode in a disposable local git clone that has the workspace's current tracked diff and a bounded snapshot of untracked files applied. Halter's own config/audit state is excluded from that snapshot. The real workspace is never passed to the external process. Any diff produced in the clone is returned to the native model, which must separately request `apply_patch` and obtain user approval before the real workspace changes. The external runner always uses halter's `safe` mode and a fixed argv (never a shell string). When one model response requests several read-only or delegate tools, halter executes them concurrently; any write/test approval forces that batch sequential to prevent patch and test conflicts.
+`delegate_harness` runs Claude Code, Codex, ZCode, or OpenCode in a disposable local git clone that has the workspace's current tracked diff and a bounded snapshot of untracked files applied. Halter's own config/audit state is excluded from that snapshot. The real workspace is never passed to the external process. Any diff produced in the clone is returned to the native model, which must separately request `apply_patch` and obtain user approval before the real workspace changes. The external runner always uses halter's `safe` mode and a fixed argv (never a shell string). When one model response requests several read-only or delegate tools, halter executes them concurrently and the desktop shows their resulting diffs side by side; any write/test approval forces that batch sequential to prevent patch and test conflicts.
 
-`run_tests` accepts only fixed argv families (`pytest`, `npm test`, `cargo test`, `go test`), never a free-form shell command. Like `apply_patch`, it requires `workspace-write` mode and a user approval action.
+`run_tests` accepts only fixed argv families (`pytest`, `npm test`, `cargo test`, `go test`), never a free-form shell command. Like `apply_patch`, it requires `workspace-write` mode and a user approval action. Tests run in the same disposable git-clone sandbox used by `delegate_harness`; any files changed by the test process remain in that clone and are reported as `sandboxChanges`.
 
 In read-only mode the model API is not even shown `apply_patch` or `run_tests`; a forged tool call is returned as a permission error and the workspace/test process remains unchanged.
 
 ## Durable sessions
 
-AHP session/chat state is persisted locally under:
+Approval history is persisted as part of that chat state and rendered by the desktop. AHP session/chat state is persisted locally under:
 
 ```text
 ~/.config/halter/agent-sessions/<session-hash>/session.json
@@ -119,18 +132,19 @@ halter/toolCall
 halter/toolResult
 halter/approvalRequest
 halter/approvalResult
+halter/planChanged
 halter/rollbackResult
 chat/turnComplete | chat/error
 ```
 
-The desktop Dispatch view separates assistant output from structured tool events, renders patch/test-specific Approve/Reject and transaction rollback controls, and supports `chat/turnCancelled`. Follow-up native messages reuse the same AHP chat; after an app/host restart, the desktop lists persisted halter sessions and reconnects to the matching project chat so the model sees prior user/assistant/tool history. A later phase will separate plan, tool calls, diffs, tests, and approval requests into dedicated panels.
+The desktop Dispatch view renders the current durable plan, compares sandbox delegate diffs side by side, separates assistant output from structured tool events, renders patch/test-specific Approve/Reject controls, durable approval history, and transaction rollback controls, and supports `chat/turnCancelled`. Follow-up native messages reuse the same AHP chat; after an app/host restart, the desktop lists persisted halter sessions and reconnects to the matching project chat so the model sees prior user/assistant/tool history. A later phase will separate plan, tool calls, diffs, tests, and approval requests into dedicated panels.
 
 ## Current limits and next milestones
 
 - Native model/tool history survives host restart through the private session store; a turn active at crash/shutdown time is marked `HostInterrupted` instead of being resumed.
 - Native OpenAI-compatible model calls stream SSE deltas directly into AHP `chat/delta`; a JSON response fallback is also accepted.
 - The implemented permission modes are `read-only` and approval-gated `workspace-write`. `shell-allowlist` and `full` remain intentionally unimplemented.
-- `run_tests` is approval-gated and limited to fixed test commands; a general guarded `run_command` is still intentionally not exposed.
+- `run_tests` is approval-gated, limited to fixed test commands, and executes in a disposable clone; a general guarded `run_command` is still intentionally not exposed.
 - `apply_patch` supports explicit per-transaction rollback through a fixed reverse-patch operation; rollback refuses transactions from another workspace or non-applied state.
 - `delegate_harness` copies at most 5,000 untracked files / 200 MiB into the disposable clone and reports skipped paths in the tool result.
 - Direct external-harness adapters remain black-box processes; halter audits their invocation/output but cannot mediate their internal permission prompts through the current CLI adapters.
