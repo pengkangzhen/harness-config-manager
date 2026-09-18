@@ -27,6 +27,12 @@ from typing import Any, Awaitable, Callable, Protocol
 import aiohttp
 
 from .config import HalterConfig
+from .mcp_bridge import (
+    McpToolDescriptor,
+    call_mcp_tool,
+    list_mcp_tools,
+    mcp_allowlists,
+)
 from .model_health import is_local_base_url, resolve_route
 from .patch_compare import compare_provider_diffs
 from .runner import RUNNERS
@@ -43,7 +49,10 @@ SYSTEM_PROMPT = (
     "steps, and state uncertainty. Use project session tools to recall prior "
     "workspace history, and delegate_harness for an independent "
     "external-agent review in a disposable clone, then apply only approved "
-    "unified diffs to the real workspace. Workspace writes are available only as "
+    "unified diffs to the real workspace. Declared MCP tools appear as "
+    "mcp_<server>_<tool>; read-only ones are directly callable while "
+    "state-changing ones require explicit user approval. "
+    "Workspace writes are available only as "
     "unified diffs and require explicit user approval. Run tests in the "
     "disposable sandbox with run_tests first; only after sandbox tests pass and "
     "the user explicitly needs a final confirmation may you request "
@@ -1346,6 +1355,7 @@ class AgentRuntime:
         home: Path | None = None,
         max_iterations: int = MAX_ITERATIONS,
         request_approval: ApprovalCallback | None = None,
+        config: HalterConfig | None = None,
     ) -> None:
         self.workspace = workspace.expanduser().resolve(strict=True)
         self.model = model_client
@@ -1354,6 +1364,7 @@ class AgentRuntime:
         self.audit = AuditLog(session_channel, home=home)
         self.max_iterations = max_iterations
         self.request_approval = request_approval
+        self.config = config or HalterConfig()
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         # plan step id -> title, plus step id -> linked evidence collected
         # during this runtime's turns.  Both survive across run() calls so
@@ -1363,6 +1374,32 @@ class AgentRuntime:
         # provider -> latest delegate diff of the current run(); feeds the
         # deterministic multi-harness comparison attached to tool results.
         self._turn_delegate_diffs: dict[str, str] = {}
+        # Declared MCP tools discovered on the first run of this runtime.
+        self.mcp_tools: dict[str, McpToolDescriptor] = {}
+        self._mcp_loaded = False
+
+    async def _load_mcp_tools(self) -> list[McpToolDescriptor]:
+        """Discover declared MCP tools once; broken servers yield nothing."""
+        if self._mcp_loaded:
+            return list(self.mcp_tools.values())
+        self._mcp_loaded = True
+        try:
+            descriptors = await list_mcp_tools()
+        except Exception:
+            descriptors = []
+        self.mcp_tools = {descriptor.name: descriptor for descriptor in descriptors}
+        return list(self.mcp_tools.values())
+
+    def _mcp_tool_schemas(self, permission_mode: str) -> list[dict[str, Any]]:
+        read_allow, write_allow = mcp_allowlists(self.config)
+        schemas: list[dict[str, Any]] = []
+        for descriptor in self.mcp_tools.values():
+            if descriptor.read_only:
+                if read_allow is None or descriptor.name in read_allow:
+                    schemas.append(descriptor.schema)
+            elif permission_mode == "workspace-write" and descriptor.name in write_allow:
+                schemas.append(descriptor.schema)
+        return schemas
 
     async def _emit(self, emit: EventCallback | None, event: AgentEvent) -> None:
         if emit is not None:
@@ -1427,7 +1464,16 @@ class AgentRuntime:
         emit: EventCallback | None,
     ) -> dict[str, Any]:
         plan_step_id = self._plan_step_id(call)
-        if call.name in WRITE_TOOL_NAMES:
+        descriptor = self.mcp_tools.get(call.name)
+        mcp_arguments = {
+            key: value for key, value in call.arguments.items()
+            if key != "plan_step_id"
+        }
+        needs_approval = (
+            call.name in WRITE_TOOL_NAMES
+            or (descriptor is not None and not descriptor.read_only)
+        )
+        if needs_approval:
             if permission_mode != "workspace-write":
                 raise PermissionError(
                     f"tool {call.name} requires workspace-write mode; current mode is {permission_mode}"
@@ -1442,9 +1488,14 @@ class AgentRuntime:
                 "planStepId": plan_step_id,
                 "summary": str(call.arguments.get("summary") or ""),
                 "input": (
-                    {"patch": str(call.arguments.get("patch") or "")}
-                    if call.name == "apply_patch"
-                    else {"arguments": dict(call.arguments)}
+                    {"server": descriptor.server, "tool": descriptor.tool,
+                     "arguments": dict(mcp_arguments)}
+                    if descriptor is not None else
+                    (
+                        {"patch": str(call.arguments.get("patch") or "")}
+                        if call.name == "apply_patch"
+                        else {"arguments": dict(call.arguments)}
+                    )
                 ),
             }
             await self.audit.append("approval.requested", **approval_request)
@@ -1470,6 +1521,10 @@ class AgentRuntime:
                 "note": validated["note"],
             })
             return validated
+        if descriptor is not None:
+            return await call_mcp_tool(
+                descriptor.server, descriptor.tool, mcp_arguments,
+            )
         output = await self.tools.execute(call, plan_step_id=plan_step_id)
         transaction_id = output.get("transactionId") if isinstance(output, dict) else None
         if transaction_id:
@@ -1502,6 +1557,11 @@ class AgentRuntime:
             {"role": "user", "content": prompt},
         ]
         available_tools = tools_for_permission(permission_mode)
+        mcp_descriptors = await self._load_mcp_tools()
+        if mcp_descriptors:
+            available_tools = [
+                *available_tools, *self._mcp_tool_schemas(permission_mode),
+            ]
         if dropped_turns:
             await self.audit.append(
                 "context.compacted", droppedTurns=dropped_turns,

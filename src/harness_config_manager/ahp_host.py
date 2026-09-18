@@ -893,6 +893,7 @@ class AhpHost:
                 model_client=self._model_client_factory(),
                 session_channel=chat.session.uri,
                 request_approval=request_approval,
+                config=self._cfg,
             )
             result = await runtime.run(
                 prompt,

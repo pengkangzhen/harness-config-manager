@@ -1,9 +1,11 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；Milestone 1-5 已完成（evidence-linked plan
+基线状态：`a98f1ff` 时 `141 passed`；Milestone 1-6 已完成（evidence-linked plan
 `00438b4`、patch comparison `8322aa3`、provider health `c6beb26`、audit search
-`0ef963e`、real-workspace final verification），全量 `175 passed`。
+`0ef963e`、real-workspace final verification `e732df5`、native MCP tool bridge），
+全量 `181 passed`。仅剩 Milestone 7（desktop e2e 与 release hardening，需要
+Rust/浏览器工具链，当前机器没有 cargo）。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -86,6 +88,9 @@ read_project_session
 delegate_harness
 apply_patch
 run_tests
+run_tests_workspace
+mcp_<server>_<tool>   （declared stdio MCP servers；read-only 默认可用，
+                       state-changing 需 [native_agent.mcp] write allowlist + 审批）
 ```
 
 权限模式：
@@ -619,9 +624,11 @@ search` CLI、UI 事件过滤与列表过滤；plan evidence deep link 在 M1 �
 已在 Milestone 5 落地：`run_tests_workspace` 工具 + 二次审批 + workspace-tests
 事务 + UI sandbox/workspace 执行环境标识。
 
-### 缺口 F：MCP tools 尚未接入 native tool loop
+### 缺口 F：MCP tools 尚未接入 native tool loop ✅ 已完成（Milestone 6）
 
-halter 已能管理 MCP 配置，但原生 Agent 还不能把 MCP server tools 作为受控工具调用。
+已在 Milestone 6 落地：declared stdio MCP servers 的工具以 `mcp_<server>_<tool>`
+进入 native tool loop；read-only 默认可用，state-changing 需逐工具 allowlist
+并走统一审批。HTTP/SSE transport 暂未接入（stdio only）。
 
 ### 缺口 G：桌面端自动化验证不足
 
@@ -766,41 +773,35 @@ cargo check
 - [x] 真实执行结果入 audit（approval.requested/response + tool.call/result）
 - [x] UI 明确标识 sandbox vs workspace（事件面板环境徽标）
 
-## Milestone 6 — Native MCP tool bridge
+## Milestone 6 — Native MCP tool bridge ✅ 已完成
 
-目标：把 halter 已管理的 MCP servers 挂进 native tool loop。
+实现说明：
 
-分两阶段：
-
-### Phase 1 read-only MCP
-
-- 只允许 declared read-only tools
-- tool name 前缀：
-
-```text
-mcp_<server>_<tool>
-```
-
-- 参数 schema 转换
-- timeout
-- output truncation
-- audit
-- permission mode
-
-### Phase 2 state-changing MCP
-
-- 需要 approval
-- approval request 展示 server / tool / arguments
-- 禁止 secret 输出
-- 每个工具单独 allowlist
+1. `src/harness_config_manager/mcp_bridge.py`：stdio JSON-RPC 客户端
+   （newline-delimited；initialize → notifications/initialized →
+   tools/list / tools/call）。每次调用启动一次性 server 进程，
+   `start_new_session` + terminate/kill 清理，超时可配
+   （list 15s / call 60s）；server crash 只导致该 server 无工具或该次
+   调用报错，不影响 AHP host 与 turn
+2. 工具命名 `mcp_<server>_<tool>`（标识符清洗）；MCP `inputSchema` 直接
+   作为 OpenAI function parameters；`annotations.readOnlyHint` 决定权限档
+3. Phase 1（read-only）：declared read-only 工具默认进入 tools schema
+   （两种权限模式都可），`[native_agent.mcp] read` 可收紧 allowlist
+4. Phase 2（state-changing）：`[native_agent.mcp] write` 逐工具显式
+   opt-in（缺省/空 = 全部禁止），且仅 workspace-write 模式进 schema；
+   执行走统一 approval 流，approval request 展示 server / tool /
+   arguments（`plan_step_id` 不透传给 server）
+5. 结果（content text / structuredContent）截断后进入通用 tool
+   result / audit 流；`${VAR}` secret 只展开进子进程 env，不进事件
+6. HTTP/SSE transport 的 server 被跳过（Phase 范围外）
 
 验收标准：
 
-- [ ] MCP tool schema 可进入 model API
-- [ ] MCP result 进入同一 tool event / audit 流
-- [ ] read-only 与 write 权限分明
-- [ ] secrets redacted
-- [ ] MCP server crash 不影响 AHP host
+- [x] MCP tool schema 可进入 model API（`test_read_only_mcp_tool_enters_tool_loop_and_audit`）
+- [x] MCP result 进入同一 tool event / audit 流（audit tool.call/tool.result 断言）
+- [x] read-only 与 write 权限分明（read 默认可用；write 三重门：allowlist + workspace-write + approval）
+- [x] secrets redacted（env 只进子进程；audit 全量 redact 兜底）
+- [x] MCP server crash 不影响 AHP host（`test_list_mcp_tools_skips_crashed_servers`）
 
 ## Milestone 7 — Desktop e2e and release hardening
 
@@ -881,24 +882,19 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-Milestone 1-5 已完成。剩余 Milestone 6（Native MCP tool bridge）与
-Milestone 7（desktop e2e and release hardening）。
-
-下一个最小但高价值的 PR：
+Milestone 1-6 已完成。仅剩 Milestone 7（desktop e2e and release hardening）：
 
 ```text
-feat: native MCP tool bridge (read-only phase 1)
+feat: desktop e2e and release hardening
 ```
 
-即 Milestone 6 Phase 1（declared read-only MCP tools 进入 native tool loop）。
-Milestone 7 依赖 Rust/浏览器工具链（当前机器无 cargo），建议在具备工具链的
-环境再做。
+内容：Playwright 静态 UI 测试、Tauri smoke、AHP auth 负面测试、sidecar
+版本契约检查、release 构建校验 bundled sidecar 与源码一致、UI 状态机测试。
 
-不要在同 PR 里同时做：
-
-- state-changing MCP（Phase 2 单独做）
-
-否则风险和 review 面都会过大。
+⚠️ 前置条件：需要 Rust 工具链（cargo）与浏览器/Playwright 环境；当前开发机
+两者皆无（`cargo: command not found`）。请在具备工具链的环境执行，
+本机已完成的 Node/Python 侧验证为 `node --check` 与 `uv run pytest -q`
+（181 passed）。
 
 ---
 
