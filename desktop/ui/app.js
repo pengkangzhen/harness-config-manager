@@ -21,9 +21,57 @@ function fmtDate(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function fmtTime(iso) {
+  if (!iso) return "--:--";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function showError(box, err) {
   box.textContent = typeof err === "string" ? err : JSON.stringify(err, null, 2);
   box.classList.remove("hidden");
+}
+
+/* Tool brand colors for badges / timeline dots. */
+const TOOL_COLORS = {
+  claude: "#d97757",
+  codex: "#10a37f",
+  zcode: "#a78bfa",
+  opencode: "#4cc2ff",
+  cursor: "#5ba8ff",
+  gemini: "#7bd88f",
+  vscode: "#5aa0e8",
+  "copilot-cli": "#8f9bb3",
+  continue: "#c792ea",
+};
+const toolColor = (tool) => TOOL_COLORS[tool] || "#8b96b8";
+
+/* Calendar-date key + human label (今天 / 昨天 / YYYY-MM-DD · 周X). */
+function dateKey(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return "unknown";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+
+function dateLabel(key) {
+  const today = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const yest = new Date(today);
+  yest.setDate(yest.getDate() - 1);
+  const yestKey = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
+  if (key === todayKey) return "今天";
+  if (key === yestKey) return "昨天";
+  const d = new Date(key + "T00:00:00");
+  if (!Number.isNaN(d.getTime())) {
+    return `${key} · 周${WEEKDAYS[d.getDay()]}`;
+  }
+  return key;
 }
 
 /* ---------------- view switching ---------------- */
@@ -68,7 +116,6 @@ async function loadOverview() {
 }
 
 function renderOverview(data) {
-  // doctor
   const doctor = Array.isArray(data.doctor) ? data.doctor : [];
   const issues = doctor.filter((d) => d.level !== "ok");
   const doctorSection = $("doctor-section");
@@ -86,7 +133,6 @@ function renderOverview(data) {
     doctorSection.classList.add("hidden");
   }
 
-  // tools grid
   const tools = (data.inventory || []).filter((t) => t.installed);
   $("tools-heading").textContent = `工具（${tools.length}）`;
   const grid = $("tools-grid");
@@ -101,8 +147,7 @@ function renderOverview(data) {
     const chips = el("div", "layer-chips");
     for (const [key, label] of LAYERS) {
       const n = Array.isArray(tool[key]) ? tool[key].length : 0;
-      const chip = el("span", `count-chip${n > 0 ? " on" : ""}`, `${label} ${n}`);
-      chips.append(chip);
+      chips.append(el("span", `count-chip${n > 0 ? " on" : ""}`, `${label} ${n}`));
     }
     card.append(chips);
     grid.append(card);
@@ -116,7 +161,8 @@ $("btn-refresh-scan").addEventListener("click", loadOverview);
 const state = {
   sessionsLoaded: false,
   sessions: [],
-  searchResults: null,
+  toolFilter: null,      // null = 全部
+  viewMode: "timeline",  // "timeline" | "list"
 };
 
 function currentProject() {
@@ -128,7 +174,7 @@ async function loadSessions() {
   list.replaceChildren(el("div", "loading", "读取会话…"));
   let data;
   try {
-    data = await invoke("hcm_sessions_list", { project: currentProject(), limit: 200 });
+    data = await invoke("hcm_sessions_list", { project: currentProject(), limit: 500 });
   } catch (err) {
     list.replaceChildren();
     const box = el("div", "error-box");
@@ -138,33 +184,142 @@ async function loadSessions() {
   }
   state.sessionsLoaded = true;
   state.sessions = data.sessions || [];
-  state.searchResults = null;
-  renderSessionList(state.sessions);
+  renderToolFilter();
+  renderSessions(state.sessions);
 }
 
-function renderSessionList(items) {
-  const list = $("sessions-list");
-  list.replaceChildren();
-  if (!items.length) {
-    list.append(el("div", "loading", "没有找到会话"));
+/* ---------- dimension 1: harness filter ---------- */
+
+function renderToolFilter() {
+  const box = $("tool-filter");
+  const counts = new Map();
+  for (const s of state.sessions) {
+    counts.set(s.tool, (counts.get(s.tool) || 0) + 1);
+  }
+  box.replaceChildren();
+  if (counts.size < 2) {
+    box.classList.add("hidden");
     return;
   }
-  for (const s of items) {
-    const item = el("div", "session-item");
-    item.dataset.ref = s.ref;
+  box.classList.remove("hidden");
 
-    const title = el("div", "session-title", s.title || s.ref);
-    const meta = el("div", "session-meta");
-    meta.append(el("span", "tool-badge", s.tool));
-    meta.append(el("span", "meta-item", fmtDate(s.updated_at)));
-    meta.append(el("span", "meta-item", `${s.message_count} 条`));
-    if (s.branch) meta.append(el("span", "meta-item", s.branch));
+  const all = el("button", `filter-chip${state.toolFilter === null ? " active" : ""}`, `全部 ${state.sessions.length}`);
+  all.addEventListener("click", () => {
+    state.toolFilter = null;
+    renderToolFilter();
+    renderSessions(state.sessions);
+  });
+  box.append(all);
 
-    item.append(title, meta);
-    item.addEventListener("click", () => selectSession(s, item));
-    list.append(item);
+  for (const [tool, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+    const chip = el("button", `filter-chip${state.toolFilter === tool ? " active" : ""}`);
+    const dot = el("span", "filter-dot");
+    dot.style.backgroundColor = toolColor(tool);
+    chip.append(dot, el("span", "", tool), el("span", "filter-count", String(n)));
+    chip.addEventListener("click", () => {
+      state.toolFilter = state.toolFilter === tool ? null : tool;
+      renderToolFilter();
+      renderSessions(state.sessions);
+    });
+    box.append(chip);
   }
 }
+
+function applyToolFilter(items) {
+  return state.toolFilter ? items.filter((s) => s.tool === state.toolFilter) : items;
+}
+
+/* ---------- dimension 2: timeline / list views ---------- */
+
+function renderSessions(items) {
+  const filtered = applyToolFilter(items);
+  $("session-count").textContent = `${filtered.length} / ${items.length} 个会话`;
+  if (state.viewMode === "timeline") renderTimeline(filtered);
+  else renderFlatList(filtered);
+}
+
+function sessionCard(s, opts = {}) {
+  const item = el("div", "session-item");
+  if (opts.timeline) item.classList.add("tl-card");
+
+  const title = el("div", "session-title", s.title || s.ref);
+  const meta = el("div", "session-meta");
+  const badge = el("span", "tool-badge", s.tool);
+  badge.style.color = toolColor(s.tool);
+  badge.style.borderColor = `${toolColor(s.tool)}55`;
+  meta.append(badge);
+  if (opts.timePrefix) meta.append(el("span", "meta-item", opts.timePrefix));
+  meta.append(el("span", "meta-item", opts.dateText || fmtDate(s.updated_at)));
+  meta.append(el("span", "meta-item", `${s.message_count} 条`));
+  if (s.branch) meta.append(el("span", "meta-item", `⑂ ${s.branch}`));
+
+  item.append(title, meta);
+  item.addEventListener("click", () => selectSession(s, item));
+  return item;
+}
+
+function renderFlatList(items) {
+  const list = $("sessions-list");
+  list.className = "sessions-list";
+  list.replaceChildren();
+  if (!items.length) {
+    list.append(el("div", "loading", state.toolFilter ? `${state.toolFilter} 没有会话` : "没有找到会话"));
+    return;
+  }
+  for (const s of items) list.append(sessionCard(s));
+}
+
+function renderTimeline(items) {
+  const list = $("sessions-list");
+  list.className = "sessions-list timeline";
+  list.replaceChildren();
+  if (!items.length) {
+    list.append(el("div", "loading", state.toolFilter ? `${state.toolFilter} 没有会话` : "没有找到会话"));
+    return;
+  }
+
+  // group by calendar date (sessions are already sorted newest-first)
+  const groups = [];
+  const byKey = new Map();
+  for (const s of items) {
+    const key = dateKey(s.updated_at || s.started_at);
+    if (!byKey.has(key)) {
+      byKey.set(key, []);
+      groups.push(key);
+    }
+    byKey.get(key).push(s);
+  }
+
+  const tl = el("div", "timeline");
+  for (const key of groups) {
+    const group = el("div", "tl-group");
+    group.append(el("div", "tl-date", dateLabel(key)));
+    for (const s of byKey.get(key)) {
+      const entry = el("div", "tl-item");
+      const dot = el("span", "tl-dot");
+      dot.style.backgroundColor = toolColor(s.tool);
+      entry.append(dot);
+      entry.append(sessionCard(s, { timeline: true, timePrefix: fmtTime(s.updated_at), dateText: dateLabel(key) }));
+      group.append(entry);
+    }
+    tl.append(group);
+  }
+  list.append(tl);
+}
+
+/* ---------- view mode toggle ---------- */
+
+function setViewMode(mode) {
+  state.viewMode = mode;
+  $("btn-view-list").classList.toggle("active", mode === "list");
+  $("btn-view-timeline").classList.toggle("active", mode === "timeline");
+  renderSessions(state.sessions);
+}
+
+$("btn-view-list").addEventListener("click", () => setViewMode("list"));
+$("btn-view-timeline").addEventListener("click", () => setViewMode("timeline"));
+
+/* ---------- session detail ---------- */
 
 async function selectSession(session, itemEl) {
   document.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
@@ -208,7 +363,10 @@ function renderSessionDetail(data) {
   const header = el("div", "detail-header");
   header.append(el("div", "detail-title", s.title || s.ref));
   const badges = el("div", "session-meta");
-  badges.append(el("span", "tool-badge", s.tool));
+  const badge = el("span", "tool-badge", s.tool);
+  badge.style.color = toolColor(s.tool);
+  badge.style.borderColor = `${toolColor(s.tool)}55`;
+  badges.append(badge);
   if (s.model) badges.append(el("span", "meta-item", s.model));
   if (s.branch) badges.append(el("span", "meta-item", `⑂ ${s.branch}`));
   header.append(badges);
@@ -221,7 +379,6 @@ function renderSessionDetail(data) {
   grid.append(metaCell("后端", s.backend));
   detail.append(grid);
 
-  // handoff actions
   const actions = el("div", "detail-actions");
   const handoffBtn = el("button", "btn", "生成交接上下文");
   handoffBtn.addEventListener("click", async () => {
@@ -255,7 +412,6 @@ function renderSessionDetail(data) {
   actions.append(handoffBtn);
   detail.append(actions);
 
-  // transcript — parse "## STAMP ROLE" headers into styled spans (DOM APIs only, no innerHTML)
   detail.append(el("h2", "", "最近对话"));
   const transcript = el("div", "transcript");
   const text = data.transcript || "（无 transcript）";
@@ -288,7 +444,7 @@ $("project-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") loadSessions();
 });
 
-/* session search */
+/* ---------- session search (respects active harness filter) ---------- */
 
 async function runSearch() {
   const query = $("search-input").value.trim();
@@ -309,19 +465,28 @@ async function runSearch() {
     list.append(box);
     return;
   }
-  const items = (data.hits || []).map((h) => h.session);
+  const allHits = data.hits || [];
+  const hits = applyToolFilter(allHits);
+  $("session-count").textContent = `搜索“${query}”：${hits.length} / ${allHits.length} 条`;
+  list.className = "sessions-list";
   list.replaceChildren();
-  if (!items.length) {
+  if (!hits.length) {
     list.append(el("div", "loading", `没有匹配“${query}”的会话`));
     return;
   }
-  for (let i = 0; i < items.length; i++) {
-    const s = items[i];
-    const hit = data.hits[i];
+  for (let i = 0; i < hits.length; i++) {
+    const s = hits[i].session;
+    const hit = hits[i];
     const item = el("div", "session-item");
     item.append(el("div", "session-title", s.title || s.ref));
+    const badge = el("span", "tool-badge", s.tool);
+    badge.style.color = toolColor(s.tool);
+    badge.style.borderColor = `${toolColor(s.tool)}55`;
+    const meta = el("div", "session-meta");
+    meta.append(badge, el("span", "meta-item", fmtDate(s.updated_at)));
+    item.append(meta);
     const snippet = el("div", "meta-item");
-    snippet.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    snippet.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);margin-top:4px;";
     snippet.textContent = (hit.snippet || "").replace(/\s+/g, " ");
     item.append(snippet);
     item.addEventListener("click", () => selectSession(s, item));
@@ -367,7 +532,6 @@ async function runSync(apply) {
   }
 }
 
-/* Two-step confirmation for the destructive apply action. */
 let applyArmed = false;
 let applyTimer = null;
 
