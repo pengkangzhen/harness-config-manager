@@ -129,6 +129,11 @@ class AgentSessionStore:
                         agent_messages=list(raw_chat.get("agentMessages") or []),
                         current_plan=raw_chat.get("currentPlan") or None,
                         approval_history=list(raw_chat.get("approvalHistory") or []),
+                        plan_evidence=(
+                            raw_chat.get("planEvidence")
+                            if isinstance(raw_chat.get("planEvidence"), dict)
+                            else {}
+                        ),
                         modified_at=str(raw_chat.get("modifiedAt") or ""),
                     )
                     if chat.status == 8:
@@ -152,4 +157,5 @@ class AgentSessionStore:
             "agentMessages": chat.agent_messages,
             "currentPlan": chat.current_plan,
             "approvalHistory": chat.approval_history,
+            "planEvidence": chat.plan_evidence,
         }

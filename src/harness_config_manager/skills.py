@@ -141,13 +141,17 @@ class SyncAction:
 
 def dirs_equal(a: Path, b: Path) -> bool:
     cmp = filecmp.dircmp(a, b)
-    equal = True
-    if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
+    if cmp.left_only or cmp.right_only or cmp.funny_files:
         return False
+    # dircmp 的 diff_files 是 stat 签名（shallow）比较：同长度、同秒写入的
+    # 不同内容会被误判为相同，必须逐文件比对字节。
+    for name in cmp.common_files:
+        if not filecmp.cmp(a / name, b / name, shallow=False):
+            return False
     for sub in cmp.common_dirs:
         if not dirs_equal(a / sub, b / sub):
             return False
-    return equal
+    return True
 
 
 def backup_dir() -> Path:

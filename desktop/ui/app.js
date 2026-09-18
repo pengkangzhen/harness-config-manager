@@ -102,6 +102,7 @@ const state = {
   auditLoaded: false,
   auditItems: [],
   selectedAudit: null,
+  auditJump: null,
   dispatchLoaded: false,
   dispatchModels: {},      // harness -> 默认模型（config.toml [models]）
   dispatchCatalog: {},     // harness -> 可选模型列表（[model_catalog] 或内置 GLM 系）
@@ -1226,6 +1227,11 @@ function renderAuditDetail(data) {
   const events = el("div", "audit-events");
   for (const event of data.events || []) {
     const item = el("div", `audit-event ${auditKindTone(event.kind)}`);
+    item.dataset.eventId = String(event.id ?? "");
+    const txnId = event.result && typeof event.result === "object"
+      ? String(event.result.transactionId ?? "")
+      : "";
+    if (txnId) item.dataset.transactionId = txnId;
     const head = el("div", "audit-event-head");
     head.append(el("span", "audit-event-kind", event.kind || "-"));
     head.append(el("span", "audit-event-time", event.ts || "-"));
@@ -1239,6 +1245,28 @@ function renderAuditDetail(data) {
     events.append(item);
   }
   detail.append(events);
+
+  // Plan-evidence deep link: highlight and scroll to the target event.
+  const jump = state.auditJump;
+  state.auditJump = null;
+  if (jump && jump.sessionId === summary.session_id) {
+    const matched = [...events.querySelectorAll(".audit-event")].filter((node) =>
+      node.dataset.eventId === jump.matchId || node.dataset.transactionId === jump.matchId);
+    matched.forEach((node) => node.classList.add("jump"));
+    if (matched.length) matched[0].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+async function jumpToAuditEvidence(sessionId, matchId) {
+  if (!sessionId || !matchId) return;
+  state.auditJump = { sessionId, matchId: String(matchId) };
+  $("audit-kind-input").value = "";
+  const nav = document.querySelector('.nav-item[data-view="audit"]');
+  if (nav && !nav.classList.contains("active")) nav.click();
+  await loadAuditView();
+  const item = (state.auditItems || []).find((x) => x.session_id === sessionId)
+    || { session_id: sessionId };
+  await selectAudit(item);
 }
 
 $("btn-refresh-audit").addEventListener("click", () => {
@@ -1510,18 +1538,49 @@ function updateApprovalHistory(entry, record) {
   entry.approvalPanel.append(list);
 }
 
+function planEvidenceBadge(evidence) {
+  if (!evidence) return "";
+  const tools = (evidence.toolCallIds || []).length;
+  const approvals = (evidence.approvalIds || []).length;
+  const txns = (evidence.transactionIds || []).length;
+  if (!tools && !approvals && !txns) return "";
+  return `证据 ${tools + approvals + txns}（工具 ${tools} / 审批 ${approvals} / 事务 ${txns}）`;
+}
+
+function renderPlanEvidenceItem(entry, kind, item) {
+  const row = el("div", "dispatch-plan-evidence-item");
+  const kindLabel = { tool: "工具", approval: "审批", txn: "事务" }[kind] || kind;
+  row.append(el("span", `dispatch-plan-evidence-kind ${kind}`, kindLabel));
+  const label = kind === "tool"
+    ? `${item.name || "-"} · ${item.id || "-"}`
+    : kind === "approval"
+      ? `${item.tool || "-"} · ${item.approved === true ? "已批准" : item.approved === false ? "已拒绝" : "待审批"}`
+      : (item.id || "-");
+  row.append(el("span", "dispatch-plan-evidence-label", label));
+  if (item.ts) row.append(el("span", "dispatch-plan-evidence-time", new Date(item.ts).toLocaleTimeString()));
+  const link = el("button", "dispatch-plan-evidence-link", "审计");
+  link.type = "button";
+  link.addEventListener("click", () => jumpToAuditEvidence(entry.auditSessionId, item.id));
+  row.append(link);
+  return row;
+}
+
 function renderDispatchPlan(entry, plan) {
   if (!entry.plan) return;
+  if (plan) entry.currentPlan = plan;
   entry.plan.replaceChildren();
-  if (!plan || !(plan.steps || []).length) {
+  const current = entry.currentPlan;
+  if (!current || !(current.steps || []).length) {
     entry.plan.classList.add("empty");
     entry.plan.append(el("div", "dispatch-plan-empty", "尚无结构化计划"));
     return;
   }
   entry.plan.classList.remove("empty");
-  if (plan.note) entry.plan.append(el("div", "dispatch-plan-note", plan.note));
+  if (current.note) entry.plan.append(el("div", "dispatch-plan-note", current.note));
   const list = el("div", "dispatch-plan-list");
-  for (const step of plan.steps) {
+  for (const step of current.steps) {
+    const evidence = (entry.planEvidence || {})[step.id];
+    const badge = planEvidenceBadge(evidence);
     const item = el("div", `dispatch-plan-item ${step.status || "pending"}`);
     item.append(el("span", "dispatch-plan-marker", {
       pending: "○", in_progress: "◐", done: "●", blocked: "✕",
@@ -1529,6 +1588,25 @@ function renderDispatchPlan(entry, plan) {
     const body = el("div", "dispatch-plan-body");
     body.append(el("div", "dispatch-plan-title", step.title || "-"));
     if (step.detail) body.append(el("div", "dispatch-plan-detail", step.detail));
+    if (badge) {
+      const expanded = entry.expandedSteps?.has(step.id) || false;
+      const toggle = el("button", `dispatch-plan-evidence-toggle${expanded ? " open" : ""}`, `${expanded ? "▾" : "▸"} ${badge}`);
+      toggle.type = "button";
+      toggle.addEventListener("click", () => {
+        if (!entry.expandedSteps) entry.expandedSteps = new Set();
+        if (entry.expandedSteps.has(step.id)) entry.expandedSteps.delete(step.id);
+        else entry.expandedSteps.add(step.id);
+        renderDispatchPlan(entry);
+      });
+      body.append(toggle);
+      if (expanded) {
+        const evidenceList = el("div", "dispatch-plan-evidence-list");
+        for (const tool of evidence.toolCallIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "tool", tool));
+        for (const approval of evidence.approvalIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "approval", approval));
+        for (const txn of evidence.transactionIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "txn", txn));
+        body.append(evidenceList);
+      }
+    }
     item.append(body);
     list.append(item);
   }
@@ -1634,6 +1712,9 @@ function ahpApplyAction(st, params) {
     ahpFinishCard(entry, "done");
   } else if (a.type === "halter/planChanged") {
     renderDispatchPlan(entry, a.plan || {});
+  } else if (a.type === "halter/planEvidence") {
+    entry.planEvidence = a.evidence || {};
+    renderDispatchPlan(entry);
   } else if (a.type === "halter/approvalRequest") {
     const approval = a.approval || {};
     updateApprovalHistory(entry, {
@@ -1769,6 +1850,8 @@ async function restoreNativeChat(st, project) {
       restored: true,
       currentPlan: chatState.currentPlan || null,
       approvalHistory: chatState.approvalHistory || [],
+      planEvidence: chatState.planEvidence || {},
+      auditSessionId: chatState.auditSessionId || null,
     };
   } catch {
     return undefined;
@@ -1798,8 +1881,11 @@ async function dispatchViaAhp(targets, prompt, project, mode) {
         workingDirectories: [project.startsWith("/") ? "file://" + project : project],
       });
       await ahpRequest(st, "createChat", { channel: sessionUri, chat: chatUri });
-      await ahpRequest(st, "subscribe", { channel: chatUri });
-      channels = { sessionUri, chatUri };
+      const subscribed = await ahpRequest(st, "subscribe", { channel: chatUri });
+      channels = {
+        sessionUri, chatUri,
+        auditSessionId: ((subscribed.snapshot || {}).state || {}).auditSessionId || null,
+      };
       if (provider === "halter") st.nativeChats.set(chatKey, channels);
     }
     const { chatUri } = channels;
@@ -1808,6 +1894,8 @@ async function dispatchViaAhp(targets, prompt, project, mode) {
       tool: provider, model, prompt, project, mode: effectiveMode,
     });
     card.channel = chatUri;
+    card.auditSessionId = channels.auditSessionId || null;
+    card.planEvidence = channels.planEvidence || {};
     if (channels.currentPlan) renderDispatchPlan(card, channels.currentPlan);
     for (const record of channels.approvalHistory || []) updateApprovalHistory(card, record);
     st.cards.set(chatUri, card);

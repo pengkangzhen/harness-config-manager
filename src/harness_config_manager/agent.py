@@ -34,7 +34,11 @@ from .sessions import build_context, redact_text, scan_sessions
 SYSTEM_PROMPT = (
     "You are halter, a careful local coding agent. Work only with the supplied "
     "workspace. Start multi-step work by calling update_plan, update the plan as "
-    "state changes, and inspect files before making claims. Prefer small verifiable "
+    "state changes, and inspect files before making claims. Give every plan step "
+    "a stable id and reuse it when the step survives a later update; when a tool "
+    "call belongs to one plan step, pass plan_step_id in the tool arguments so "
+    "the resulting evidence (tool call, approval, transaction) links back to it. "
+    "Prefer small verifiable "
     "steps, and state uncertainty. Use project session tools to recall prior "
     "workspace history, and delegate_harness for an independent "
     "external-agent review in a disposable clone, then apply only approved "
@@ -52,6 +56,7 @@ MAX_HISTORY_TURNS = 12
 MAX_HISTORY_CHARS = 100_000
 WRITE_TOOL_NAMES = {"apply_patch", "run_tests"}
 PLAN_STATUSES = {"pending", "in_progress", "done", "blocked"}
+PLAN_STEP_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}")
 TEST_COMMANDS = {
     "pytest": ["pytest"],
     "npm-test": ["npm", "test", "--silent"],
@@ -75,6 +80,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "items": {
                             "type": "object",
                             "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9._-]{1,64}$",
+                                    "description": "Stable step identifier; reuse it when the step survives a later plan update.",
+                                },
                                 "title": {"type": "string", "minLength": 1},
                                 "status": {"type": "string", "enum": ["pending", "in_progress", "done", "blocked"]},
                                 "detail": {"type": "string"},
@@ -275,6 +285,7 @@ class AgentResult:
     messages: list[dict[str, Any]]
     iterations: int
     tool_calls: int
+    plan_evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 AgentEvent = dict[str, Any]
@@ -400,11 +411,24 @@ class WorkspaceTools:
             raise PermissionError(f"path escapes workspace: {raw}") from exc
         return resolved
 
-    async def update_plan(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def update_plan(
+        self, args: dict[str, Any], known_steps: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Validate a full plan replacement and keep step ids stable.
+
+        Step id precedence: the model-provided id, then the id of a known step
+        with the same title, then a fresh generated id.  This keeps ids stable
+        across updates even when the model omits them, while still allowing
+        reordering and retitling.
+        """
         raw_steps = args.get("steps")
         if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= 20:
             raise ValueError("plan steps must contain between 1 and 20 items")
+        known_by_title: dict[str, str] = {}
+        for step_id, title in (known_steps or {}).items():
+            known_by_title.setdefault(title, step_id)
         steps: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
         for index, raw in enumerate(raw_steps):
             if not isinstance(raw, dict):
                 raise ValueError(f"plan step {index + 1} must be an object")
@@ -414,7 +438,15 @@ class WorkspaceTools:
                 raise ValueError(f"plan step {index + 1} has an invalid title")
             if status not in PLAN_STATUSES:
                 raise ValueError(f"plan step {index + 1} has invalid status: {status}")
+            raw_id = str(raw.get("id") or "").strip()
+            if raw_id and not PLAN_STEP_ID_PATTERN.fullmatch(raw_id):
+                raise ValueError(f"plan step {index + 1} has an invalid id: {raw_id}")
+            step_id = raw_id or known_by_title.get(title) or f"step-{uuid.uuid4().hex[:8]}"
+            if step_id in seen_ids:
+                raise ValueError(f"plan step {index + 1} reuses id {step_id!r}")
+            seen_ids.add(step_id)
             steps.append({
+                "id": step_id,
                 "title": title[:200],
                 "status": status,
                 "detail": _truncate_text(str(raw.get("detail") or ""), 1000),
@@ -829,7 +861,9 @@ class WorkspaceTools:
             "snapshot": snapshot,
         }
 
-    async def apply_patch(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def apply_patch(
+        self, args: dict[str, Any], plan_step_id: str | None = None
+    ) -> dict[str, Any]:
         patch = str(args.get("patch") or "")
         if not patch.strip():
             raise ValueError("patch must not be empty")
@@ -851,6 +885,8 @@ class WorkspaceTools:
                 "before": {"status": before_status, "diff": before_diff},
                 "state": "pending",
             }
+            if plan_step_id:
+                transaction["planStepId"] = plan_step_id
             transaction_path = TransactionStore(self.transaction_root).save(transaction)
 
         def _run() -> subprocess.CompletedProcess[str]:
@@ -886,7 +922,7 @@ class WorkspaceTools:
                 },
             })
             transaction_path = TransactionStore(self.transaction_root or self.workspace).save(transaction)
-        return {
+        result = {
             "applied": True,
             "summary": str(args.get("summary") or ""),
             "transactionId": transaction_id,
@@ -900,6 +936,9 @@ class WorkspaceTools:
                 "requiresReview": True,
             },
         }
+        if plan_step_id:
+            result["planStepId"] = plan_step_id
+        return result
 
     async def _git(self, *argv: str) -> dict[str, Any]:
         def _run() -> subprocess.CompletedProcess[str]:
@@ -928,9 +967,19 @@ class WorkspaceTools:
             argv.append(str(self.resolve_path(str(path))))
         return await self._git(*argv)
 
-    async def execute(self, call: ToolCall) -> dict[str, Any]:
+    async def execute(
+        self,
+        call: ToolCall,
+        *,
+        known_steps: dict[str, str] | None = None,
+        plan_step_id: str | None = None,
+    ) -> dict[str, Any]:
         if call.name not in self.names:
             raise ValueError(f"unknown tool: {call.name}")
+        if call.name == "update_plan":
+            return await self.update_plan(call.arguments, known_steps=known_steps)
+        if call.name == "apply_patch":
+            return await self.apply_patch(call.arguments, plan_step_id=plan_step_id)
         handler = getattr(self, call.name)
         return await handler(call.arguments)
 
@@ -1187,13 +1236,6 @@ def compact_history(history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     }
     return [*prefix, summary, *sum(kept, [])], dropped
 
-    if mode == "workspace-write":
-        return TOOL_SCHEMAS
-    return [
-        schema for schema in TOOL_SCHEMAS
-        if schema["function"]["name"] not in WRITE_TOOL_NAMES
-    ]
-
 
 def tools_for_permission(mode: str) -> list[dict[str, Any]]:
     if mode == "workspace-write":
@@ -1225,10 +1267,67 @@ class AgentRuntime:
         self.max_iterations = max_iterations
         self.request_approval = request_approval
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # plan step id -> title, plus step id -> linked evidence collected
+        # during this runtime's turns.  Both survive across run() calls so
+        # follow-up turns keep linking evidence to the same steps.
+        self.plan_steps: dict[str, str] = {}
+        self.plan_evidence: dict[str, dict[str, Any]] = {}
 
     async def _emit(self, emit: EventCallback | None, event: AgentEvent) -> None:
         if emit is not None:
             await emit(event)
+
+    @staticmethod
+    def _plan_step_id(call: ToolCall) -> str | None:
+        """Read the optional plan_step_id argument from a tool call."""
+        raw = call.arguments.get("plan_step_id")
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        return value if PLAN_STEP_ID_PATTERN.fullmatch(value) else None
+
+    def _evidence_bucket(self, step_id: str) -> dict[str, Any]:
+        bucket = self.plan_evidence.get(step_id)
+        if bucket is None:
+            bucket = {
+                "toolCallIds": [],
+                "approvalIds": [],
+                "transactionIds": [],
+                "auditTimestamps": [],
+                "updatedAt": _now_iso(),
+            }
+            self.plan_evidence[step_id] = bucket
+        return bucket
+
+    def _touch_evidence(self, bucket: dict[str, Any]) -> None:
+        now = _now_iso()
+        bucket["auditTimestamps"].append(now)
+        bucket["updatedAt"] = now
+
+    def _evidence_tool_call(self, step_id: str | None, call: ToolCall) -> None:
+        if not step_id:
+            return
+        bucket = self._evidence_bucket(step_id)
+        bucket["toolCallIds"].append({"id": call.id, "name": call.name, "ts": _now_iso()})
+        self._touch_evidence(bucket)
+
+    def _evidence_approval(
+        self, step_id: str | None, approval_id: str, tool: str, approved: bool
+    ) -> None:
+        if not step_id:
+            return
+        bucket = self._evidence_bucket(step_id)
+        bucket["approvalIds"].append({
+            "id": approval_id, "tool": tool, "approved": approved, "ts": _now_iso(),
+        })
+        self._touch_evidence(bucket)
+
+    def _evidence_transaction(self, step_id: str | None, transaction_id: str) -> None:
+        if not step_id:
+            return
+        bucket = self._evidence_bucket(step_id)
+        bucket["transactionIds"].append({"id": transaction_id, "ts": _now_iso()})
+        self._touch_evidence(bucket)
 
     async def _execute_call(
         self,
@@ -1236,6 +1335,7 @@ class AgentRuntime:
         permission_mode: str,
         emit: EventCallback | None,
     ) -> dict[str, Any]:
+        plan_step_id = self._plan_step_id(call)
         if call.name in WRITE_TOOL_NAMES:
             if permission_mode != "workspace-write":
                 raise PermissionError(
@@ -1248,6 +1348,7 @@ class AgentRuntime:
                 "id": approval_id,
                 "toolCallId": call.id,
                 "tool": call.name,
+                "planStepId": plan_step_id,
                 "summary": str(call.arguments.get("summary") or ""),
                 "input": (
                     {"patch": str(call.arguments.get("patch") or "")}
@@ -1259,23 +1360,30 @@ class AgentRuntime:
             approved = await self.request_approval(approval_request)
             await self.audit.append(
                 "approval.response", id=approval_id,
-                toolCallId=call.id, approved=approved,
+                toolCallId=call.id, approved=approved, planStepId=plan_step_id,
             )
+            self._evidence_approval(plan_step_id, approval_id, call.name, approved)
             await self._emit(emit, {
                 "type": "approval_result", "id": approval_id,
                 "toolCallId": call.id, "approved": approved,
+                "planStepId": plan_step_id,
             })
             if not approved:
                 raise PermissionError("user denied the tool request")
         if call.name == "update_plan":
-            validated = await self.tools.execute(call)
+            validated = await self.tools.execute(call, known_steps=self.plan_steps)
+            self.plan_steps = {step["id"]: step["title"] for step in validated["steps"]}
             await self._emit(emit, {
                 "type": "plan_updated",
                 "steps": validated["steps"],
                 "note": validated["note"],
             })
             return validated
-        return await self.tools.execute(call)
+        output = await self.tools.execute(call, plan_step_id=plan_step_id)
+        transaction_id = output.get("transactionId") if isinstance(output, dict) else None
+        if transaction_id:
+            self._evidence_transaction(plan_step_id, str(transaction_id))
+        return output
 
     async def run(
         self,
@@ -1345,15 +1453,26 @@ class AgentRuntime:
                 if response.content and not response.streamed:
                     await self._emit(emit, {"type": "assistant_delta", "content": response.content + "\n"})
                 if not response.tool_calls:
-                    result = AgentResult(response.content, messages, iteration, calls_executed)
+                    result = AgentResult(
+                        response.content, messages, iteration, calls_executed,
+                        dict(self.plan_evidence),
+                    )
                     await self.audit.append("turn.completed", iterations=iteration, toolCalls=calls_executed)
                     return result
 
                 calls = list(response.tool_calls)
                 calls_executed += len(calls)
                 for call in calls:
-                    await self._emit(emit, {"type": "tool_call", "id": call.id, "name": call.name, "arguments": call.arguments})
-                    await self.audit.append("tool.call", id=call.id, name=call.name, arguments=call.arguments)
+                    plan_step_id = self._plan_step_id(call)
+                    self._evidence_tool_call(plan_step_id, call)
+                    await self._emit(emit, {
+                        "type": "tool_call", "id": call.id, "name": call.name,
+                        "arguments": call.arguments, "planStepId": plan_step_id,
+                    })
+                    await self.audit.append(
+                        "tool.call", id=call.id, name=call.name,
+                        arguments=call.arguments, planStepId=plan_step_id,
+                    )
 
                 async def run_call(call: ToolCall) -> tuple[ToolCall, bool, dict[str, Any]]:
                     try:
@@ -1373,9 +1492,16 @@ class AgentRuntime:
                     outcomes = list(await asyncio.gather(*tasks))
 
                 for call, ok, output in outcomes:
+                    plan_step_id = self._plan_step_id(call)
                     serialized = json.dumps(output, ensure_ascii=False)
-                    await self._emit(emit, {"type": "tool_result", "id": call.id, "name": call.name, "ok": ok, "result": output})
-                    await self.audit.append("tool.result", id=call.id, name=call.name, ok=ok, result=output)
+                    await self._emit(emit, {
+                        "type": "tool_result", "id": call.id, "name": call.name,
+                        "ok": ok, "result": output, "planStepId": plan_step_id,
+                    })
+                    await self.audit.append(
+                        "tool.result", id=call.id, name=call.name, ok=ok,
+                        result=output, planStepId=plan_step_id,
+                    )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call.id,

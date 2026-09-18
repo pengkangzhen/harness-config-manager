@@ -363,6 +363,102 @@ def test_update_plan_emits_structured_event(fake_home: Path, tmp_path: Path) -> 
     assert plan_event["steps"][0]["status"] == "done"
 
 
+def test_update_plan_step_ids_are_stable_across_updates(tmp_path: Path) -> None:
+    tools = WorkspaceTools(tmp_path)
+    first = asyncio.run(tools.update_plan({"steps": [
+        {"title": "Inspect", "status": "done"},
+        {"title": "Patch", "status": "pending", "id": "patch-main"},
+    ]}))
+    generated = first["steps"][0]["id"]
+    assert first["steps"][1]["id"] == "patch-main"
+    assert generated.startswith("step-")
+
+    known = {step["id"]: step["title"] for step in first["steps"]}
+    second = asyncio.run(tools.update_plan({
+        "steps": [
+            {"title": "Patch", "status": "in_progress"},
+            {"title": "Inspect", "status": "done"},
+        ],
+    }, known_steps=known))
+    # Explicit id survives reordering; missing ids are inherited by title.
+    assert second["steps"][0]["id"] == "patch-main"
+    assert second["steps"][1]["id"] == generated
+
+    with pytest.raises(ValueError):
+        asyncio.run(tools.update_plan({"steps": [
+            {"title": "a", "status": "pending", "id": "duplicated"},
+            {"title": "b", "status": "pending", "id": "duplicated"},
+        ]}))
+    with pytest.raises(ValueError):
+        asyncio.run(tools.update_plan({"steps": [
+            {"title": "a", "status": "pending", "id": "not a valid id!"},
+        ]}))
+
+
+def test_tool_calls_link_evidence_to_plan_steps(fake_home: Path, tmp_path: Path) -> None:
+    import subprocess
+
+    (tmp_path / "hello.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    patch = """diff --git a/hello.txt b/hello.txt
+--- a/hello.txt
++++ b/hello.txt
+@@ -1 +1 @@
+-before
++after
+"""
+
+    async def approve(_request: dict) -> bool:
+        return True
+
+    model = _sequential_model([
+        ModelResponse(tool_calls=(ToolCall("plan-1", "update_plan", {
+            "steps": [{"id": "step-a", "title": "Fix hello", "status": "in_progress"}],
+        }),)),
+        ModelResponse(tool_calls=(ToolCall("read-1", "read_file", {
+            "path": "hello.txt", "plan_step_id": "step-a",
+        }),)),
+        ModelResponse(tool_calls=(ToolCall("write-1", "apply_patch", {
+            "patch": patch, "summary": "update marker", "plan_step_id": "step-a",
+        }),)),
+        ModelResponse(content="patch applied"),
+    ])
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=model,
+        session_channel="ahp-session:/evidence-test", home=fake_home,
+        request_approval=approve,
+    )
+
+    async def run() -> None:
+        result = await runtime.run("fix hello", permission_mode="workspace-write")
+        evidence = result.plan_evidence["step-a"]
+        assert [item["name"] for item in evidence["toolCallIds"]] == ["read_file", "apply_patch"]
+        assert evidence["toolCallIds"][0]["id"] == "read-1"
+        assert evidence["approvalIds"][0]["approved"] is True
+        assert evidence["transactionIds"][0]["id"].startswith("patch-")
+        assert evidence["auditTimestamps"]
+        assert (tmp_path / "hello.txt").read_text(encoding="utf-8") == "after\n"
+
+    asyncio.run(run())
+
+    audit_path = next(
+        (fake_home / ".config/halter/agent-audit").rglob("audit.jsonl")
+    )
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    by_kind = {record["kind"]: record for record in records}
+    assert by_kind["tool.call"]["planStepId"] == "step-a"
+    assert by_kind["tool.result"]["planStepId"] == "step-a"
+    assert by_kind["approval.requested"]["planStepId"] == "step-a"
+    assert by_kind["approval.response"]["planStepId"] == "step-a"
+
+    transaction_path = next(
+        (fake_home / ".config/halter/agent-transactions").rglob("*.json")
+    )
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    assert transaction["planStepId"] == "step-a"
+    assert transaction["state"] == "applied"
+
+
 def test_workspace_context_is_automatically_bounded_and_redacted(fake_home: Path, tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Demo\\n\\napi_key=super-secret-value-123\\n", encoding="utf-8"

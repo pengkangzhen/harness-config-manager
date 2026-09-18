@@ -36,7 +36,8 @@ import websockets
 from .config import load_config
 from .agent import (
     AgentRuntime, AuditLog, ModelClient, OpenAICompatibleModelClient,
-    TransactionStore, _truncate_text, transaction_root_for_session,
+    TransactionStore, _safe_session_id, _truncate_text,
+    transaction_root_for_session,
 )
 from .agent_store import AgentSessionStore
 from .runner import RUNNERS, RunnerSpec
@@ -76,6 +77,9 @@ class AhpChat:
     current_plan: dict[str, Any] | None = None
     approvals: dict[str, asyncio.Future[bool]] = field(default_factory=dict)
     approval_history: list[dict[str, Any]] = field(default_factory=list)
+    # plan step id -> {toolCallIds, approvalIds, transactionIds,
+    # auditTimestamps, updatedAt}; durable evidence for the current plan.
+    plan_evidence: dict[str, Any] = field(default_factory=dict)
     modified_at: str = field(default_factory=_now_iso)
 
     def state(self) -> dict[str, Any]:
@@ -89,6 +93,8 @@ class AhpChat:
             "activeTurn": self.active_turn,
             "currentPlan": self.current_plan,
             "approvalHistory": self.approval_history,
+            "planEvidence": self.plan_evidence,
+            "auditSessionId": _safe_session_id(self.session.uri),
         }
 
     def summary(self) -> dict[str, Any]:
@@ -576,13 +582,16 @@ class AhpHost:
             transaction["state"] = "rolled_back"
             transaction["rolledBackAt"] = _now_iso()
             store.save(transaction)
+            plan_step_id = transaction.get("planStepId")
             await audit.append(
                 "transaction.rolledBack", id=transaction_id,
                 workspace=str(workspace), origin=origin,
+                **({"planStepId": plan_step_id} if plan_step_id else {}),
             )
             await self.broadcast_action(chat.uri, {
                 "type": "halter/rollbackResult", "transactionId": transaction_id,
                 "ok": True,
+                **({"planStepId": plan_step_id} if plan_step_id else {}),
             })
         except Exception as exc:
             await audit.append(
@@ -717,6 +726,35 @@ class AhpHost:
                               "message": f"exit code {code}"}}
             await self._finish_turn(chat, turn_id, started, "error", part)
 
+    def _record_plan_evidence(
+        self, chat: AhpChat, step_id: Any, bucket_key: str, entry: dict[str, Any]
+    ) -> bool:
+        """Append one evidence entry to chat.plan_evidence; True when changed."""
+        step = str(step_id or "").strip()
+        if not step:
+            return False
+        bucket = chat.plan_evidence.get(step)
+        if bucket is None:
+            bucket = {
+                "toolCallIds": [],
+                "approvalIds": [],
+                "transactionIds": [],
+                "auditTimestamps": [],
+                "updatedAt": _now_iso(),
+            }
+            chat.plan_evidence[step] = bucket
+        bucket.setdefault(bucket_key, []).append(entry)
+        bucket["auditTimestamps"].append(_now_iso())
+        bucket["updatedAt"] = _now_iso()
+        return True
+
+    async def _broadcast_plan_evidence(self, chat: AhpChat, turn_id: str) -> None:
+        await self.broadcast_action(chat.uri, {
+            "type": "halter/planEvidence",
+            "turnId": turn_id,
+            "evidence": chat.plan_evidence,
+        })
+
     async def _run_native_turn(self, chat: AhpChat, turn: dict[str, Any],
                                started: float, prompt: str,
                                model: str | None, workspace: Path,
@@ -767,25 +805,51 @@ class AhpHost:
                     "toolCallId": str(event.get("toolCallId")),
                     "approved": bool(event.get("approved")),
                 })
+                step_id = str(event.get("planStepId") or "")
+                bucket = chat.plan_evidence.get(step_id) if step_id else None
+                if bucket is not None:
+                    for item in bucket.get("approvalIds", []):
+                        if item.get("id") == event.get("id"):
+                            item["approved"] = bool(event.get("approved"))
+                    bucket["updatedAt"] = _now_iso()
+                    await self._broadcast_plan_evidence(chat, turn["id"])
             elif event_type == "tool_call":
                 part = {
                     "kind": "halter/toolCall", "id": str(event.get("id")),
                     "name": str(event.get("name")), "arguments": event.get("arguments") or {},
+                    "planStepId": event.get("planStepId"),
                 }
                 turn["responseParts"].append(part)
                 await self.broadcast_action(chat.uri, {
                     "type": "halter/toolCall", "turnId": turn["id"], "part": part,
                 })
+                if self._record_plan_evidence(
+                    chat, event.get("planStepId"), "toolCallIds",
+                    {"id": str(event.get("id")), "name": str(event.get("name")),
+                     "ts": _now_iso()},
+                ):
+                    await self._broadcast_plan_evidence(chat, turn["id"])
             elif event_type == "tool_result":
                 part = {
                     "kind": "halter/toolResult", "id": str(event.get("id")),
                     "name": str(event.get("name")), "ok": bool(event.get("ok")),
                     "result": event.get("result") or {},
+                    "planStepId": event.get("planStepId"),
                 }
                 turn["responseParts"].append(part)
                 await self.broadcast_action(chat.uri, {
                     "type": "halter/toolResult", "turnId": turn["id"], "part": part,
                 })
+                transaction_id = ""
+                if event.get("ok"):
+                    transaction_id = str(
+                        ((event.get("result") or {}).get("transactionId") or "")
+                    )
+                if transaction_id and self._record_plan_evidence(
+                    chat, event.get("planStepId"), "transactionIds",
+                    {"id": transaction_id, "ts": _now_iso()},
+                ):
+                    await self._broadcast_plan_evidence(chat, turn["id"])
 
         async def request_approval(request: dict[str, Any]) -> bool:
             approval_id = str(request.get("id") or "")
@@ -805,6 +869,12 @@ class AhpHost:
                 "turnId": turn["id"],
                 "approval": request,
             })
+            if self._record_plan_evidence(
+                chat, request.get("planStepId"), "approvalIds",
+                {"id": approval_id, "tool": str(request.get("tool") or ""),
+                 "approved": None, "ts": _now_iso()},
+            ):
+                await self._broadcast_plan_evidence(chat, turn["id"])
             try:
                 approved = await future
                 record.update({

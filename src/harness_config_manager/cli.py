@@ -678,7 +678,7 @@ def scan(
     detections = detect_tools()
     n_installed = sum(1 for d in detections if d.installed)
 
-    reports = scan_all()
+    reports = scan_all(detections)
     if json_out:
         doctor = [
             {"level": level, "where": where, "message": msg}
@@ -771,8 +771,9 @@ def sync(
         console.print("[red]--prefer 仅支持 skip / library[/red]")
         raise typer.Exit(2)
 
-    installed = [d.tool for d in detect_tools() if d.installed]
-    reports = scan_all()
+    detections = detect_tools()
+    installed = [d.tool for d in detections if d.installed]
+    reports = scan_all(detections)
     cfg = load_config()
 
     # --- sessions 层：只分发查询 skill；绝不迁移 / 写入任何工具原生 session 文件 ---

@@ -7,7 +7,7 @@ from pathlib import Path
 from .agents import scan_agents
 from .detect import detect_tools
 from .hooks import HOOK_READERS
-from .model import ToolReport
+from .model import Detection, ToolReport
 from .mcp import MCP_READERS, plugin_provided_mcp
 from .plugins import PLUGIN_READERS
 from .registry import BY_KEY, TOOLS
@@ -47,9 +47,10 @@ def scan_tool(key: str) -> ToolReport:
     return report
 
 
-def scan_all() -> list[ToolReport]:
+def scan_all(detections: list[Detection] | None = None) -> list[ToolReport]:
+    """Assemble reports; *detections* lets callers reuse their own probe."""
     reports: list[ToolReport] = []
-    for det in detect_tools():
+    for det in (detect_tools() if detections is None else detections):
         if not det.installed:
             continue
         reports.append(scan_tool(det.tool))

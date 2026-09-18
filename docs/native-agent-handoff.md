@@ -1,8 +1,7 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-最新提交：`58c4d7e feat: add agent audit viewer and model configuration`  
-基线状态：该提交时工作区干净；`uv run pytest -q` 为 `141 passed`。本文档本身是新增交接材料，可能尚未提交。
+基线状态：`a98f1ff feat: add native agent handoff support` 时 `141 passed`；Milestone 1（Evidence-linked plan）已完成并连同两处基线修复提交，全量 `146 passed`。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -68,6 +67,8 @@ src/harness_config_manager/agent.py
 - automatic workspace context
 - bounded history compaction
 - private audit events
+- plan step stable id（显式 / 按 title 继承 / 自动生成）
+- plan evidence 关联（tool call / approval / transaction 归到 step）
 
 当前工具面：
 
@@ -132,12 +133,15 @@ chat/delta
 halter/toolCall
 halter/toolResult
 halter/planChanged
+halter/planEvidence
 halter/approvalRequest
 halter/approvalResult
 halter/rollbackResult
 chat/turnComplete
 chat/error
 ```
+
+`halter/planEvidence` 在证据变化时广播完整 `planEvidence` 映射；toolCall / toolResult / approval / rollback 事件与 audit 记录均携带可选 `planStepId`。
 
 ### 2.3 Durable sessions
 
@@ -159,6 +163,7 @@ src/harness_config_manager/agent_store.py
 - native model/tool history 恢复
 - currentPlan 恢复
 - approvalHistory 恢复
+- planEvidence 恢复（stepId → toolCallIds / approvalIds / transactionIds / auditTimestamps）
 - active turn 恢复为 `HostInterrupted`
 - 原子写入
 - `0700` directory
@@ -389,7 +394,8 @@ desktop/src-tauri/src/main.rs
 调度页已有：
 
 - `@halter` 原生 Agent
-- plan 面板
+- plan 面板（step 级证据展开：工具调用 / 审批 / 事务）
+- 证据条目可跳转 Audit 视图并高亮定位事件
 - 多 Harness sandbox diff 对比面板
 - 工具事件面板
 - assistant 输出区
@@ -553,17 +559,10 @@ curl http://127.0.0.1:7433/healthz
 
 目标尚未完成。不要把当前状态误报为最终完成。
 
-### 缺口 A：Plan step 与证据未关联
+### 缺口 A：Plan step 与证据未关联 ✅ 已完成（Milestone 1）
 
-现在 plan 可以显示，但 plan step 还没有稳定关联到：
-
-- tool call id
-- approval id
-- transaction id
-- audit event
-- delegate diff
-
-因此 UI 无法从计划步骤跳转证据。
+已在 Milestone 1 落地：step 稳定 id、tool call / approval / transaction / audit 事件的
+`planStepId`、durable `planEvidence`、UI 证据展开与 Audit deep link。
 
 ### 缺口 B：多 Harness diff 只有对比，没有 deterministic merge 分析
 
@@ -633,41 +632,27 @@ cargo check
 
 ## 7. 建议路线图
 
-## Milestone 1 — Evidence-linked plan
+## Milestone 1 — Evidence-linked plan ✅ 已完成
 
 目标：让每个计划步骤可追踪、可审计、可解释。
 
-建议任务：
+实现说明（供 review 与后续维护）：
 
-1. 扩展 `update_plan` schema：
-   - step 增加 stable `id`
-   - 可选 `status`
-   - 可选 `detail`
-2. tool call arguments 增加可选 `plan_step_id`
-3. AHP tool event 携带 `plan_step_id`
-4. approval request / result 携带 `plan_step_id`
-5. transaction metadata 携带 `plan_step_id`
-6. chat state 增加：
-
-```text
-planEvidence:
-  stepId ->
-    toolCallIds
-    approvalIds
-    transactionIds
-    auditTimestamps
-```
-
-7. UI plan step 可展开证据列表
-8. 点击证据跳转 Audit view 并定位事件
+1. `update_plan` step 增加可选 `id`；模型未提供时按 title 继承旧 id，再退化为生成 `step-<hex>`；同批内重复或非法 id 会被拒绝
+2. 任意 tool call 可在 arguments 中携带 `plan_step_id`（system prompt 有说明，runtime 校验格式）
+3. audit `tool.call` / `tool.result` / `approval.requested` / `approval.response` 与 AHP `halter/toolCall` / `halter/toolResult` 事件均带 `planStepId`
+4. `apply_patch` 事务 metadata 与返回值携带 `planStepId`；rollback 审计事件透传
+5. `AgentRuntime.plan_evidence` 与 `AhpChat.plan_evidence`（stepId → toolCallIds / approvalIds / transactionIds / auditTimestamps / updatedAt）经 session.json 持久化并在 host 重启后恢复
+6. AHP 新增 `halter/planEvidence` 广播；chat state 暴露 `auditSessionId`
+7. 桌面 plan step 可展开证据列表，每条证据可跳转 Audit 视图并高亮定位（kind 过滤会临时清空）
 
 验收标准：
 
-- [ ] 模型更新 plan 时 step 有 stable id
-- [ ] tool call、approval、rollback 能归到 step
-- [ ] durable session 恢复后 evidence 仍在
-- [ ] Audit viewer 能从 plan step 打开对应事件
-- [ ] 新增测试覆盖 evidence 关联与恢复
+- [x] 模型更新 plan 时 step 有 stable id
+- [x] tool call、approval、rollback 能归到 step
+- [x] durable session 恢复后 evidence 仍在
+- [x] Audit viewer 能从 plan step 打开对应事件
+- [x] 新增测试覆盖 evidence 关联与恢复（`test_tool_calls_link_evidence_to_plan_steps`、`test_update_plan_step_ids_are_stable_across_updates`、`test_native_plan_evidence_is_broadcast_and_durable`）
 
 ## Milestone 2 — Deterministic multi-Harness diff analysis
 
@@ -924,25 +909,20 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-最小但高价值的下一个 PR：
+Milestone 1（`feat: link plan steps to agent evidence`）已完成。
+
+下一个最小但高价值的 PR：
 
 ```text
-feat: link plan steps to agent evidence
+feat: deterministic multi-harness patch comparison
 ```
 
-范围：
-
-1. `update_plan` step id
-2. tool call / approval / transaction metadata
-3. durable `planEvidence`
-4. UI plan evidence expansion
-5. Audit deep link
-6. tests
+即 Milestone 2（`src/harness_config_manager/patch_compare.py` 纯函数模块 + UI 分类标签）。
+范围以 Milestone 2 验收标准为准。
 
 不要在同 PR 里同时做：
 
 - MCP bridge
-- deterministic merge
 - provider health
 
 否则风险和 review 面都会过大。

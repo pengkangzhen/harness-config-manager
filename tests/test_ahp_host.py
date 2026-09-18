@@ -975,6 +975,131 @@ def test_native_plan_is_broadcast_and_restored(fake_harnesses, fake_home: Path, 
     asyncio.run(_run())
 
 
+def test_native_plan_evidence_is_broadcast_and_durable(
+    fake_harnesses, fake_home: Path, tmp_path: Path
+) -> None:
+    import subprocess
+
+    from harness_config_manager.agent import FunctionModelClient, ModelResponse, ToolCall
+
+    (tmp_path / "source.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    patch = """diff --git a/source.txt b/source.txt
+--- a/source.txt
++++ b/source.txt
+@@ -1 +1 @@
+-before
++after
+"""
+
+    def factory() -> FunctionModelClient:
+        responses = iter([
+            ModelResponse(tool_calls=(ToolCall("plan-ev", "update_plan", {
+                "steps": [{"id": "step-a", "title": "Fix source", "status": "in_progress"}],
+            }),)),
+            ModelResponse(tool_calls=(ToolCall("write-ev", "apply_patch", {
+                "patch": patch, "summary": "update source", "plan_step_id": "step-a",
+            }),)),
+            ModelResponse(content="done"),
+        ])
+
+        async def complete(**_kwargs):
+            return next(responses)
+
+        return FunctionModelClient(complete)
+
+    async def _evidence() -> None:
+        host = AhpHost(model_client_factory=factory)
+        port = await _start_host(host)
+        async with _connect(host, port) as ws:
+            client = Client(ws)
+            await client.request("initialize", {
+                "channel": "ahp-root://", "protocolVersions": [PROTOCOL_VERSION],
+                "clientId": "evidence-test",
+            })
+            su = f"ahp-session:/{uuid.uuid4()}"
+            await client.request("createSession", {
+                "channel": su, "provider": "halter",
+                "workingDirectories": [tmp_path.as_uri()],
+            })
+            cu = f"ahp-chat:/{uuid.uuid4()}"
+            await client.request("createChat", {"channel": su, "chat": cu})
+            await client.request("subscribe", {"channel": cu})
+            await client.notify("dispatchAction", {
+                "channel": cu, "clientSeq": 1,
+                "action": {
+                    "type": "chat/turnStarted", "turnId": "evidence-turn",
+                    "message": {
+                        "text": "fix source", "origin": {"kind": "user"},
+                        "halter": {"mode": "workspace-write"},
+                    },
+                },
+            })
+            actions = await client.collect("action", timeout=10)
+            while not any(
+                p["params"]["action"]["type"] in {"halter/approvalRequest", "chat/turnComplete"}
+                for p in actions
+            ):
+                actions += await client.collect("action", timeout=10)
+            request = next(
+                p["params"]["action"]["approval"] for p in actions
+                if p["params"]["action"]["type"] == "halter/approvalRequest"
+            )
+            assert request["planStepId"] == "step-a"
+            await client.notify("dispatchAction", {
+                "channel": cu, "clientSeq": 2,
+                "action": {
+                    "type": "halter/approvalResponse",
+                    "approvalId": request["id"], "approved": True,
+                },
+            })
+            while not any(
+                p["params"]["action"]["type"] == "chat/turnComplete" for p in actions
+            ):
+                actions += await client.collect("action", timeout=10)
+            by_type: dict[str, list[dict]] = {}
+            for p in actions:
+                by_type.setdefault(p["params"]["action"]["type"], []).append(p["params"])
+
+            plan = by_type["halter/planChanged"][0]["action"]["plan"]
+            assert plan["steps"][0]["id"] == "step-a"
+            tool_call_part = next(
+                p["action"]["part"] for p in by_type["halter/toolCall"]
+                if p["action"]["part"]["name"] == "apply_patch"
+            )
+            assert tool_call_part["planStepId"] == "step-a"
+            tool_result_part = next(
+                p["action"]["part"] for p in by_type["halter/toolResult"]
+                if p["action"]["part"]["name"] == "apply_patch"
+            )
+            assert tool_result_part["planStepId"] == "step-a"
+
+            evidence_events = [
+                p["action"]["evidence"] for p in by_type["halter/planEvidence"]
+            ]
+            assert evidence_events, "no planEvidence broadcast received"
+            final = evidence_events[-1]
+            step = final["step-a"]
+            assert [item["id"] for item in step["toolCallIds"]] == ["write-ev"]
+            assert step["approvalIds"][0]["approved"] is True
+            assert step["transactionIds"][0]["id"].startswith("patch-")
+
+            chat_snapshot = await client.request("subscribe", {"channel": cu})
+            chat_state = chat_snapshot["snapshot"]["state"]
+            assert chat_state["planEvidence"]["step-a"]["approvalIds"][0]["approved"] is True
+            assert chat_state["auditSessionId"].startswith("ahp-")
+            assert len(chat_state["auditSessionId"]) == len("ahp-") + 20
+
+            restored = AhpHost(model_client_factory=factory)
+            restored_snapshot = restored.snapshot(cu)
+            assert restored_snapshot is not None
+            restored_evidence = restored_snapshot["state"]["planEvidence"]["step-a"]
+            assert restored_evidence["toolCallIds"][0]["id"] == "write-ev"
+            assert restored_evidence["transactionIds"][0]["id"].startswith("patch-")
+
+    asyncio.run(_evidence())
+
+
 def test_initialize_rekeys_connection_object_and_subscriptions(fake_home: Path) -> None:
     async def _rekey() -> None:
         host = AhpHost()
