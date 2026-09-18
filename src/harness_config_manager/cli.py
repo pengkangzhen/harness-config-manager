@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as _json
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -11,15 +12,178 @@ from rich.table import Table
 from .detect import detect_tools
 
 app = typer.Typer(
-    help="agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点与分发。",
+    help="agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点、分发，并支持项目级跨助手历史会话。",
     no_args_is_help=True,
 )
 console = Console()
 
+sessions_app = typer.Typer(help="查看并按需复用当前项目在多个 AI 编码工具中的历史会话。")
+app.add_typer(sessions_app, name="sessions")
+
 
 @app.callback()
 def _root() -> None:
-    """agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点与分发。"""
+    """agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点、分发，并支持项目级跨助手历史会话。"""
+
+
+# ---------------------------------------------------------------------------
+# sessions：项目级跨工具历史会话
+
+
+@sessions_app.command("list")
+def sessions_list(
+    project: Path = typer.Option(Path("."), "--project", "-p", help="项目路径，默认当前目录"),
+    tool: list[str] = typer.Option([], "--tool", "-t", help="按来源工具过滤，可多选"),
+    limit: int = typer.Option(30, "--limit", "-n", min=1, help="最多显示条数"),
+    all_sessions: bool = typer.Option(False, "--all", help="显示全部，忽略 --limit"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """列出当前项目在所有本地 AI 编码助手中的历史会话。"""
+    from .sessions import scan_sessions, session_to_dict
+
+    project = project.expanduser().resolve(strict=False)
+    items = scan_sessions(project, tools=tool or None)
+    if not all_sessions:
+        items = items[:limit]
+    if json_out:
+        console.print_json(_json.dumps({
+            "project": str(project),
+            "count": len(items),
+            "sessions": [session_to_dict(x) for x in items],
+        }, ensure_ascii=False))
+        return
+    table = Table(title=f"Sessions — {project}")
+    table.add_column("Ref", style="cyan", no_wrap=True)
+    table.add_column("Updated")
+    table.add_column("Messages", justify="right")
+    table.add_column("Branch", style="dim")
+    table.add_column("Title", style="dim")
+    from .sessions import _iso
+    for item in items:
+        table.add_row(
+            item.ref,
+            _iso(item.updated_at) or "-",
+            str(item.message_count),
+            item.branch or "-",
+            (item.title or "-")[:100],
+        )
+    console.print(table)
+    console.print("[dim]按需查看：hcm sessions show <ref> --transcript；交接：hcm sessions context <ref>[/dim]")
+
+
+@sessions_app.command()
+def show(
+    ref: str = typer.Argument(help="会话引用，形如 tool:session-id"),
+    project: Path = typer.Option(Path("."), "--project", "-p"),
+    transcript: bool = typer.Option(False, "--transcript", help="显式读取并输出会话文本"),
+    tail: int = typer.Option(80, "--tail", min=1, help="仅输出最后 N 条消息"),
+    include_tools: bool = typer.Option(False, "--include-tools", help="包含工具调用/结果（默认只读用户与助手文本）"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """查看一个历史会话的 metadata，或显式读取其 transcript。"""
+    from .sessions import find_session, format_transcript, read_session, session_to_dict
+
+    project = project.expanduser().resolve(strict=False)
+    try:
+        info = find_session(ref, project)
+        messages = read_session(ref, project, include_tools) if transcript else []
+    except (KeyError, RuntimeError, OSError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if json_out:
+        payload: dict[str, object] = {"session": session_to_dict(info)}
+        if transcript:
+            payload["transcript"] = format_transcript(messages, tail)
+        console.print_json(_json.dumps(payload, ensure_ascii=False))
+        return
+    console.print_json(_json.dumps(session_to_dict(info), ensure_ascii=False))
+    if transcript:
+        console.print(format_transcript(messages, tail))
+
+
+@sessions_app.command()
+def search(
+    query: str = typer.Argument(help="关键词，大小写不敏感"),
+    project: Path = typer.Option(Path("."), "--project", "-p"),
+    tool: list[str] = typer.Option([], "--tool", "-t"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """在当前项目的历史会话文本中搜索。"""
+    from .sessions import read_session, scan_sessions
+
+    project = project.expanduser().resolve(strict=False)
+    needle = query.casefold()
+    hits: list[tuple[object, str]] = []
+    for info in scan_sessions(project, tools=tool or None):
+        try:
+            messages = read_session(info.ref, project, include_tools=False)
+        except (RuntimeError, OSError):
+            continue
+        matched = [m for m in messages if needle in m.text.casefold()]
+        if not matched:
+            continue
+        snippet = matched[0].text
+        if len(snippet) > 360:
+            snippet = snippet[:360] + "…"
+        hits.append((info, snippet))
+        if len(hits) >= limit:
+            break
+    if json_out:
+        from .sessions import session_to_dict
+        console.print_json(_json.dumps({
+            "project": str(project), "query": query, "hits": [
+                {"session": session_to_dict(i), "snippet": s} for i, s in hits
+            ]
+        }, ensure_ascii=False))
+        return
+    table = Table(title=f"Session search — {query}")
+    table.add_column("Ref", style="cyan", no_wrap=True)
+    table.add_column("Snippet", style="dim")
+    for info, snippet in hits:
+        table.add_row(info.ref, snippet.replace("\n", " "))
+    console.print(table)
+
+
+@sessions_app.command()
+def context(
+    ref: str = typer.Argument(help="会话引用，形如 tool:session-id"),
+    project: Path = typer.Option(Path("."), "--project", "-p"),
+    tail: int = typer.Option(40, "--tail", min=1),
+    output: Path = typer.Option(None, "--output", "-o", help="写入 handoff Markdown 文件"),
+) -> None:
+    """从指定历史会话生成确定性、脱敏的交接上下文。"""
+    from .sessions import build_context
+
+    project = project.expanduser().resolve(strict=False)
+    try:
+        text = build_context(ref, project, tail)
+    except (KeyError, RuntimeError, OSError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if output is not None:
+        output = output.expanduser().resolve(strict=False)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+        console.print(f"[green]handoff[/green] {ref} -> {output}")
+    else:
+        console.print(text)
+
+
+@sessions_app.command()
+def install(
+    apply: bool = typer.Option(False, "--apply", help="实际安装（默认 dry-run）"),
+) -> None:
+    """把 hcm-sessions skill 安装到所有已检测工具，供任意助手调用历史会话。"""
+    from .config import load_config
+    from .detect import detect_tools
+    from .sessions import install_session_skill
+
+    installed = [d.tool for d in detect_tools() if d.installed]
+    lines = install_session_skill(load_config(), installed, apply)
+    for line in lines:
+        style = "yellow" if line.startswith("conflict ") else None
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +195,7 @@ def scan(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
-        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents",
+        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / sessions",
     ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
@@ -65,12 +229,15 @@ def scan(
             rp.print_hooks_detail(reports)
         if "agents" in detail:
             rp.print_agents_detail(reports)
+        if "sessions" in detail:
+            rp.print_sessions_detail(reports)
     else:
         rp.print_skills_matrix(reports)
         rp.print_agents_matrix(reports)
         rp.print_mcp_matrix(reports)
         rp.print_plugins_matrix(reports)
         rp.print_hooks_matrix(reports)
+        rp.print_sessions_matrix(reports)
     notes = [(r.tool, n) for r in reports for n in r.scan_notes]
     if notes:
         console.print("[dim]扫描备注：[/dim]")
@@ -95,6 +262,7 @@ def sync(
     layer_plugins: bool = typer.Option(True, "--plugins/--no-plugins", help="同步插件层"),
     layer_hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="同步 hooks 层"),
     layer_agents: bool = typer.Option(True, "--agents/--no-agents", help="同步 subagents 层"),
+    layer_sessions: bool = typer.Option(True, "--sessions/--no-sessions", help="分发跨工具历史会话查询 skill"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认跳过）/ library（备份工具侧后以清单覆盖）"),
     source: str = typer.Option("auto", "--from", help="清单为空时的收集源（默认自动选最全的工具）"),
@@ -119,6 +287,7 @@ def sync(
     from .mcp_write import sync_mcp
     from .plugin_sync import auto_plugin_source, load_plugin_manifest, sync_plugins
     from .scan import scan_all
+    from .sessions import install_session_skill
     from .skills import plan_adopt, plan_sync, resolve_library, run_adopt, run_sync
 
     if prefer not in ("skip", "library"):
@@ -128,6 +297,13 @@ def sync(
     installed = [d.tool for d in detect_tools() if d.installed]
     reports = scan_all()
     cfg = load_config()
+
+    # --- sessions 层：只分发查询 skill；绝不迁移 / 写入任何工具原生 session 文件 ---
+    if layer_sessions:
+        console.print("\nsession continuity: 项目级历史会话查询 skill")
+        for line in install_session_skill(cfg, installed, apply):
+            console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
+                          if not line.startswith("conflict ") else f"  [yellow]{line}[/yellow]")
 
     # --- MCP 层：清单为空则自动收集 ---
     if layer_mcp:

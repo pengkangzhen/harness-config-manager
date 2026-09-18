@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sessions import SessionInfo
 
 # 敏感字段名：报告与终端输出时对值脱敏
 SENSITIVE_KEYS = {
@@ -105,4 +109,5 @@ class ToolReport:
     mcp_servers: list[McpServerInfo] = field(default_factory=list)
     plugins: list[PluginInfo] = field(default_factory=list)
     hooks: list[HookInfo] = field(default_factory=list)
+    sessions: list["SessionInfo"] = field(default_factory=list)
     scan_notes: list[str] = field(default_factory=list)

@@ -1,18 +1,19 @@
 # harness-config-manager (`hcm`)
 
-Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents** across all your AI coding harnesses — from a single source of truth.
+Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents**, and recall project-scoped **session history** across all your AI coding harnesses — from a single source of truth.
 
 [中文文档](README.zh-CN.md)
 
 ## Why
 
-A serious AI-assisted developer typically runs several coding harnesses side by side — Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, ZCode… Each one keeps its **own** user-level skills, MCP server configs, plugins, hooks (commands that run automatically before/after specific agent actions), and subagents (per-agent Markdown definitions), in its own format (JSON with `mcpServers` vs `servers` vs `.mcp`, TOML `[mcp_servers.*]`, array-style commands…). They drift apart silently: a skill lands in one tool but never reaches the others, an MCP server gets registered twice with different definitions, a config pointing at a deleted project keeps failing on every startup.
+A serious AI-assisted developer typically runs several coding harnesses side by side — Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, ZCode… Each one keeps its **own** user-level skills, MCP server configs, plugins, hooks (commands that run automatically before/after specific agent actions), subagents (per-agent Markdown definitions), and session transcripts, in its own format (JSON with `mcpServers` vs `servers` vs `.mcp`, TOML `[mcp_servers.*]`, array-style commands…). They drift apart silently: a skill lands in one tool but never reaches the others, an MCP server gets registered twice with different definitions, a config pointing at a deleted project keeps failing on every startup.
 
-`hcm` treats those five layers as one managed state:
+`hcm` treats those five layers as one managed state, plus a read-only session-continuity layer:
 
 - **Detect** which harnesses are installed (CLI presence + config directories, 13 tools known).
 - **Inventory** what each one has — as coverage matrices (tool × skill, tool × MCP server, tool × plugin, tool × hook, tool × subagent), plus health checks (broken symlinks, unparseable configs, dead MCP entries whose command no longer exists, unresolved secret placeholders).
 - **Distribute** from a single source of truth to every tool: skills and subagents as per-entry symlinks, MCP definitions translated across six config dialects, plugins installed via each family's native mechanism, hooks translated across three dialects (claude / zcode / cursor).
+- **Continue work across harnesses**: list every assistant's sessions for the current project, inspect one transcript on demand, and generate a deterministic handoff without rewriting vendor session stores.
 
 ## How it compares
 
@@ -20,7 +21,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 |---|---|---|---|---|---|
 | Core model | single source of truth → all tools, repeatable | point-to-point copy `--from A --to B` | symlink sync | single `.agentsmesh` dir convention | install from GitHub repos |
 | Scope | **user-level** global config | project-level files (`CLAUDE.md`, `.cursorrules`…) | user-level | user-level | user-level |
-| Layers | skills + MCP + plugins + hooks + **subagents** | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
+| Layers | skills + MCP + plugins + hooks + **subagents** + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
 | Detection / inventory / health checks | ✅ (13 tools, coverage matrices, doctor) | ❌ | ❌ | ❌ | ❌ |
 | Secret handling | `${VAR}` placeholders + 0600 secrets file, redacted output | ❌ | ❌ | ❌ | ❌ |
 | Tech | Python + uv | TypeScript (Deno) | Rust | — | Rust |
@@ -42,7 +43,7 @@ uv tool install --editable ./harness-config-manager
 
 ## Quick start
 
-Two commands. That's it.
+Three commands. That's it.
 
 ```bash
 hcm scan                   # look: which tools are installed, what each has, any health issues
@@ -50,13 +51,40 @@ hcm scan -d skills -d mcp  # per-layer detail; --json for machine-readable outpu
 
 hcm sync                   # sync: manifest/library -> all tools (dry-run by default)
 hcm sync --apply           # actually write (conflicts skipped by default)
-hcm sync --no-skills --no-plugins --no-mcp   # only the hooks layer (all five layers on by default)
+hcm sync --no-skills --no-plugins --no-mcp   # only hooks + sessions (all layers on by default)
 hcm sync --prefer library  # on conflict, override the tool-side copy from the manifest
+
+hcm sessions list          # current project's sessions across local AI coding assistants
+hcm sessions install       # distribute the hcm-sessions lookup skill (dry-run)
+hcm sessions install --apply
 ```
 
-When a manifest is empty, `sync` auto-collects from your best-equipped tool (the one with the most MCP servers / most enabled plugins / most hooks; override with `--from`). Third-party-injected hook entries are adopted too — keep specific ones out via `exclude_hooks`. Skills that exist nowhere in the library are adopted automatically; same-name divergent copies are reported for you to adjudicate.
+The `sessions` layer only installs a lookup skill. It never copies, rewrites, or "adopts" session transcripts. When a manifest is empty, `sync` auto-collects from your best-equipped tool (the one with the most MCP servers / most enabled plugins / most hooks; override with `--from`). Third-party-injected hook entries are adopted too — keep specific ones out via `exclude_hooks`. Skills that exist nowhere in the library are adopted automatically; same-name divergent copies are reported for you to adjudicate.
 
-## The five layers
+## Session continuity
+
+Switching from Claude Code to Codex (or any other assistant) should not erase the project's working history.
+
+```bash
+# From any assistant with shell access, or after installing hcm-sessions:
+hcm sessions list --project . --json
+
+# Read only the selected session, never ingest every transcript:
+hcm sessions show claude:<session-id> --transcript --tail 80
+
+# Produce a private, deterministic, redacted handoff:
+hcm sessions context claude:<session-id>
+hcm sessions context claude:<session-id> --output .hcm/HANDOFF.md
+
+# Search current-project history:
+hcm sessions search "authentication migration" --project .
+```
+
+Native metadata readers cover Claude Code, ZCode, Codex CLI, and OpenCode. If [ctx](https://ctx.rs) is installed and initialized, `hcm sessions list` also includes ctx-indexed providers (Cursor, Gemini CLI, Copilot CLI, Continue, and many more) without duplicating native entries. `ctx` is optional; hcm invokes only its read-only `list events` and `show session` surfaces.
+
+The built-in `hcm-sessions` skill teaches every detected assistant the same lookup workflow. `hcm sync --sessions` (on by default) or `hcm sessions install --apply` distributes it through the normal skills library. Transcripts are read only when `--transcript`, `search`, or `context` is explicitly requested; obvious credentials are redacted, and prior commands are presented as historical evidence rather than executable instructions.
+
+## The five managed config layers
 
 | Layer | Source of truth | Distribution |
 |---|---|---|
@@ -99,6 +127,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 - The zcode plugin target requires the plugin to be installed on the claude side first (mirror source).
 - The hooks layer covers claude / zcode / cursor only (Codex has just a weak `notify` callback; the other tools have no equivalent); Cursor's prompt-type hooks distribute to cursor only.
 - The subagents layer covers claude / zcode / cursor only; frontmatter fields like `model: opus` are Claude-family aliases and are distributed as-is (they may not resolve elsewhere).
+- Session continuity natively covers Claude Code, ZCode, Codex CLI, and OpenCode; install optional ctx for broader provider coverage. hcm itself does not yet implement native Gemini or Cursor transcript parsers.
 - Dead-hook detection is conservative: existence is only checked for commands that are a single script path; compound shell expressions are neither checked nor false-positived.
 - MCP servers injected by a harness at runtime for its own plugins (e.g. ZCode's `node_repl` via browser-use) rely on a small built-in mapping table.
 
@@ -106,7 +135,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 57 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 63 tests, all against a fake $HOME — never touches your real config
 ```
 
 ## License

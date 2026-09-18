@@ -1,8 +1,8 @@
 # harness-config-manager (`hcm`) // [中文文档](README.zh-CN.md)
 
-Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents** across AI coding tools.
+统一检测、盘点、分发 AI 编码工具的用户级 **skills / MCP servers / 插件 / hooks / subagents**，并可调取当前项目的跨助手历史会话。
 
-一台机器上往往装着多个 AI 编码工具（Claude Code、ZCode、Codex、Cursor、VS Code Copilot、Gemini CLI、OpenCode……），每个工具各管一套用户级 skills、MCP 配置、插件、hooks（钩子：在工具执行特定动作前后自动运行的 shell 命令）和 subagents（子代理：每代理一个 Markdown 定义文件），格式互不相同（JSON 的 `mcpServers`/`servers`/`.mcp`、TOML 的 `[mcp_servers.*]`、command 数组……），配置渐渐各自为政。`hcm` 用单一事实源统一管理这五层：先检测与盘点，再按需分发。
+一台机器上往往装着多个 AI 编码工具（Claude Code、ZCode、Codex、Cursor、VS Code Copilot、Gemini CLI、OpenCode……），每个工具各管一套用户级 skills、MCP 配置、插件、hooks（钩子：在工具执行特定动作前后自动运行的 shell 命令）、subagents（子代理：每代理一个 Markdown 定义文件）和 session 记录，格式互不相同（JSON 的 `mcpServers`/`servers`/`.mcp`、TOML 的 `[mcp_servers.*]`、command 数组……），配置渐渐各自为政。`hcm` 用单一事实源统一管理这五层配置：先检测与盘点，再按需分发；session 记录则作为只读的项目连续性能力单独调取。
 
 ## 安装
 
@@ -14,7 +14,7 @@ uv tool install .          # 从本仓库安装，得到 hcm 命令
 
 ## 快速上手
 
-只有两个命令：
+核心是三个命令：
 
 ```bash
 hcm scan                   # 看一眼：装了哪些工具、各配置了什么 skills/MCP/插件/hooks/subagents、有无健康问题
@@ -22,13 +22,40 @@ hcm scan -d skills -d mcp  # 查看某层明细；--json 输出机器可读格�
 
 hcm sync                   # 同步一下：清单/库 -> 所有工具（默认 dry-run）
 hcm sync --apply           # 实际执行（冲突默认跳过保护）
-hcm sync --no-skills --no-plugins --no-mcp   # 只同步 hooks 层（五层默认全开，按需关闭）
+hcm sync --no-skills --no-plugins --no-mcp   # 只保留 hooks + sessions（各层默认全开，按需关闭）
 hcm sync --prefer library  # 冲突时以清单覆盖（默认 skip）
+
+hcm sessions list          # 列出当前项目在所有本地 AI 编码助手中的历史会话
+hcm sessions install       # 分发 hcm-sessions 查询 skill（默认 dry-run）
+hcm sessions install --apply
 ```
 
-清单为空时 `sync` 会自动从最全的工具收集（MCP 选 server 最多的，插件选启用最多的 claude 系工具，hooks 选条目最多的目标工具；第三方注入的 hook 条目也一并收编，排除名单走 `exclude_hooks`；`--from` 可覆盖）；skills 与 subagents 库外独有的会自动入库，同名分叉会列出让你裁决。
+sessions 层只安装查询 skill，不复制、不改写、不“收编”任何原生 session 文件。清单为空时 `sync` 会自动从最全的工具收集（MCP 选 server 最多的，插件选启用最多的 claude 系工具，hooks 选条目最多的目标工具；第三方注入的 hook 条目也一并收编，排除名单走 `exclude_hooks`；`--from` 可覆盖）；skills 与 subagents 库外独有的会自动入库，同名分叉会列出让你裁决。
 
-## 五层模型
+## Session 连续性
+
+从 Claude Code 切到 Codex，或从任意一个助手切到另一个助手时，不需要丢失当前项目的工作历史：
+
+```bash
+# 在任意有 shell 权限的助手中，或安装 hcm-sessions skill 后：
+hcm sessions list --project . --json
+
+# 只读取选中的会话，不把所有 transcript 塞进上下文：
+hcm sessions show claude:<session-id> --transcript --tail 80
+
+# 生成私有、确定性、脱敏的交接上下文：
+hcm sessions context claude:<session-id>
+hcm sessions context claude:<session-id> --output .hcm/HANDOFF.md
+
+# 搜索当前项目历史：
+hcm sessions search "authentication migration" --project .
+```
+
+原生 metadata 读取器覆盖 Claude Code、ZCode、Codex CLI、OpenCode。如果安装并初始化了 [ctx](https://ctx.rs)，`hcm sessions list` 还会纳入 ctx 已索引的 Cursor、Gemini CLI、Copilot CLI、Continue 等更多来源，并与原生结果去重。ctx 是可选依赖；hcm 只调用其只读的 `list events` / `show session` 接口。
+
+内置 `hcm-sessions` skill 会教所有已检测助手同一套查询流程。`hcm sync --sessions`（默认开启）或 `hcm sessions install --apply` 通过正常 skills library 分发。只有显式使用 `--transcript`、`search` 或 `context` 时才读取 transcript；明显凭据会脱敏，历史命令只作为证据展示，不作为可执行指令。
+
+## 五个配置层
 
 | 层 | 事实源 | 分发方式 |
 |---|---|---|
@@ -65,6 +92,7 @@ exclude_agents = []              # 不分发的 subagent 名单
 - `sync --plugins` 的 zcode 目标要求该插件在 claude 侧已安装（镜像来源）。
 - hooks 层仅 claude / zcode / cursor 三家支持（Codex 只有弱 notify 回调，其余工具暂无对等机制）；Cursor 的 prompt 型 hook 仅随 cursor 目标分发。
 - subagents 层仅 claude / zcode / cursor 三家支持；frontmatter 里的 `model: opus` 等是 Claude 系别名，原样分发（在其它工具可能不生效）。
+- Session 连续性原生覆盖 Claude Code / ZCode / Codex / OpenCode；如需更多 provider，可安装可选 ctx。hcm 自身暂未实现 Gemini / Cursor 原生 transcript parser。
 - hook command 的死配置检测是保守的：仅对「单一脚本路径」形式的命令判定存在性，复合 shell 表达式不误报也不检查。
 
 ## 支持新工具
@@ -74,5 +102,5 @@ exclude_agents = []              # 不分发的 subagent 名单
 ## 测试
 
 ```bash
-uv run pytest               # 57 项单测，全部使用假 HOME，绝不触碰真实配置
+uv run pytest               # 63 项单测，全部使用假 HOME，绝不触碰真实配置
 ```

@@ -1,7 +1,7 @@
 [project]
 name = "harness-config-manager"
 version = "0.1.0"
-description = "Detect, inventory, and distribute user-level skills / MCP / plugin config across all your AI coding harnesses."
+description = "Detect, distribute, and recall user-level AI coding harness config and project-scoped session history."
 readme = "README.md"
 authors = [
     { name = "pengkangzhen", email = "pengkangzhen@outlook.com" }
@@ -10,7 +10,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 keywords = [
     "ai", "coding-agents", "harness", "claude-code", "codex", "cursor",
-    "mcp", "skills", "plugins", "config-sync",
+    "mcp", "skills", "plugins", "config-sync", "session-history", "context-handoff",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

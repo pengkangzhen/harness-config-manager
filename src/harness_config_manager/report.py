@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime, timezone
 
 from rich.console import Console
 from rich.table import Table
 
 from .model import ToolReport
+from .sessions import _iso, session_to_dict
 
 console = Console()
 
@@ -35,6 +37,7 @@ def to_json(reports: list[ToolReport]) -> str:
                 for m in r.mcp_servers
             ],
             "plugins": [dataclasses.asdict(p) for p in r.plugins],
+            "sessions": [session_to_dict(x) for x in r.sessions],
             "hooks": [
                 {"event": h.event, "label": h.label, "type": h.type,
                  "matcher": h.matcher, "command": h.command, "timeout": h.timeout,
@@ -55,6 +58,7 @@ def print_summary(reports: list[ToolReport]) -> None:
     table.add_column("MCP", justify="right")
     table.add_column("插件", justify="right")
     table.add_column("Hooks", justify="right")
+    table.add_column("Sessions", justify="right")
     for r in reports:
         linked = sum(1 for s in r.skills if s.linked)
         table.add_row(
@@ -65,6 +69,7 @@ def print_summary(reports: list[ToolReport]) -> None:
             str(len(r.mcp_servers)),
             str(len(r.plugins)),
             str(len(r.hooks)) if r.hooks else "-",
+            str(len(r.sessions)) if r.sessions else "-",
         )
     console.print(table)
 
@@ -124,6 +129,20 @@ def print_plugins_detail(reports: list[ToolReport]) -> None:
         for p in r.plugins:
             enabled = {True: "[green]✓[/green]", False: "[red]✗[/red]", None: "-"}[p.enabled]
             table.add_row(p.plugin_id, p.version or "-", enabled, p.marketplace or "-")
+        console.print(table)
+
+
+def print_sessions_detail(reports: list[ToolReport]) -> None:
+    for r in reports:
+        if not r.sessions:
+            continue
+        table = Table(title=f"{r.display} — sessions ({len(r.sessions)})")
+        table.add_column("Ref", style="cyan", no_wrap=True)
+        table.add_column("Updated")
+        table.add_column("Messages", justify="right")
+        table.add_column("Title", style="dim")
+        for s in sorted(r.sessions, key=lambda x: x.updated_at or x.started_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
+            table.add_row(s.ref, _iso(s.updated_at), str(s.message_count), (s.title or "-")[:80])
         console.print(table)
 
 
@@ -195,3 +214,10 @@ def print_hooks_matrix(reports: list[ToolReport]) -> None:
     names = sorted({h.label for r in capable for h in r.hooks})
     _print_matrix(f"⚓ 矩阵：AI 编码工具 × Hooks（{len(names)}）", "Hook \\ 工具",
                   capable, lambda r, n: any(h.label == n for h in r.hooks), names)
+def print_sessions_matrix(reports: list[ToolReport]) -> None:
+    capable = [r for r in reports if r.sessions]
+    sessions = {s.ref for r in capable for s in r.sessions}
+    if not capable or not sessions:
+        return
+    _print_matrix(f"⚓ 矩阵：当前项目 × Sessions（{len(sessions)}）", "Session \\ 工具",
+                  capable, lambda r, n: any(s.ref == n for s in r.sessions), sorted(sessions))

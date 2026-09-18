@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .agents import scan_agents
 from .detect import detect_tools
 from .hooks import HOOK_READERS
@@ -9,6 +11,7 @@ from .model import ToolReport
 from .mcp import MCP_READERS, plugin_provided_mcp
 from .plugins import PLUGIN_READERS
 from .registry import BY_KEY, TOOLS
+from .sessions import scan_sessions
 from .skills import scan_skills
 
 
@@ -37,6 +40,9 @@ def scan_tool(key: str) -> ToolReport:
 
     if key in HOOK_READERS:
         HOOK_READERS[key](report.hooks, report.scan_notes)
+
+    # Session history is project-scoped rather than a distributed config layer.
+    report.sessions = scan_sessions(Path.cwd(), tools=[key])
 
     return report
 
