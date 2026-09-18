@@ -151,8 +151,12 @@ def run_doctor() -> list[tuple[str, str, str]]:
             s = s.replace(var, str(home))
         if not s or _META.search(s) or " " in s or s.startswith("-"):
             return None                      # 复合 shell / 带参数 / 标志，放弃判定
+        # Unknown shell expansions are not evidence of a missing executable.
+        if "$" in s or s == "~" or (s.startswith("~") and not s.startswith("~/")):
+            return None
         p = Path(home / s[2:]) if s.startswith("~/") else Path(s)
-        return p.exists() if p.is_absolute() else _sh.which(s) is not None
+        absolute = p.is_absolute() or (len(s) > 2 and s[1] == ":" and s[2] == "\\") or s.startswith("\\\\")
+        return p.exists() if absolute else _sh.which(s) is not None
 
     for tool, reader in HOOK_READERS.items():
         spec = BY_KEY.get(tool)

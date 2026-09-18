@@ -95,9 +95,16 @@ def test_sessions_list_all_projects(fake_home, monkeypatch, tmp_path) -> None:
     assert payload["project"] == "all"
 
 
-def test_tool_category_contract(fake_home) -> None:
+def test_tool_category_contract(fake_home, monkeypatch) -> None:
     """矩阵默认只把独立 AI Harness 当列；编辑器宿主标记为 editor。"""
+    from harness_config_manager import cli
+    from harness_config_manager.model import Detection
     from harness_config_manager.registry import TOOLS
+
+    monkeypatch.setattr(cli, "detect_tools", lambda: [
+        Detection("claude", "Claude Code", True, category="harness"),
+        Detection("vscode", "VS Code", True, category="editor"),
+    ])
 
     editors = {t.key for t in TOOLS if t.category == "editor"}
     harnesses = {t.key for t in TOOLS if t.category == "harness"}

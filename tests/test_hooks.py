@@ -322,3 +322,15 @@ def test_cli_sync_hooks_layer(fake_home: Path, monkeypatch: pytest.MonkeyPatch,
     res = runner.invoke(app, ["sync"])
     assert res.exit_code == 0
     assert "hooks 清单为空" in res.output          # 空清单触发自动收集提示
+
+
+def test_doctor_does_not_report_unexpanded_hook_paths_as_dead(fake_home: Path) -> None:
+    from harness_config_manager.doctor import run_doctor
+
+    path = fake_home / ".cursor/hooks.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "hooks": {
+        "beforeSubmitPrompt": [{"command": "$CLAUDE_PROJECT_DIR/hook.sh"}],
+    }}), encoding="utf-8")
+    results = run_doctor()
+    assert not any("死配置" in message for _, _, message in results)

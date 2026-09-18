@@ -139,10 +139,22 @@ def _managed_form(tool: str) -> dict[str, tuple]:
     """工具侧 halter 标记条目 -> {id: (events有序组, matcher, command/type载体, timeout)}。"""
     found: dict[str, dict] = {}
 
+    def _payload(item: dict) -> tuple:
+        payload = {"type": item.get("type", "command")}
+        if item.get("command") is not None:
+            payload["command"] = item.get("command")
+        if item.get("prompt") is not None:
+            payload["prompt"] = item.get("prompt")
+        if item.get("model") is not None:
+            payload["model"] = item.get("model")
+        if item.get("statusMessage") is not None:
+            payload["statusMessage"] = item.get("statusMessage")
+        return tuple(sorted(payload.items()))
+
     def _put(id_, ev, matcher, carrier, timeout):
         rec = found.setdefault(id_, {"events": [], "pairs": []})
         rec["events"].append(ev)
-        rec["pairs"].append((matcher, carrier, timeout))
+        rec["pairs"].append((matcher, _payload(carrier), timeout))
 
     if tool == "claude":
         raw = _load_json_dict(expand(".claude/settings.json")).get("hooks") or {}
@@ -153,9 +165,8 @@ def _managed_form(tool: str) -> dict[str, tuple]:
                 if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     for inner in e.get("hooks") or []:
                         t = inner.get("timeout")
-                        _put(e["halter"], ev, e.get("matcher"),
-                             (inner.get("type", "command"), inner.get("command")),
-                             float(t) if t is not None else None)
+                        _put(e["halter"], ev, e.get("matcher"), inner,
+                             t if t is not None else None)
     elif tool == "zcode":
         hk = _load_json_dict(expand(".zcode/cli/config.json")).get("hooks") or {}
         raw = hk.get("events") or {}
@@ -165,11 +176,8 @@ def _managed_form(tool: str) -> dict[str, tuple]:
             for e in entries:
                 if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     for inner in e.get("hooks") or []:
-                        t = inner.get("timeoutMs")
-                        sec = t / 1000 if t is not None else inner.get("timeout")
-                        _put(e["halter"], ev, e.get("matcher"),
-                             (inner.get("type", "command"), inner.get("command")),
-                             float(sec) if sec is not None else None)
+                        t = inner.get("timeoutMs", inner.get("timeout"))
+                        _put(e["halter"], ev, e.get("matcher"), inner, t)
     elif tool == "cursor":
         raw = _load_json_dict(expand(".cursor/hooks.json")).get("hooks") or {}
         rev = {v: k for k, v in EVENT_TO_CURSOR.items()}
@@ -180,9 +188,8 @@ def _managed_form(tool: str) -> dict[str, tuple]:
             for e in entries:
                 if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     t = e.get("timeout")
-                    _put(e["halter"], canonical, e.get("matcher"),
-                         (e.get("type", "command"), e.get("command")),
-                         float(t) if t is not None else None)
+                    _put(e["halter"], canonical, e.get("matcher"), e,
+                         t if t is not None else None)
 
     forms: dict[str, tuple] = {}
     for id_, rec in found.items():
@@ -191,11 +198,27 @@ def _managed_form(tool: str) -> dict[str, tuple]:
     return forms
 
 
-def _expected_form(spec: HookSpec) -> tuple:
-    """与 _managed_form 同构：(events, sorted[(matcher, (type, command|None), timeout)])。
-    每个 event 下写一条相同 inner，故 pairs 长度 = events 数。"""
-    timeout = round(spec.timeout, 3) if spec.timeout is not None else None
-    pair = (spec.matcher, (spec.type, spec.command), timeout)
+def _expected_form(spec: HookSpec, tool: str) -> tuple:
+    """Match each dialect's payload and timeout representation."""
+    payload = {"type": spec.type}
+    if spec.type == "prompt":
+        payload["prompt"] = spec.extra.get("prompt", "")
+        if spec.extra.get("model"):
+            payload["model"] = spec.extra["model"]
+    elif spec.command is not None:
+        payload["command"] = spec.command
+    if tool == "zcode" and spec.description:
+        payload["statusMessage"] = spec.description
+
+    if spec.timeout is None:
+        timeout = None
+    elif tool == "claude":
+        timeout = max(1, int(round(spec.timeout)))
+    elif tool == "zcode":
+        timeout = max(1000, int(round(spec.timeout * 1000)))
+    else:
+        timeout = spec.timeout
+    pair = (spec.matcher, tuple(sorted(payload.items())), timeout)
     return (tuple(sorted(spec.events)), tuple(sorted(pair for _ in spec.events)))
 
 
@@ -228,7 +251,7 @@ def sync_hooks(specs: list[HookSpec], installed_tools: list[str],
             scoped = HookSpec(**{**s.__dict__, "events": ok})
             existing = current.get(s.id)
             if existing is not None:
-                if existing == _expected_form(scoped):
+                if existing == _expected_form(scoped, tool):
                     continue          # 已是期望状态
                 if prefer != "library":
                     lines.append(f"[yellow]conflict {tool}:{s.id} 已存在且定义不同"

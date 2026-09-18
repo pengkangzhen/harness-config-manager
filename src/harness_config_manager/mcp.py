@@ -42,7 +42,9 @@ def _parse_common(entry: dict) -> tuple[str, str | None, str | None]:
     return transport, entry.get("command"), entry.get("url")
 
 
-def _from_mcp_servers(raw: dict) -> list[McpServerInfo]:
+def _from_mcp_servers(raw: object) -> list[McpServerInfo]:
+    if not isinstance(raw, dict):
+        return []
     servers: list[McpServerInfo] = []
     for name, entry in raw.items():
         if not isinstance(entry, dict):
@@ -103,7 +105,7 @@ def read_codex(out: list, notes: list) -> None:
 def read_vscode(out: list, notes: list) -> None:
     # 用户级：键名是 servers
     user = _load_json(expand("Library/Application Support/Code/User/mcp.json"))
-    if user and "servers" in user:
+    if isinstance(user, dict) and "servers" in user:
         out.extend(_from_mcp_servers(user["servers"]))
     # CLI/外部工具级：键名是 mcpServers
     _reader_json(".vscode/mcp.json", "mcpServers")(out, notes)

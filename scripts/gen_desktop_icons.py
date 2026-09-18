@@ -62,7 +62,7 @@ def render(size: int) -> bytes:
         row = bytearray()
         for xx in range(size):
             # supersample
-            r = g = b = 0.0
+            r = g = b = a = 0.0
             for sy in range(SS):
                 for sx in range(SS):
                     px = xx * SS + sx + 0.5
@@ -99,8 +99,9 @@ def render(size: int) -> bytes:
                     r += rr * alpha
                     g += gg * alpha
                     b += bb * alpha
+                    a += alpha
             n = SS * SS
-            row += bytes((int(clamp(r / n, 0, 255)), int(clamp(g / n, 0, 255)), int(clamp(b / n, 0, 255)), 255))
+            row += bytes((int(clamp(r / n, 0, 255)), int(clamp(g / n, 0, 255)), int(clamp(b / n, 0, 255)), int(clamp(a / n * 255))))
         rows.append(row)
 
     # PNG (color type 6 = RGBA, 8-bit)

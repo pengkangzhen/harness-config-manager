@@ -142,6 +142,8 @@ class AhpConn:
     client_id: str
     outbox: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1000))
     alive: bool = True
+    streaming: bool = False
+    last_seen: float = field(default_factory=time.monotonic)
 
 
 class AhpHost:
@@ -287,9 +289,12 @@ class AhpHost:
         for client_id, conn in list(self.connections.items()):
             if channel not in self.subscriptions.get(client_id, set()):
                 continue
-            if not conn.alive:
+            if not conn.alive or (
+                not conn.streaming and time.monotonic() - conn.last_seen > 300
+            ):
                 self.connections.pop(client_id, None)
                 self.subscriptions.pop(client_id, None)
+                conn.alive = False
                 continue
             try:
                 conn.outbox.put_nowait(message)
@@ -974,7 +979,9 @@ def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
     def _conn_for(request: aiohttp.web.Request) -> AhpConn:
         supplied = request.query.get("client")
         if supplied and supplied in ahp.connections:
-            return ahp.connections[supplied]
+            conn = ahp.connections[supplied]
+            conn.last_seen = time.monotonic()
+            return conn
         return ahp.new_conn(supplied)
 
     async def rpc_handler(request: aiohttp.web.Request) -> aiohttp.web.Response:
@@ -992,6 +999,7 @@ def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
 
     async def stream_handler(request: aiohttp.web.Request) -> aiohttp.web.StreamResponse:
         conn = _conn_for(request)
+        conn.streaming = True
         resp = aiohttp.web.StreamResponse(headers={
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -1007,7 +1015,11 @@ def build_web_app(ahp: AhpHost) -> aiohttp.web.Application:
         except (ConnectionError, RuntimeError, asyncio.CancelledError):
             pass
         finally:
-            ahp.drop_conn(conn)
+            # Keep the logical HTTP-RPC/SSE client alive so reconnecting the
+            # stream retains its subscriptions; idle clients are reclaimed in
+            # _broadcast instead.
+            conn.streaming = False
+            conn.last_seen = time.monotonic()
         return resp
 
     async def health(request: aiohttp.web.Request) -> aiohttp.web.Response:

@@ -279,3 +279,10 @@ def test_redaction_does_not_treat_max_tokens_as_secret() -> None:
         "tokenizer": "cl100k",
     }
     assert redact({"AWS_ACCESS_KEY_ID": "AKIATEST"})["AWS_ACCESS_KEY_ID"] == "<REDACTED>"
+
+
+def test_from_mcp_servers_ignores_non_object_container() -> None:
+    from harness_config_manager.mcp import _from_mcp_servers
+
+    assert _from_mcp_servers(None) == []
+    assert _from_mcp_servers([{"name": "bad"}]) == []
