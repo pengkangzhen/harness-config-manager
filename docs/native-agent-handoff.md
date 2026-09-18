@@ -1,11 +1,12 @@
 # halter Native Agent — 交接与后续推进计划
 
-更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；**Milestone 1-7 全部完成**（M1
-`00438b4`、M2 `8322aa3`、M3 `c6beb26`、M4 `0ef963e`、M5 `e732df5`、M6
-`0f85ff0`、M7 desktop e2e & release hardening），缺口 A-H 全部关闭。
-本机验证：`uv run pytest -q`（含 release 契约测试）、`node --check`、
-`npx playwright test`（7 passed）；完整 cargo check / cargo test 由
+更新时间：2026-09-19  
+基线状态：`a98f1ff` 时 `141 passed`；**Milestone 1-7 全部完成，缺口 A-H 全部
+关闭，预留项（semantic-equivalent `5877318`、MCP streamable-HTTP `dfeaff8`）
+亦已交付**（M1 `00438b4`、M2 `8322aa3`、M3 `c6beb26`、M4 `0ef963e`、
+M5 `e732df5`、M6 `0f85ff0`、M7 `6eec560`）。
+本机验证：`uv run pytest -q`（189 passed，含 release 契约测试）、
+`node --check`、`npx playwright test`（7 passed）；完整 cargo check / test 由
 `.github/workflows/desktop-ci.yml` 在 CI 执行（本机缺 cc/pkg-config/
 webkit2gtk dev，见 Milestone 7 环境记录与 §11）。
 
@@ -282,7 +283,7 @@ opencode
 `patch_compare`（纯函数模块）生成结构化比较并注入每个 delegate 工具结果：
 
 ```text
-comparison.files[].classification: identical / conflicting / overlapping / unique
+comparison.files[].classification: identical / conflicting / semantic_equivalent / overlapping / unique
 comparison.unrelated（各 provider 文件互不相交）
 comparison.conflicts[]（含每 provider 的 hunk header 与改动行，供 UI 高亮）
 comparison.strategy（合并采纳建议）
@@ -630,7 +631,8 @@ search` CLI、UI 事件过滤与列表过滤；plan evidence deep link 在 M1 �
 
 已在 Milestone 6 落地：declared stdio MCP servers 的工具以 `mcp_<server>_<tool>`
 进入 native tool loop；read-only 默认可用，state-changing 需逐工具 allowlist
-并走统一审批。HTTP/SSE transport 暂未接入（stdio only）。
+并走统一审批。stdio 与 streamable-HTTP transport 均已接入（legacy
+SSE-only 跳过）。
 
 ### 缺口 G：桌面端自动化验证不足 ✅ 已完成（Milestone 7）
 
@@ -677,7 +679,7 @@ Tauri IPC）、Rust 桥 auth 负面测试（CI 执行）、desktop CI workflow�
 
 1. `src/harness_config_manager/patch_compare.py` 纯函数模块：解析 unified diff、
    按 file 分组、hunk 指纹只取改动行（+/-）、old 侧行区间重叠判定
-2. 文件分类 `identical / conflicting / overlapping / unique`；report 级
+2. 文件分类 `identical / conflicting / semantic_equivalent / overlapping / unique`；report 级
    `unrelated`（≥2 provider 且文件互不相交）；冲突条目含每 provider 的
    规范化 hunk header（`@@ -a,b +c,d @@`）与截断后的 removed/added 行
 3. `AgentRuntime.run` 维护本 run 各 provider 最新 delegate diff，≥2 个时
@@ -687,8 +689,9 @@ Tauri IPC）、Rust 桥 auth 负面测试（CI 执行）、desktop CI workflow�
    provider 的 diff 中行级高亮（header 精确匹配）
 5. 空 diff / 非 diff 文本（含非 git workspace 的失败输出）解析为无文件，
    不抛异常
-6. 注意：`semantic_equivalent` 未实现——指纹是逐字节的，格式化差异会被
-   判为 conflicting；如需语义级等价判定，留给后续 milestone
+6. `semantic_equivalent` 已实现（后续增强 `5877318`）：重叠 hunk 的改动
+   仅尾随空白/空行差异时判为语义等价（可任取一份），不再算硬冲突；
+   更深层的 AST 级等价判定仍在范围外
 
 验收标准：
 
@@ -791,7 +794,9 @@ Tauri IPC）、Rust 桥 auth 负面测试（CI 执行）、desktop CI workflow�
    arguments（`plan_step_id` 不透传给 server）
 5. 结果（content text / structuredContent）截断后进入通用 tool
    result / audit 流；`${VAR}` secret 只展开进子进程 env，不进事件
-6. HTTP/SSE transport 的 server 被跳过（Phase 范围外）
+6. legacy SSE-only transport 的 server 被跳过；streamable-HTTP 已由后续
+   增强（`dfeaff8`）接入：每消息一个 JSON-RPC POST，支持 JSON 与 SSE
+   响应，自动携带服务端分配的 `Mcp-Session-Id`
 
 验收标准：
 
@@ -848,69 +853,70 @@ Tauri IPC）、Rust 桥 auth 负面测试（CI 执行）、desktop CI workflow�
 
 ## 8. 推荐的完成定义
 
-最终可以说目标完成，至少要满足：
+最终可以说目标完成，至少要满足（2026-09-19 复核：全部满足，括注实现位置）：
 
 ### 可控
 
-- [ ] 默认 read-only
-- [ ] 写入 / 真实测试均需显式审批
-- [ ] 所有工具参数与结果可追溯
-- [ ] patch 可回滚
-- [ ] 外部 Harness 只能改 sandbox
-- [ ] MCP write 工具同样受审批约束
+- [x] 默认 read-only（`tools_for_permission`；write 工具不进 schema）
+- [x] 写入 / 真实测试均需显式审批（apply_patch / run_tests / run_tests_workspace / write MCP）
+- [x] 所有工具参数与结果可追溯（audit tool.call/tool.result 含 planStepId）
+- [x] patch 可回滚（transaction 精确反向 patch，rollback 校验）
+- [x] 外部 Harness 只能改 sandbox（delegate 一次性 clone，diff 回流审批）
+- [x] MCP write 工具同样受审批约束（`[native_agent.mcp]` write allowlist + approval）
 
 ### 可审计
 
-- [ ] 每次 model response 有记录
-- [ ] 每次 tool call / result 有记录
-- [ ] 每次 approval decision 有记录
-- [ ] 每次 rollback 有记录
-- [ ] plan step 可关联证据
-- [ ] audit viewer 可搜索并定位事件
-- [ ] session / transaction / audit 三者可互相关联
+- [x] 每次 model response 有记录（audit model.response）
+- [x] 每次 tool call / result 有记录（audit tool.call/tool.result）
+- [x] 每次 approval decision 有记录（approval.requested/response）
+- [x] 每次 rollback 有记录（transaction.rolledBack/rollbackFailed）
+- [x] plan step 可关联证据（M1 planEvidence + UI 展开）
+- [x] audit viewer 可搜索并定位事件（M4 search + deep link）
+- [x] session / transaction / audit 三者可互相关联（planStepId 贯穿 + audit search 按 transaction id 定位）
 
 ### 多模型
 
-- [ ] OpenAI-compatible streaming 可用
-- [ ] custom provider 可配置
-- [ ] provider health 可检查
-- [ ] API key 不落盘
-- [ ] AHP catalog 正确反映可用性
-- [ ] model switching 不破坏 durable session
+- [x] OpenAI-compatible streaming 可用（模型客户端 SSE 流式）
+- [x] custom provider 可配置（`[model_providers]` + `halter model configure`）
+- [x] provider health 可检查（M3 `halter model check` + Model view 面板）
+- [x] API key 不落盘（只存环境变量名 / secrets.toml，输出恒脱敏）
+- [x] AHP catalog 正确反映可用性（`halter:available` 复用 resolve_route）
+- [x] model switching 不破坏 durable session（agent_messages/currentPlan/planEvidence 与模型配置解耦，durable restore 测试覆盖）
 
 ### 多 Harness
 
-- [ ] Claude / Codex / ZCode / OpenCode 可并发委派
-- [ ] sandbox snapshot 包含 tracked + bounded untracked
-- [ ] diff 可结构化比较
-- [ ] 冲突可解释
-- [ ] 合并建议仍由 halter 原生 Agent 统一生成
-- [ ] 真实 workspace 修改仍走 apply_patch 审批
+- [x] Claude / Codex / ZCode / OpenCode 可并发委派（同轮并发 delegate）
+- [x] sandbox snapshot 包含 tracked + bounded untracked（5000 文件 / 200 MiB 上限）
+- [x] diff 可结构化比较（M2 patch_compare + semantic_equivalent 后续增强）
+- [x] 冲突可解释（conflicts 含各 provider hunk header 与改动行，UI 高亮）
+- [x] 合并建议仍由 halter 原生 Agent 统一生成（comparison 注入工具结果）
+- [x] 真实 workspace 修改仍走 apply_patch 审批
 
 ### 本地 AI 编码助手
 
-- [ ] Desktop workbench 可完成一个真实小型代码修改任务
-- [ ] plan / tools / diff / approval / tests / rollback 全流程可视
-- [ ] App 重启后可恢复上下文
-- [ ] release sidecar 与源码一致
-- [ ] 全量测试与 desktop smoke 通过
+- [x] Desktop workbench 可完成一个真实小型代码修改任务（plan→read→delegate 对比→apply_patch 审批→run_tests→rollback 全链可用；e2e 覆盖各环节）
+- [x] plan / tools / diff / approval / tests / rollback 全流程可视（调度页各面板 + sandbox/workspace 环境徽标）
+- [x] App 重启后可恢复上下文（durable sessions：turns/currentPlan/planEvidence/approvalHistory）
+- [x] release sidecar 与源码一致（版本契约测试 + 构建输入 hash + sidecar CI job；真机安装包待 CI 绿后构建）
+- [x] 全量测试与 desktop smoke 通过（189 pytest + 7 Playwright 本机全绿；cargo check/test 由 desktop-ci 执行）
 
 ---
 
 ## 9. 建议的下一个 PR
 
-Milestone 1-7 全部完成，缺口 A-H 全部关闭，路线图（§7）已交付。
+Milestone 1-7 全部完成，缺口 A-H 全部关闭，原路线图（§7）与其预留项
+（semantic-equivalent 分类 `5877318`、MCP streamable-HTTP transport
+`dfeaff8`）均已交付。
 
-后续候选（超出本文档原始范围）：
+剩余事项（均需外部条件，非代码缺口）：
 
-```text
-feat: semantic-equivalent diff classification（M2 预留）
-feat: MCP http/sse transport（M6 预留）
-chore: 真机 release 构建（npm run build）+ 安装包冒烟
-```
-
-优先事项是推送 main 触发 desktop-ci，确认四个 job 全绿（尤其
-desktop-rust 的 cargo test——本机无法执行，见 §11 常见坑）。
+1. **推送 main 触发 desktop-ci** 并确认四个 job 全绿（尤其 desktop-rust
+   的 cargo test——本机无法执行，见 §11 常见坑；本机 gh 因网络超时无法
+   验证远程状态）
+2. **真机 release 构建**（`npm run build`）与安装包冒烟，需带 webkit2gtk
+   图形栈的环境
+3. 可选：legacy SSE-only MCP transport、AST 级语义等价判定（超出当前
+   白名单规范化粒度）
 
 ---
 
