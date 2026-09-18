@@ -110,3 +110,34 @@ def test_tool_category_contract(fake_home) -> None:
     cats = {t["tool"]: t.get("category") for t in payload["inventory"]}
     assert cats.get("vscode") == "editor"
     assert cats.get("claude") == "harness"
+
+
+def test_sessions_projects_kind_classification(fake_home, monkeypatch, tmp_path) -> None:
+    """temp/dated/virtual 目录不与真实项目混排；真实项目按存在性判定。"""
+    from harness_config_manager import sessions as sess
+    from harness_config_manager.sessions import SessionInfo
+
+    real = tmp_path / "realproj"
+    real.mkdir()
+    cases = [
+        (str(real), "project"),
+        ("/private/tmp", "temp"),
+        (str(fake_home / ".zcode/workspace/default"), "virtual"),
+        (str(fake_home / "Documents/Codex/2026-09-08/hi"), "dated"),
+        (str(tmp_path / "deleted-project"), "stale"),
+    ]
+
+    def fake_scan(project, tools=None):
+        return [
+            SessionInfo("codex", f"s{i}", tmp_path / f"f{i}.jsonl",
+                        project=Path(path), message_count=1)
+            for i, (path, _) in enumerate(cases)
+        ]
+
+    monkeypatch.setattr(sess, "scan_sessions", fake_scan)
+    result = runner.invoke(app, ["sessions", "projects", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    got = {p["path"]: p["kind"] for p in payload["projects"]}
+    for path, kind in cases:
+        assert got[path] == kind, (path, got.get(path), kind)

@@ -768,3 +768,35 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* project dropdown: grouped + path disambiguation */
+.project-group-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: .06em;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+.project-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 9.5px;
+  font-family: var(--mono);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;   /* 长路径靠左截断，保留尾部（消歧部分） */
+  text-align: left;
+}
+.project-kind-badge {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--amber);
+  border: 1px solid rgba(255, 198, 92, .35);
+  border-radius: 4px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}

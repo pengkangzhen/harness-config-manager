@@ -67,6 +67,13 @@ const TOOL_COLORS = {
 const toolColor = (tool) => TOOL_COLORS[tool] || "#8b96b8";
 const basename = (p) => (p || "").split("/").filter(Boolean).pop() || p || "-";
 
+function shortenPath(p) {
+  if (!p) return "";
+  if (p.startsWith("/private/var/folders/")) return "…/var/folders/…/T";
+  const m = p.match(/^\/Users\/[^/]+(.*)$/);
+  return m ? "~" + m[1] : p;
+}
+
 /* ---------------- global state ---------------- */
 
 const state = {
@@ -488,7 +495,11 @@ function renderProjectInput() {
   }
   if (state.projectFilter === null) {
     input.value = "";
-    input.placeholder = `全部项目（${state.projects.length} 个）— 输入即筛选`;
+    const real = state.projects.filter((p) => (p.kind || "project") === "project").length;
+    const others = state.projects.length - real;
+    input.placeholder = others
+      ? `全部项目（${real} 个 + ${others} 个历史/临时目录）— 输入即筛选`
+      : `全部项目（${real} 个）— 输入即筛选`;
     clear.classList.add("hidden");
   } else {
     const p = state.projects.find((x) => x.path === state.projectFilter);
@@ -524,10 +535,18 @@ function renderProjectDropdownList(filter) {
         (p.path || "").toLowerCase().includes(needle) ||
         (p.name || "").toLowerCase().includes(needle))
     : state.projects;
-  for (const p of projects) {
+  const real = projects.filter((p) => (p.kind || "project") === "project");
+  const others = projects.filter((p) => (p.kind || "project") !== "project");
+
+  const renderProjectRow = (p) => {
     const row = el("div", `project-item${state.projectFilter === p.path ? " selected" : ""}`);
     const head = el("div", "project-head");
-    head.append(el("span", "project-name", p.name || basename(p.path)));
+    const name = el("span", "project-name", p.name || basename(p.path));
+    if (p.kind && p.kind !== "project") {
+      const KIND_TEXT = { temp: "临时", dated: "会话目录", virtual: "内部", stale: "已删除" };
+      name.append(el("span", "project-kind-badge", KIND_TEXT[p.kind] || p.kind));
+    }
+    head.append(name);
     head.append(el("span", "project-count", `${p.sessions} 会话`));
     row.append(head);
 
@@ -540,12 +559,20 @@ function renderProjectDropdownList(filter) {
       dots.append(dot);
     }
     sub.append(dots);
+    const pathEl = el("span", "project-path", shortenPath(p.path));
+    pathEl.title = p.path;
+    sub.append(pathEl);
     sub.append(el("span", "project-last", relTime(p.last_activity)));
     row.append(sub);
 
-    row.title = p.path;
     row.addEventListener("click", () => selectProject(p.path));
     listEl.append(row);
+  };
+
+  for (const p of real) renderProjectRow(p);
+  if (others.length) {
+    listEl.append(el("div", "project-group-header", `临时 / 自动会话目录 / 已删除（${others.length}）`));
+    for (const p of others) renderProjectRow(p);
   }
   state.projectMatches = projects;
   if (needle && !projects.length) {

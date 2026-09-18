@@ -231,6 +231,46 @@ def sessions_projects(
         except OSError:
             return False
 
+    def _project_kind(path_str: str) -> str:
+        """project=真实项目；temp/dated/virtual/stale=非项目目录（下拉中折叠展示）。"""
+        import re as _re
+
+        if not path_str:
+            return "virtual"
+        raw = Path(path_str).expanduser()
+        try:
+            resolved = raw.resolve(strict=False)
+        except OSError:
+            resolved = raw
+        rs = str(resolved)
+        if rs in ("/tmp", "/private/tmp", "/var/tmp"):
+            return "temp"
+        if rs.startswith("/private/var/folders/") and rs.endswith("/T"):
+            return "temp"
+        home = Path.home()
+        for base, kind in (
+            (home / ".zcode/workspace", "virtual"),
+        ):
+            try:
+                if resolved.is_relative_to(base):
+                    return kind
+                if raw.is_relative_to(base):
+                    return kind
+            except (OSError, ValueError):
+                continue
+        codex_root = home / "Documents/Codex"
+        for cand in (raw, resolved):
+            try:
+                if cand.is_relative_to(codex_root):
+                    first = cand.relative_to(codex_root).parts[0]
+                    if _re.fullmatch(r"\d{4}-\d{2}-\d{2}", first):
+                        return "dated"
+            except (OSError, ValueError):
+                continue
+        if not resolved.exists():
+            return "stale"
+        return "project"
+
     current = project.expanduser().resolve(strict=False)
     agg: dict[str, dict] = {}
     for item in scan_sessions(None):
@@ -255,6 +295,7 @@ def sessions_projects(
             "tool_counts": v["tools"],
             "last_activity": _iso(v["last"]),
             "current": _same_path(key, current),
+            "kind": _project_kind(key),
         }
         for key, v in rows
     ]
