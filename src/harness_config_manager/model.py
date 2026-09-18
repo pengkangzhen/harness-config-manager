@@ -44,6 +44,8 @@ class ToolSpec:
     config_dirs: tuple[str, ...] = ()
     skills_dirs: tuple[str, ...] = ()
     agents_dirs: tuple[str, ...] = ()
+    # harness = 独立 AI 编码代理（CLI/Agent 形态）；editor = 编辑器宿主（扩展/插件寄生）
+    category: str = "harness"
     notes: str = ""
 
 
@@ -53,6 +55,7 @@ class Detection:
     display: str
     installed: bool
     evidence: list[str] = field(default_factory=list)
+    category: str = "harness"
 
 
 @dataclass
@@ -104,6 +107,7 @@ class ToolReport:
     tool: str
     display: str
     installed: bool
+    category: str = "harness"
     skills: list[SkillInfo] = field(default_factory=list)
     agents: list[AgentInfo] = field(default_factory=list)
     mcp_servers: list[McpServerInfo] = field(default_factory=list)

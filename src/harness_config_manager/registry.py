@@ -52,6 +52,7 @@ TOOLS: tuple[ToolSpec, ...] = (
             "Library/Application Support/Code/User",
             ".vscode",
         ),
+        category="editor",
         notes="MCP 两处：User/mcp.json（键 servers）与 ~/.vscode/mcp.json（键 mcpServers）；扩展用 code --install-extension",
     ),
     ToolSpec(
@@ -81,12 +82,14 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="Continue",
         config_dirs=(".continue",),
         skills_dirs=(".continue/skills",),
+        category="editor",
         notes="仅 skills 层",
     ),
     ToolSpec(
         key="cline",
         display="Cline",
         config_dirs=(".cline",),
+        category="editor",
         notes="仅配置目录检测，无用户级 skills 目录",
     ),
     ToolSpec(
@@ -94,6 +97,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="Trae",
         config_dirs=(".trae",),
         skills_dirs=(".trae/skills",),
+        category="editor",
         notes="仅 skills 层；skill-config.json 管理内置技能状态",
     ),
     ToolSpec(
@@ -101,6 +105,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="Aider Desktop",
         config_dirs=(".aider-desk",),
         skills_dirs=(".aider-desk/skills",),
+        category="editor",
         notes="仅 skills 层",
     ),
     ToolSpec(
@@ -108,6 +113,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="Windsurf",
         config_dirs=(".codeium/windsurf",),
         skills_dirs=(".codeium/windsurf/skills",),
+        category="editor",
         notes="仅 skills 层",
     ),
 )

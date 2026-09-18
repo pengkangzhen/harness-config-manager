@@ -22,6 +22,7 @@ def to_json(reports: list[ToolReport]) -> str:
             "tool": r.tool,
             "display": r.display,
             "installed": r.installed,
+            "category": r.category,
             "skills": [
                 {"name": s.name, "path": str(s.path), "linked": s.linked}
                 for s in r.skills

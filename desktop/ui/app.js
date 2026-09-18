@@ -79,6 +79,7 @@ const state = {
   viewMode: "timeline",   // "timeline" | "list"
   matrixLayer: "skills",
   matrixGapsOnly: false,
+  matrixHarnessOnly: true,
 };
 
 /* ---------------- view switching ---------------- */
@@ -155,7 +156,11 @@ function renderOverview(data) {
   for (const tool of tools) {
     const card = el("div", "tool-card");
     const header = el("div", "tool-card-header");
-    header.append(el("div", "tool-name", tool.display || tool.tool));
+    const name = el("div", "tool-name", tool.display || tool.tool);
+    if ((tool.category || "harness") === "editor") {
+      name.append(el("span", "cat-badge editor", "编辑器"));
+    }
+    header.append(name);
     header.append(el("div", "tool-key", tool.tool));
     card.append(header);
 
@@ -192,7 +197,11 @@ function matrixItemName(layer, item) {
 
 function buildMatrix(scan, layerKey) {
   const layer = MATRIX_LAYERS.find((l) => l.key === layerKey);
-  const tools = (scan.inventory || []).filter((t) => t.installed);
+  let tools = (scan.inventory || []).filter((t) => t.installed);
+  if (state.matrixHarnessOnly) {
+    // harness = 独立 AI 编码代理；editor（vscode/continue/cline 等）默认不进矩阵列
+    tools = tools.filter((t) => (t.category || "harness") !== "editor");
+  }
   const rows = new Map();
   for (const tool of tools) {
     for (const item of tool[layer.field] || []) {
@@ -254,8 +263,9 @@ function renderMatrix(scan) {
   const shown = state.matrixGapsOnly ? rows.filter((r) => r.missing > 0) : rows;
   const totalGaps = rows.reduce((acc, r) => acc + r.missing, 0);
 
+  const scopeLabel = state.matrixHarnessOnly ? `${tools.length} 个 AI Harness` : `${tools.length} 个工具（含编辑器）`;
   $("matrix-summary").textContent =
-    `${layer.label}：${rows.length} 个条目 × ${tools.length} 个工具 · 缺口 ${totalGaps} 处` +
+    `${layer.label}：${rows.length} 个条目 × ${scopeLabel} · 缺口 ${totalGaps} 处` +
     (state.matrixGapsOnly ? ` · 仅显示缺口的 ${shown.length} 条` : "");
 
   const wrap = $("matrix-wrap");
@@ -295,6 +305,11 @@ function renderMatrix(scan) {
 
 $("matrix-gaps-only").addEventListener("change", (e) => {
   state.matrixGapsOnly = e.target.checked;
+  if (state.scanCache) renderMatrix(state.scanCache);
+});
+
+$("matrix-harness-only").addEventListener("change", (e) => {
+  state.matrixHarnessOnly = e.target.checked;
   if (state.scanCache) renderMatrix(state.scanCache);
 });
 

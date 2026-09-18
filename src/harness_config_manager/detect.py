@@ -25,6 +25,7 @@ def detect_tools() -> list[Detection]:
                 display=spec.display,
                 installed=bool(evidence),
                 evidence=evidence,
+                category=spec.category,
             )
         )
     return results

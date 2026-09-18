@@ -93,3 +93,20 @@ def test_sessions_list_all_projects(fake_home, monkeypatch, tmp_path) -> None:
     assert captured == [None]
     payload = json.loads(result.output)
     assert payload["project"] == "all"
+
+
+def test_tool_category_contract(fake_home) -> None:
+    """矩阵默认只把独立 AI Harness 当列；编辑器宿主标记为 editor。"""
+    from harness_config_manager.registry import TOOLS
+
+    editors = {t.key for t in TOOLS if t.category == "editor"}
+    harnesses = {t.key for t in TOOLS if t.category == "harness"}
+    assert {"vscode", "continue", "cline", "trae", "aider", "windsurf"} <= editors
+    assert {"claude", "codex", "zcode", "cursor", "gemini", "opencode", "copilot-cli"} <= harnesses
+
+    result = runner.invoke(app, ["scan", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    cats = {t["tool"]: t.get("category") for t in payload["inventory"]}
+    assert cats.get("vscode") == "editor"
+    assert cats.get("claude") == "harness"

@@ -17,7 +17,7 @@ from .skills import scan_skills
 
 def scan_tool(key: str) -> ToolReport:
     spec = BY_KEY[key]
-    report = ToolReport(tool=spec.key, display=spec.display, installed=True)
+    report = ToolReport(tool=spec.key, display=spec.display, installed=True, category=spec.category)
 
     skills, notes = scan_skills(spec)
     report.skills = skills
