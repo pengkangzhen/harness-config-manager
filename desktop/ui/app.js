@@ -1173,6 +1173,29 @@ function auditKindTone(kind) {
   return "";
 }
 
+function auditEventFilter() {
+  const text = $("audit-text-input")?.value.trim() || "";
+  const from = $("audit-from-input")?.value || "";
+  const to = $("audit-to-input")?.value || "";
+  return { text, from: from ? `${from}T00:00:00` : "", to: to ? `${to}T23:59:59` : "" };
+}
+
+function auditEventMatches(event, filter) {
+  const ts = String(event.ts || "");
+  if (filter.from && ts && ts < filter.from) return false;
+  if (filter.to && ts && ts > filter.to) return false;
+  if (filter.text) {
+    const haystack = JSON.stringify(event).toLowerCase();
+    const hit = filter.text.toLowerCase().split(/\s+/).every((term) => !term || haystack.includes(term));
+    if (!hit) return false;
+  }
+  return true;
+}
+
+function auditListFilterValue() {
+  return ($("audit-list-filter")?.value || "").trim().toLowerCase();
+}
+
 function renderAuditList() {
   const list = $("audit-list");
   list.replaceChildren();
@@ -1181,7 +1204,17 @@ function renderAuditList() {
     list.append(empty);
     return;
   }
-  for (const item of state.auditItems) {
+  const needle = auditListFilterValue();
+  const items = needle
+    ? state.auditItems.filter((item) =>
+        `${item.workspace || ""} ${item.provider || ""} ${item.title || ""} ${item.session_id || ""}`
+          .toLowerCase().includes(needle))
+    : state.auditItems;
+  if (!items.length) {
+    list.append(el("div", "empty-state", "没有匹配的审计会话"));
+    return;
+  }
+  for (const item of items) {
     const row = el("div", "audit-item" + (state.selectedAudit?.session_id === item.session_id ? " selected" : ""));
     const title = el("div", "audit-title", item.title || item.session_id);
     const meta = el("div", "audit-meta");
@@ -1254,7 +1287,9 @@ function renderAuditDetail(data) {
   detail.append(header);
 
   const events = el("div", "audit-events");
-  for (const event of data.events || []) {
+  const filter = auditEventFilter();
+  const shown = (data.events || []).filter((event) => auditEventMatches(event, filter));
+  for (const event of shown) {
     const item = el("div", `audit-event ${auditKindTone(event.kind)}`);
     item.dataset.eventId = String(event.id ?? "");
     const txnId = event.result && typeof event.result === "object"
@@ -1289,7 +1324,11 @@ function renderAuditDetail(data) {
 async function jumpToAuditEvidence(sessionId, matchId) {
   if (!sessionId || !matchId) return;
   state.auditJump = { sessionId, matchId: String(matchId) };
+  // 清空过滤条件，保证目标事件可见
   $("audit-kind-input").value = "";
+  if ($("audit-text-input")) $("audit-text-input").value = "";
+  if ($("audit-from-input")) $("audit-from-input").value = "";
+  if ($("audit-to-input")) $("audit-to-input").value = "";
   const nav = document.querySelector('.nav-item[data-view="audit"]');
   if (nav && !nav.classList.contains("active")) nav.click();
   await loadAuditView();
@@ -1306,6 +1345,16 @@ $("btn-refresh-audit").addEventListener("click", () => {
 $("audit-kind-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && state.selectedAudit) selectAudit(state.selectedAudit);
 });
+$("audit-text-input")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && state.selectedAudit) selectAudit(state.selectedAudit);
+});
+$("audit-from-input")?.addEventListener("change", () => {
+  if (state.selectedAudit) selectAudit(state.selectedAudit);
+});
+$("audit-to-input")?.addEventListener("change", () => {
+  if (state.selectedAudit) selectAudit(state.selectedAudit);
+});
+$("audit-list-filter")?.addEventListener("input", () => renderAuditList());
 
 /* ---------------- dispatch（多 Harness 任务调度） ---------------- */
 

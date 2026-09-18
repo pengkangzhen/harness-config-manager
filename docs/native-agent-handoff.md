@@ -1,9 +1,9 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（Evidence-linked plan，`00438b4`）、
-Milestone 2（deterministic patch comparison，`8322aa3`）与 Milestone 3（provider
-health & model diagnostics）已完成，全量 `167 passed`。
+基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（`00438b4`）、Milestone 2（`8322aa3`）、
+Milestone 3（provider health，`c6beb26`）与 Milestone 4（audit search）已完成，
+全量 `173 passed`。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -186,7 +186,13 @@ CLI：
 halter audit list
 halter audit show <session-id>
 halter audit show <session-id> --kind approval.response --tail 100
+halter audit search "transaction-id"
+halter audit search --tool apply_patch --workspace /path [--from 2026-09-01] [--to 2026-09-18] [--json]
 ```
+
+`audit search` 支持 transaction id / 工具名 / 全文 / kind / provider /
+workspace / 日期组合过滤，逐文件 5 万行读取上限 + offset/limit 分页，
+损坏文件跳过并上报（`skipped_files`）。
 
 桌面 App 已有「审计」视图。
 
@@ -598,15 +604,11 @@ comparison + UI 分类标签与冲突 hunk 高亮。
 已在 Milestone 3 落地：`model_health.py` 诊断模块、`halter model check` CLI、
 AHP `halter:health` metadata、桌面 Model view 健康面板。
 
-### 缺口 D：审计检索还不完整
+### 缺口 D：审计检索还不完整 ✅ 已完成（Milestone 4）
 
-Audit view 可以按 kind 过滤，但缺少：
-
-- 全局文本搜索
-- transaction id 搜索
-- tool name 搜索
-- workspace/provider/date 组合过滤
-- event jump / deep link
+已在 Milestone 4 落地：`search_audits`（全文 / transaction id / tool name /
+kind / provider / workspace / 日期组合 + 分页 + 读取上限）、`halter audit
+search` CLI、UI 事件过滤与列表过滤；plan evidence deep link 在 M1 已就绪。
 
 ### 缺口 E：真实 workspace 最终测试流缺失
 
@@ -718,37 +720,29 @@ cargo check
 - [x] 本地 endpoint 可区分 no-auth 与 missing key（`test_probe_distinguishes_no_auth_and_auth_failure`）
 - [x] AHP catalog 不把不可用 provider 误报 available（`_native_model_available` 复用 resolve_route，仅 key 或 localhost 才 available）
 
-## Milestone 4 — Audit search & evidence navigation
+## Milestone 4 — Audit search & evidence navigation ✅ 已完成
 
-建议扩展 `agent_audit.py`：
+实现说明：
 
-```text
-search(query)
-filter(kind, provider, workspace, from, to, transaction_id, tool_name)
-```
-
-CLI：
-
-```bash
-halter audit search "transaction-id"
-halter audit search --tool apply_patch --workspace /path
-```
-
-UI：
-
-- audit 全局搜索框
-- provider / workspace filter
-- date range
-- event anchor id
-- plan evidence deep link
+1. `agent_audit.search_audits`：跨 session 搜索，支持全文（多词 AND）、
+   kind、transaction id（事件 `id` 或 `result.transactionId`）、tool name
+   （`name` / `tool` 字段）、provider 与 workspace（读 session store 的
+   会话级过滤）、日期区间（date-only 自动补齐当日边界）
+2. 逐文件 `MAX_SEARCH_LINES = 50000` 读取上限（超限记录 `truncated_files`）；
+   `offset` / `limit` 分页；malformed JSON / OSError 文件跳过并记入
+   `skipped_files`
+3. `halter audit search` CLI（`--json` 可测试，表格输出含 session / 行号）
+4. 桌面 audit 视图：事件级全文 + 日期过滤、会话列表 workspace/provider
+   过滤；plan evidence deep link 跳转时自动清空全部过滤保证目标可见
+5. session id 仍走 `validate_session_id`（拒绝路径穿越）
 
 验收标准：
 
-- [ ] 可按 transaction id 定位事件
-- [ ] 可按 tool name 搜索
-- [ ] 大 audit 文件有读取上限与分页
-- [ ] UI 能从 plan evidence 跳转
-- [ ] 测试覆盖路径穿越与 malformed JSON
+- [x] 可按 transaction id 定位事件（`test_search_locates_events_by_transaction_id`）
+- [x] 可按 tool name 搜索（`test_search_filters_by_tool_name_and_kind`）
+- [x] 大 audit 文件有读取上限与分页（`test_search_paginates_and_caps_large_files`）
+- [x] UI 能从 plan evidence 跳转（M1 deep link + M4 过滤清空）
+- [x] 测试覆盖路径穿越与 malformed JSON（`test_search_skips_malformed_files_and_rejects_traversal`）
 
 ## Milestone 5 — Real-workspace final verification flow
 
@@ -891,23 +885,22 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-Milestone 1（`00438b4`）、Milestone 2（`8322aa3`）与 Milestone 3（provider
-health）已完成。
+Milestone 1-4 已完成（evidence-linked plan、patch comparison、provider
+health、audit search）。
 
 下一个最小但高价值的 PR：
 
 ```text
-feat: audit search and evidence navigation
+feat: real-workspace final verification flow
 ```
 
-即 Milestone 4（`agent_audit.py` 增加 search/filter + `halter audit search`
-CLI + UI 搜索与 plan evidence deep link 完善）。
-范围以 Milestone 4 验收标准为准。
+即 Milestone 5（`run_tests_workspace` approval type + 二次审批 + 真实
+workspace 最小复跑）。范围以 Milestone 5 验收标准为准。
 
 不要在同 PR 里同时做：
 
 - MCP bridge
-- 真实 workspace 最终测试流
+- desktop e2e
 
 否则风险和 review 面都会过大。
 

@@ -220,10 +220,16 @@
         <header class="view-header">
           <h1>原生 Agent 审计</h1>
           <div class="header-actions">
+            <input id="audit-text-input" class="text-input audit-filter-input" placeholder="事件全文过滤，多词 AND" spellcheck="false" />
+            <input id="audit-from-input" class="text-input audit-date-input" type="date" title="起始日期" />
+            <input id="audit-to-input" class="text-input audit-date-input" type="date" title="结束日期" />
             <input id="audit-kind-input" class="text-input audit-kind-input" placeholder="按事件类型过滤，如 approval.response" spellcheck="false" />
             <button id="btn-refresh-audit" type="button" class="btn">↻ 刷新</button>
           </div>
         </header>
+        <div class="audit-toolbar">
+          <input id="audit-list-filter" class="text-input audit-list-filter" placeholder="按 workspace / provider 过滤会话列表" spellcheck="false" />
+        </div>
         <div id="audit-error" class="error-box hidden"></div>
         <div id="audit-loading" class="loading">正在读取私有审计日志…</div>
         <div id="audit-content" class="audit-layout hidden">

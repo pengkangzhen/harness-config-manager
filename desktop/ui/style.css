@@ -1331,6 +1331,10 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(76, 194, 255, .25);
 }
+.audit-toolbar { display: flex; gap: 8px; }
+.audit-toolbar .audit-list-filter { max-width: 420px; }
+.audit-filter-input { width: 200px; }
+.audit-date-input { width: 140px; }
 .audit-event-head {
   display: flex;
   justify-content: space-between;

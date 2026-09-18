@@ -524,6 +524,63 @@ def show(
     console.print(table)
 
 
+@audit_app.command("search")
+def audit_search(
+    query: str = typer.Argument(None, help="全文子串（多词为 AND）；可空，仅按过滤条件"),
+    kind: str = typer.Option(None, "--kind", help="按事件类型精确过滤"),
+    tool: str = typer.Option(None, "--tool", help="按工具名过滤（tool.call/tool.result/approval）"),
+    workspace: str = typer.Option(None, "--workspace", help="按 workspace 子串过滤（读 session store）"),
+    provider: str = typer.Option(None, "--provider", help="按 provider 过滤（读 session store）"),
+    transaction_id: str = typer.Option(None, "--transaction-id", help="按事务 id 定位相关事件"),
+    date_from: str = typer.Option(None, "--from", help="起始日期（YYYY-MM-DD 或完整时间戳）"),
+    date_to: str = typer.Option(None, "--to", help="结束日期（YYYY-MM-DD 或完整时间戳）"),
+    session_id: str = typer.Option(None, "--session", help="限定单个审计 session"),
+    limit: int = typer.Option(50, "--limit", "-n", min=1, help="每页条数"),
+    offset: int = typer.Option(0, "--offset", min=0, help="分页偏移"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """跨审计轨迹搜索事件（transaction id / 工具名 / 全文 / 日期组合）。"""
+    from .agent_audit import search_audits
+
+    try:
+        result = search_audits(
+            text=query, kind=kind, tool_name=tool, workspace=workspace,
+            provider=provider, transaction_id=transaction_id,
+            date_from=date_from, date_to=date_to, session_id=session_id,
+            limit=limit, offset=offset,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if json_out:
+        console.print_json(_json.dumps(result, ensure_ascii=False))
+        return
+    console.print(
+        f"[dim]{result['total']} 个匹配 / 扫描 {result['sessions_scanned']} 个 session"
+        f"（返回 {result['returned']}，offset {offset}）[/dim]"
+    )
+    if result["skipped_files"]:
+        console.print(f"[yellow]跳过损坏文件：{', '.join(result['skipped_files'])}[/yellow]")
+    if result["truncated_files"]:
+        console.print(f"[yellow]部分文件超读取上限被截断：{', '.join(result['truncated_files'])}[/yellow]")
+    table = Table(title="Audit search")
+    table.add_column("Session", style="dim")
+    table.add_column("Line", justify="right", style="dim")
+    table.add_column("Time", style="dim")
+    table.add_column("Kind", style="cyan")
+    table.add_column("Event", overflow="fold")
+    for match in result["matches"]:
+        event = match["event"]
+        table.add_row(
+            match["session_id"],
+            str(match["line"]),
+            str(event.get("ts") or "-"),
+            str(event.get("kind") or "-"),
+            _json.dumps({k: v for k, v in event.items() if k not in {"ts", "kind"}}, ensure_ascii=False),
+        )
+    console.print(table)
+
+
 # ---------------------------------------------------------------------------
 # ahp：自建 Agent Host Protocol 服务器
 
