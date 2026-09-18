@@ -81,6 +81,8 @@ const state = {
   matrixGapsOnly: false,
   matrixHarnessOnly: true,
   expandedFamilies: new Set(),
+  projectsError: null,
+  projectMatches: [],
 };
 
 /* ---------------- view switching ---------------- */
@@ -438,20 +440,19 @@ async function loadSessionsView() {
 /* ---------- dimension 3: project picker ---------- */
 
 async function loadSessionProjects() {
-  const picker = $("project-picker");
-  picker.replaceChildren(el("div", "loading", "读取项目分布…"));
+  state.projectsError = null;
   let data;
   try {
     data = await invoke("hcm_sessions_projects", { project: currentProject() });
   } catch (err) {
-    picker.replaceChildren();
-    const box = el("div", "error-box");
-    box.textContent = typeof err === "string" ? err : JSON.stringify(err);
-    picker.append(box);
+    state.projectsError = typeof err === "string" ? err : JSON.stringify(err);
+    renderProjectInput();
+    if (projectDropdownOpen) renderProjectDropdownList($("project-input").value);
     return;
   }
   state.projects = data.projects || [];
-  renderProjectSelectButton();
+  renderProjectInput();
+  if (projectDropdownOpen) renderProjectDropdownList($("project-input").value);
 }
 
 let projectDropdownOpen = false;
@@ -459,46 +460,48 @@ let projectDropdownOpen = false;
 function toggleProjectDropdown(open) {
   projectDropdownOpen = open;
   $("project-dropdown").classList.toggle("hidden", !open);
-  $("project-dropdown-btn").classList.toggle("open", open);
-  if (open) {
-    $("project-search").value = "";
-    renderProjectDropdownList("");
-    $("project-search").focus();
-  }
+  if (!open) return;
+  renderProjectDropdownList($("project-input").value);
 }
 
 function selectProject(path) {
   state.projectFilter = path;
   toggleProjectDropdown(false);
-  renderProjectSelectButton();
+  renderProjectInput();
   loadSessions();
 }
 
-function renderProjectSelectButton() {
-  const btn = $("project-dropdown-btn");
-  btn.replaceChildren();
+function renderProjectInput() {
+  const input = $("project-input");
+  const clear = $("project-clear");
+  if (state.projectsError) {
+    input.value = "";
+    input.placeholder = "项目加载失败 — 点击重试";
+    clear.classList.add("hidden");
+    return;
+  }
   if (state.projectFilter === null) {
-    btn.append(el("span", "facet-select-label", `全部项目 · ${state.projects.length} 个`));
+    input.value = "";
+    input.placeholder = `全部项目（${state.projects.length} 个）— 输入即筛选`;
+    clear.classList.add("hidden");
   } else {
     const p = state.projects.find((x) => x.path === state.projectFilter);
-    btn.append(el("span", "facet-select-label", p ? (p.name || basename(p.path)) : basename(state.projectFilter)));
-    if (p) {
-      const dots = el("span", "project-dots");
-      for (const tool of p.tools || []) {
-        const dot = el("span", "filter-dot");
-        dot.style.backgroundColor = toolColor(tool);
-        dot.title = tool;
-        dots.append(dot);
-      }
-      btn.append(dots);
-    }
+    input.value = p ? (p.name || basename(p.path)) : basename(state.projectFilter);
+    input.placeholder = "输入项目名/路径筛选…";
+    clear.classList.remove("hidden");
   }
-  btn.append(el("span", "facet-caret", "▾"));
 }
 
 function renderProjectDropdownList(filter) {
   const listEl = $("project-dropdown-list");
   listEl.replaceChildren();
+  if (state.projectsError) {
+    const box = el("div", "error-box");
+    box.textContent = state.projectsError;
+    listEl.append(box);
+    state.projectMatches = [];
+    return;
+  }
   const needle = (filter || "").trim().toLowerCase();
 
   const allRow = el("div", `project-item${state.projectFilter === null ? " selected" : ""}`);
@@ -538,19 +541,57 @@ function renderProjectDropdownList(filter) {
     row.addEventListener("click", () => selectProject(p.path));
     listEl.append(row);
   }
+  state.projectMatches = projects;
   if (needle && !projects.length) {
-    listEl.append(el("div", "loading", "没有匹配的项目"));
+    const raw = filter.trim();
+    if (raw.startsWith("/") || raw.startsWith("~")) {
+      const hint = el("div", "project-raw-hint", `回车使用路径：${raw}`);
+      listEl.append(hint);
+    } else {
+      listEl.append(el("div", "loading", "没有匹配的项目"));
+    }
   }
 }
 
-$("project-dropdown-btn").addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleProjectDropdown(!projectDropdownOpen);
+const projectInput = () => $("project-input");
+
+projectInput().addEventListener("focus", () => {
+  if (!state.projectsError && state.projectFilter !== null) return; // 已选中时聚焦不弹层，避免打断编辑
+  toggleProjectDropdown(true);
 });
-$("project-search").addEventListener("input", (e) => renderProjectDropdownList(e.target.value));
+projectInput().addEventListener("input", (e) => {
+  if (state.projectsError) {
+    state.projectsError = null;
+    loadSessionProjects();
+    return;
+  }
+  toggleProjectDropdown(true);
+  renderProjectDropdownList(e.target.value);
+});
+projectInput().addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const value = e.target.value.trim();
+    const first = state.projectMatches[0];
+    if (first) {
+      selectProject(first.path);
+    } else if (value.startsWith("/") || value.startsWith("~")) {
+      selectProject(value);
+    }
+  } else if (e.key === "Escape") {
+    toggleProjectDropdown(false);
+    renderProjectInput();
+    e.target.blur();
+  }
+});
+$("project-clear").addEventListener("click", (e) => {
+  e.stopPropagation();
+  selectProject(null);
+});
 document.addEventListener("click", (e) => {
   if (projectDropdownOpen && !e.target.closest(".facet-dropdown-wrap")) {
     toggleProjectDropdown(false);
+    renderProjectInput();
   }
 });
 

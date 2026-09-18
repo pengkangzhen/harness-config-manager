@@ -100,9 +100,12 @@
               <div class="facet-row">
                 <div class="facet-label">项目</div>
                 <div class="facet-value facet-dropdown-wrap">
-                  <button id="project-dropdown-btn" class="facet-select"></button>
+                  <div class="facet-combobox">
+                    <input id="project-input" class="facet-input" placeholder="输入项目名/路径筛选，回车选中…" spellcheck="false" autocomplete="off" />
+                    <button id="project-clear" class="facet-clear hidden" title="清除，回到全部项目">✕</button>
+                    <span class="facet-caret">▾</span>
+                  </div>
                   <div id="project-dropdown" class="project-dropdown hidden">
-                    <input id="project-search" class="text-input" placeholder="筛选项目名…" spellcheck="false" />
                     <div id="project-dropdown-list" class="project-dropdown-list"></div>
                   </div>
                 </div>
