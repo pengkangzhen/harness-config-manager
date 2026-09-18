@@ -80,6 +80,7 @@ const state = {
   matrixLayer: "skills",
   matrixGapsOnly: false,
   matrixHarnessOnly: true,
+  expandedFamilies: new Set(),
 };
 
 /* ---------------- view switching ---------------- */
@@ -225,6 +226,56 @@ function buildMatrix(scan, layerKey) {
   return { tools, rows: list };
 }
 
+/* ----------
+ * Skill families: `hyperframes` + `hyperframes-animation` + ... are one
+ * skill family in the matrix. Conservative rule: a row joins family `root`
+ * only when `root` itself exists as a row (avoids merging `paper-reader`
+ * and `paper-polish`, which merely share a prefix).
+ * ---------- */
+function familyRootOf(name, names) {
+  const parts = name.split("-");
+  for (let i = 1; i < parts.length; i++) {
+    const candidate = parts.slice(0, i).join("-");
+    if (names.has(candidate)) return candidate;
+  }
+  return name;
+}
+
+function groupRowsIntoFamilies(rows) {
+  const names = new Set(rows.map((r) => r.name));
+  const byRoot = new Map();
+  for (const row of rows) {
+    const root = familyRootOf(row.name, names);
+    if (!byRoot.has(root)) byRoot.set(root, []);
+    byRoot.get(root).push(row);
+  }
+  const groups = [];
+  for (const [root, members] of byRoot) {
+    if (members.length < 2) {
+      groups.push({ type: "single", row: members[0] });
+      continue;
+    }
+    members.sort((a, b) => a.name.localeCompare(b.name));
+    groups.push({ type: "family", root, members });
+  }
+  groups.sort((a, b) => {
+    const ma = a.type === "family" ? a.members.reduce((x, m) => x + m.missing, 0) : a.row.missing;
+    const mb = b.type === "family" ? b.members.reduce((x, m) => x + m.missing, 0) : b.row.missing;
+    return mb - ma || familyName(a).localeCompare(familyName(b));
+  });
+  return groups;
+}
+
+const familyName = (g) => (g.type === "family" ? g.root : g.row.name);
+
+function aggregateFamilyStatus(members, tool) {
+  const sts = members.map((m) => m.statuses.get(tool) || "missing");
+  if (sts.every((x) => x === "synced")) return "synced";
+  if (sts.every((x) => x !== "missing")) return "present";
+  if (sts.some((x) => x !== "missing")) return "partial";
+  return "missing";
+}
+
 async function loadMatrix(force = false) {
   $("matrix-error").classList.add("hidden");
   $("matrix-loading").classList.remove("hidden");
@@ -260,19 +311,32 @@ function renderMatrixLayerTabs() {
 function renderMatrix(scan) {
   const layer = MATRIX_LAYERS.find((l) => l.key === state.matrixLayer);
   const { tools, rows } = buildMatrix(scan, state.matrixLayer);
-  const shown = state.matrixGapsOnly ? rows.filter((r) => r.missing > 0) : rows;
+  const allGroups = groupRowsIntoFamilies(rows);
+  const shownGroups = state.matrixGapsOnly
+    ? allGroups.filter((g) => (g.type === "family" ? g.members.some((m) => m.missing > 0) : g.row.missing > 0))
+    : allGroups;
   const totalGaps = rows.reduce((acc, r) => acc + r.missing, 0);
+  const gapShown = state.matrixGapsOnly
+    ? shownGroups.reduce((a, g) => a + (g.type === "family" ? g.members.filter((m) => m.missing > 0).length : 1), 0)
+    : 0;
 
   const scopeLabel = state.matrixHarnessOnly ? `${tools.length} 个 AI Harness` : `${tools.length} 个工具（含编辑器）`;
   $("matrix-summary").textContent =
     `${layer.label}：${rows.length} 个条目 × ${scopeLabel} · 缺口 ${totalGaps} 处` +
-    (state.matrixGapsOnly ? ` · 仅显示缺口的 ${shown.length} 条` : "");
+    (state.matrixGapsOnly ? ` · 仅显示缺口的 ${gapShown} 条` : "");
 
   const wrap = $("matrix-wrap");
   wrap.replaceChildren();
-  if (!shown.length) {
+  if (!shownGroups.length) {
     wrap.append(el("div", "loading", state.matrixGapsOnly ? "没有缺口 — 所有工具均覆盖" : "没有数据"));
     return;
+  }
+
+  const groups = shownGroups;
+  const familyCount = groups.filter((g) => g.type === "family").length;
+  if (familyCount) {
+    const base = $("matrix-summary").textContent;
+    $("matrix-summary").textContent = base + ` · 已聚合 ${familyCount} 个家族`;
   }
 
   const grid = el("div", "matrix");
@@ -288,16 +352,60 @@ function renderMatrix(scan) {
     grid.append(head);
   }
 
-  // data rows
-  for (const row of shown) {
-    const nameCell = el("div", "mx-name", row.name);
+  const CELL_GLYPH = { synced: "●", present: "◐", partial: "◔", missing: "○" };
+  const CELL_TEXT = {
+    synced: "已同步（symlink）",
+    present: "已存在（非 hcm 管理）",
+    partial: "部分成员存在",
+    missing: "缺少",
+  };
+
+  const renderRow = (row, cls) => {
+    const nameCell = el("div", `mx-name ${cls || ""}`);
     nameCell.title = row.name;
+    nameCell.append(el("span", "", row.name));
     grid.append(nameCell);
     for (const tool of tools) {
       const st = row.statuses.get(tool.tool) || "missing";
-      const cell = el("div", `mx-cell ${st}`, st === "synced" ? "●" : st === "present" ? "◐" : "○");
-      cell.title = `${tool.tool}：${st === "synced" ? "已同步（symlink）" : st === "present" ? "已存在" : "缺少"}`;
+      const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
+      cell.title = `${tool.tool}：${CELL_TEXT[st] || st}`;
       grid.append(cell);
+    }
+  };
+
+  for (const group of groups) {
+    if (group.type === "single") {
+      renderRow(group.row);
+      continue;
+    }
+
+    // family row (aggregated)
+    const expanded = state.expandedFamilies.has(group.root);
+    const nameCell = el("div", "mx-name family");
+    nameCell.title = `${group.root} 家族（${group.members.length} 个成员）`;
+    const caret = el("span", "mx-caret", expanded ? "▾" : "▸");
+    nameCell.append(caret, el("span", "", group.root));
+    nameCell.append(el("span", "mx-family-count", String(group.members.length)));
+    nameCell.addEventListener("click", () => {
+      if (expanded) state.expandedFamilies.delete(group.root);
+      else state.expandedFamilies.add(group.root);
+      renderMatrix(state.scanCache);
+    });
+    grid.append(nameCell);
+    for (const tool of tools) {
+      const st = aggregateFamilyStatus(group.members, tool);
+      const present = group.members.filter((m) => m.statuses.has(tool.tool)).length;
+      const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
+      cell.title = `${tool.tool}：${CELL_TEXT[st] || st}（${present}/${group.members.length}）`;
+      grid.append(cell);
+    }
+
+    // member rows when expanded (respect gaps-only)
+    if (expanded) {
+      const members = state.matrixGapsOnly
+        ? group.members.filter((m) => m.missing > 0)
+        : group.members;
+      for (const m of members) renderRow(m, "member");
     }
   }
   wrap.append(grid);
