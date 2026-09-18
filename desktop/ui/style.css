@@ -1367,3 +1367,24 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 .model-actions { display: flex; gap: 8px; }
 .model-status { font-size: 12.5px; color: var(--text-dim); }
 .model-status.ok { color: var(--green); }
+.model-health {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.model-health-head { font-size: 12.5px; font-weight: 650; }
+.model-health-head.ok { color: var(--green); }
+.model-health-head.err { color: var(--red); }
+.model-health-list { display: flex; flex-direction: column; gap: 4px; }
+.model-health-item { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
+.model-health-icon { width: 14px; text-align: center; flex: none; }
+.model-health-item.ok .model-health-icon { color: var(--green); }
+.model-health-item.warn .model-health-icon { color: #e6b450; }
+.model-health-item.error .model-health-icon { color: var(--red); }
+.model-health-item.skipped .model-health-icon { color: var(--text-faint); }
+.model-health-text { display: flex; flex-direction: column; gap: 1px; }
+.model-health-label { color: var(--text-dim); }
+.model-health-detail { font-size: 11px; color: var(--text-faint); font-family: var(--mono); word-break: break-all; }

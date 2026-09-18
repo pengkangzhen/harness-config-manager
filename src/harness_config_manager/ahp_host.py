@@ -22,7 +22,6 @@ import json
 import os
 import secrets as secret_token
 import time
-import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -39,6 +38,7 @@ from .agent import (
     TransactionStore, _safe_session_id, _truncate_text,
     transaction_root_for_session,
 )
+from .model_health import check_model_health, is_local_base_url, resolve_route
 from .agent_store import AgentSessionStore
 from .runner import RUNNERS, RunnerSpec
 
@@ -180,7 +180,6 @@ class AhpHost:
     # 状态快照
 
     def _native_model_available(self) -> bool:
-        client = OpenAICompatibleModelClient(self._cfg)
         prefixes = list(self._cfg.model_providers) + [None]
         seen: set[str | None] = set()
         for prefix in prefixes:
@@ -188,22 +187,24 @@ class AhpHost:
                 continue
             seen.add(prefix)
             model = f"{prefix}/availability-check" if prefix is not None else None
-            try:
-                _, api_key, base_url = client._provider(model)
-            except RuntimeError:
+            route = resolve_route(model, self._cfg)
+            if route.error or not route.base_url:
                 continue
-            if api_key or self._is_local_base(base_url):
+            key = os.environ.get(route.api_key_env, "") if route.api_key_env else ""
+            if key or is_local_base_url(route.base_url):
                 return True
         return False
 
-    @staticmethod
-    def _is_local_base(base_url: str) -> bool:
-        try:
-            return urllib.parse.urlparse(base_url).hostname in {
-                "localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal",
-            }
-        except ValueError:
-            return False
+    def _native_health_summary(self) -> dict[str, Any]:
+        report = check_model_health(self._cfg)
+        return {
+            "available": report["available"],
+            "model": report["model"],
+            "issues": [
+                f"{check['label']}: {check['detail']}"
+                for check in report["checks"] if check["status"] == "error"
+            ],
+        }
 
     def root_state(self) -> dict[str, Any]:
         agents = []
@@ -238,6 +239,7 @@ class AhpHost:
             "_meta": {
                 "halter:available": self._native_injected or self._native_model_available(),
                 "halter:key": "halter",
+                "halter:health": self._native_health_summary(),
                 "halter:tools": [
                     "update_plan", "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "apply_patch", "run_tests",
                 ],

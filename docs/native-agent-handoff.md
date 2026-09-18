@@ -1,8 +1,9 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（Evidence-linked plan，`00438b4`）与
-Milestone 2（deterministic patch comparison）已完成，全量 `157 passed`。
+基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（Evidence-linked plan，`00438b4`）、
+Milestone 2（deterministic patch comparison，`8322aa3`）与 Milestone 3（provider
+health & model diagnostics）已完成，全量 `167 passed`。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -371,9 +372,17 @@ halter model configure \
   --model local/qwen-coder \
   --base-url http://127.0.0.1:11434/v1 \
   --api-key-env ""
+
+halter model check [--probe] [--json]
 ```
 
-桌面 App 已有「模型」视图。
+`halter model check` 输出逐项诊断（配置 / 前缀 / base URL / key 环境变量 /
+可选的 base URL 连通探测），`--json` 可测试；`halter models --json` 附带静态
+health 供桌面 Model view 渲染。路由解析唯一事实源在
+`src/harness_config_manager/model_health.py`（`resolve_route`），模型客户端与
+AHP availability 均复用它。
+
+桌面 App 已有「模型」视图（含 provider 健康面板）。
 
 安全规则：
 
@@ -584,14 +593,10 @@ curl http://127.0.0.1:7433/healthz
 已在 Milestone 2 落地：`patch_compare.py` 纯函数模块 + delegate 结果自动注入结构化
 comparison + UI 分类标签与冲突 hunk 高亮。
 
-### 缺口 C：模型 provider 健康检查不足
+### 缺口 C：模型 provider 健康检查不足 ✅ 已完成（Milestone 3）
 
-模型视图可以保存配置，但还没有：
-
-- base URL 连通性检查
-- 缺失环境变量提示
-- model API 轻量探测
-- provider 可用性状态展示
+已在 Milestone 3 落地：`model_health.py` 诊断模块、`halter model check` CLI、
+AHP `halter:health` metadata、桌面 Model view 健康面板。
 
 ### 缺口 D：审计检索还不完整
 
@@ -690,39 +695,28 @@ cargo check
 - [x] UI 明确显示冲突与采纳建议（分类标签 + strategy + 冲突高亮）
 - [x] 有无 git repo 场景的错误处理（空/错误文本 → 无文件，不崩溃）
 
-## Milestone 3 — Provider health & model diagnostics
+## Milestone 3 — Provider health & model diagnostics ✅ 已完成
 
-建议新增：
+实现说明：
 
-```bash
-halter model check
-halter model check --json
-```
-
-检查：
-
-- config 是否存在
-- provider prefix 是否有效
-- custom provider 是否有 base_url
-- api_key_env 是否设置
-- localhost endpoint 可否无 key
-- base URL 轻量请求
-- model API tool schema 支持
-- 不输出 secret value
-
-UI：
-
-- Model view 显示 provider status
-- 缺失环境变量时给出变量名
-- AHP agent metadata 显示 health
-- 保存前可选 run check
+1. `src/harness_config_manager/model_health.py`：`resolve_route` 是模型路由
+   唯一事实源（裸模型名 / base URL / api_key_env 名），模型客户端与 AHP
+   availability 均复用；`check_model_health` 输出逐项 check
+   （config / 前缀 / base URL / key 环境 / 可选探测 / tool-schema 说明）
+2. `halter model check [--probe] [--json]`：`--probe` 对 `{base}/models`
+   发轻量 GET（带 Bearer 仅当 key 存在），401/403 判为鉴权失败
+3. localhost endpoint 无 key 判为 no-auth（ok），remote 缺 env 判 error
+   并给出变量名；任何输出都不含 secret 值
+4. AHP native agent metadata 增加 `halter:health`（available + issues）
+5. `halter models --json` 附静态 health；桌面 Model view 渲染健康面板，
+   缺失环境变量直接显示变量名；保存后自动刷新诊断
 
 验收标准：
 
-- [ ] CLI JSON 输出可测试
-- [ ] UI 不泄露 key
-- [ ] 本地 endpoint 可区分 no-auth 与 missing key
-- [ ] AHP catalog 不把不可用 provider 误报 available
+- [x] CLI JSON 输出可测试（`test_cli_model_check_json_output`）
+- [x] UI 不泄露 key（model_health 只输出环境变量名）
+- [x] 本地 endpoint 可区分 no-auth 与 missing key（`test_probe_distinguishes_no_auth_and_auth_failure`）
+- [x] AHP catalog 不把不可用 provider 误报 available（`_native_model_available` 复用 resolve_route，仅 key 或 localhost 才 available）
 
 ## Milestone 4 — Audit search & evidence navigation
 
@@ -897,20 +891,23 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-Milestone 1（`00438b4`）与 Milestone 2（patch comparison）已完成。
+Milestone 1（`00438b4`）、Milestone 2（`8322aa3`）与 Milestone 3（provider
+health）已完成。
 
 下一个最小但高价值的 PR：
 
 ```text
-feat: provider health checks and model diagnostics
+feat: audit search and evidence navigation
 ```
 
-即 Milestone 3（`halter model check` CLI + Model view 状态展示）。
-范围以 Milestone 3 验收标准为准。
+即 Milestone 4（`agent_audit.py` 增加 search/filter + `halter audit search`
+CLI + UI 搜索与 plan evidence deep link 完善）。
+范围以 Milestone 4 验收标准为准。
 
 不要在同 PR 里同时做：
 
 - MCP bridge
+- 真实 workspace 最终测试流
 
 否则风险和 review 面都会过大。
 

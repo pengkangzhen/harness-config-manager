@@ -319,8 +319,11 @@ def models(
     configured = {k: v for k, v in cfg.models.items() if k in RUNNERS or k == "halter"}
     catalog = model_catalog(cfg)
     if json_out:
+        from .model_health import check_model_health
+
         console.print_json(_json.dumps({
             "models": configured,
+            "health": check_model_health(cfg),
             "catalog": catalog,
             "providers": cfg.model_providers,
             "runners": {
@@ -405,6 +408,32 @@ def configure(
     if provider:
         console.print(f"[dim]provider={provider} config={cfg.model_providers[provider]}[/dim]")
     console.print("[dim]API key 只从环境变量读取，不会写入 config.toml[/dim]")
+
+
+@model_app.command()
+def check(
+    probe: bool = typer.Option(False, "--probe", help="同时轻量探测 base URL 连通性（GET /models）"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """诊断原生模型路由：配置、前缀、base URL、key 环境变量与连通性。"""
+    from .config import load_config
+    from .model_health import check_model_health
+
+    report = check_model_health(load_config(), probe=probe)
+    if json_out:
+        console.print_json(_json.dumps(report, ensure_ascii=False))
+        return
+
+    tone = {"ok": "green", "warn": "yellow", "error": "red", "skipped": "dim"}
+    icon = {"ok": "✓", "warn": "!", "error": "✕", "skipped": "-"}
+    verdict = "[green]可用[/green]" if report["ok"] else "[red]不可用[/red]"
+    console.print(f"原生模型健康检查：{verdict}  model={report['model'] or '-'}")
+    for item in report["checks"]:
+        line = f"[{tone[item['status']]}]{icon[item['status']]}[/{tone[item['status']]}] {item['label']}"
+        if item["detail"]:
+            line += f" [dim]— {item['detail']}[/dim]"
+        console.print(line)
+    console.print("[dim]不输出任何 secret 值，只显示环境变量名[/dim]")
 
 
 # ---------------------------------------------------------------------------

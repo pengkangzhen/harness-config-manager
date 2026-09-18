@@ -1049,6 +1049,34 @@ $("search-input").addEventListener("keydown", (e) => {
 
 /* ---------------- models（原生模型配置） ---------------- */
 
+const HEALTH_ICONS = { ok: "✓", warn: "!", error: "✕", skipped: "-" };
+
+function renderModelHealth(health) {
+  const box = $("model-health");
+  if (!box) return;
+  box.classList.remove("hidden");
+  box.replaceChildren();
+  if (!health) {
+    box.classList.add("hidden");
+    return;
+  }
+  const head = el("div", "model-health-head",
+    health.ok ? "模型路由可用" : "模型路由不可用");
+  head.className = `model-health-head ${health.ok ? "ok" : "err"}`;
+  box.append(head);
+  const list = el("div", "model-health-list");
+  for (const item of health.checks || []) {
+    const row = el("div", `model-health-item ${item.status}`);
+    row.append(el("span", "model-health-icon", HEALTH_ICONS[item.status] || "-"));
+    const text = el("span", "model-health-text");
+    text.append(el("span", "model-health-label", item.label || item.id || "-"));
+    if (item.detail) text.append(el("span", "model-health-detail", item.detail));
+    row.append(text);
+    list.append(row);
+  }
+  box.append(list);
+}
+
 async function loadModelsView(force = false) {
   if (!force && state.modelsLoaded) return;
   const status = $("model-status");
@@ -1061,6 +1089,7 @@ async function loadModelsView(force = false) {
     const providerConfig = (data.providers || {})[provider] || {};
     $("native-base-url-input").value = providerConfig.base_url || "";
     $("native-api-key-env-input").value = providerConfig.api_key_env || "";
+    renderModelHealth(data.health);
     state.modelsLoaded = true;
   } catch (err) {
     showError($("models-error"), err);

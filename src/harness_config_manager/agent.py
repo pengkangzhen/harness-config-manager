@@ -18,7 +18,6 @@ import stat
 import shutil
 import subprocess
 import tempfile
-import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,6 +27,7 @@ from typing import Any, Awaitable, Callable, Protocol
 import aiohttp
 
 from .config import HalterConfig
+from .model_health import is_local_base_url, resolve_route
 from .patch_compare import compare_provider_diffs
 from .runner import RUNNERS
 from .sessions import build_context, redact_text, scan_sessions
@@ -1002,40 +1002,20 @@ class OpenAICompatibleModelClient:
     """Minimal multi-provider client for OpenAI-compatible chat completions.
 
     Model prefixes currently select OpenAI or Zhipu credentials/base URLs:
-    ``openai/gpt-5`` and ``zhipu/glm-4.7``.  Unprefixed models use OpenAI when
+    ``openai/gpt-5`` and ``zhipu/glm-4.7``; custom prefixes come from
+    ``[model_providers]``.  Unprefixed models use OpenAI when
     ``OPENAI_API_KEY`` is present.  API keys are never emitted to events/audit.
     """
-
-    PROVIDERS = {
-        "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
-        "zhipu": ("ZHIPUAI_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
-    }
 
     def __init__(self, config: HalterConfig | None = None) -> None:
         self.config = config or HalterConfig()
 
     def _provider(self, model: str | None) -> tuple[str, str, str]:
-        raw = model or ""
-        prefix, separator, bare = raw.partition("/")
-        configured = self.config.model_providers.get(prefix) if separator else None
-        if configured is not None:
-            key_env = configured.get("api_key_env", "")
-            key = os.environ.get(key_env, "") if key_env else ""
-            default_base = configured.get("base_url") or (
-                self.PROVIDERS.get(prefix, (None, ""))[1]
-            )
-            if not default_base:
-                raise RuntimeError(f"model provider {prefix!r} has no base_url")
-            override_env = configured.get("base_url_env", "")
-            base_url = os.environ.get(override_env, default_base) if override_env else default_base
-            return bare or "default", key, base_url
-
-        if separator and prefix in self.PROVIDERS:
-            key_env, default_base = self.PROVIDERS[prefix]
-            key = os.environ.get(key_env, "")
-            return bare or "default", key, os.environ.get(f"{prefix.upper()}_BASE_URL", default_base)
-        key = os.environ.get("OPENAI_API_KEY", "")
-        return raw, key, os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        route = resolve_route(model, self.config)
+        if route.error or not route.base_url:
+            raise RuntimeError(route.error or "model provider has no base_url")
+        key = os.environ.get(route.api_key_env, "") if route.api_key_env else ""
+        return route.model, key, route.base_url
 
     async def complete(
         self,
@@ -1046,11 +1026,7 @@ class OpenAICompatibleModelClient:
         stream_delta: StreamCallback | None = None,
     ) -> ModelResponse:
         requested_model, api_key, base_url = self._provider(model)
-        parsed_base = urllib.parse.urlparse(base_url)
-        local_base = parsed_base.hostname in {
-            "localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal",
-        }
-        if not api_key and not local_base:
+        if not api_key and not is_local_base_url(base_url):
             provider = "openai" if not model or not model.startswith("zhipu/") else "zhipu"
             raise RuntimeError(f"missing {provider} API key; configure the model provider first")
         payload = {
