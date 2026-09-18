@@ -432,6 +432,12 @@ function currentProject() {
   return ".";
 }
 
+// 实际传给 sidecar 的项目参数：必须跟随维度面板的选中值，
+// 而不是 "."（App 从 Finder 启动时 cwd 是 /，会把所有项目都匹配进来）。
+function projectArg() {
+  return state.projectFilter || currentProject();
+}
+
 async function loadSessionsView() {
   await loadSessionProjects();
   await loadSessions();
@@ -602,7 +608,7 @@ async function loadSessions() {
   let data;
   try {
     data = await invoke("hcm_sessions_list", {
-      project: currentProject(),
+      project: projectArg(),
       limit: 500,
       allProjects,
     });
@@ -923,7 +929,7 @@ async function runSearch() {
   try {
     data = await invoke("hcm_sessions_search", {
       query,
-      project: currentProject(),
+      project: projectArg(),
       limit: 50,
       allProjects,
     });
