@@ -21,6 +21,9 @@
         <button class="nav-item active" data-view="overview">
           <span class="nav-icon">◎</span> 总览
         </button>
+        <button class="nav-item" data-view="matrix">
+          <span class="nav-icon">▦</span> 矩阵
+        </button>
         <button class="nav-item" data-view="sessions">
           <span class="nav-icon">⌘</span> 会话
         </button>
@@ -54,12 +57,35 @@
         </div>
       </section>
 
+      <!-- ============ Matrix ============ -->
+      <section id="view-matrix" class="view">
+        <header class="view-header">
+          <h1>配置矩阵</h1>
+          <div class="header-actions">
+            <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> 仅显示缺口</label>
+            <button id="btn-refresh-matrix" class="btn">↻ 刷新</button>
+          </div>
+        </header>
+        <div id="matrix-error" class="error-box hidden"></div>
+        <div id="matrix-loading" class="loading">正在构建 Harness × 配置矩阵…</div>
+        <div id="matrix-content" class="hidden">
+          <div id="matrix-layer-tabs" class="layer-tabs"></div>
+          <div class="matrix-legend">
+            <span class="legend-item"><span class="legend-dot synced">●</span> 已同步（symlink）</span>
+            <span class="legend-item"><span class="legend-dot present">◐</span> 已存在（非 hcm 管理）</span>
+            <span class="legend-item"><span class="legend-dot missing">○</span> 缺少</span>
+          </div>
+          <div id="matrix-summary" class="matrix-summary"></div>
+          <div id="matrix-wrap" class="matrix-wrap"></div>
+        </div>
+      </section>
+
       <!-- ============ Sessions ============ -->
       <section id="view-sessions" class="view">
         <header class="view-header">
           <h1>跨助手会话</h1>
           <div class="header-actions">
-            <input id="project-input" class="text-input" value="." spellcheck="false" title="项目路径" />
+            <input id="project-input" class="text-input" value="." spellcheck="false" title="当前项目路径（用于标记）" />
             <button id="btn-refresh-sessions" class="btn">↻ 刷新</button>
           </div>
         </header>
@@ -69,6 +95,7 @@
               <input id="search-input" class="text-input" placeholder="搜索会话内容…" spellcheck="false" />
               <button id="btn-search" class="btn">搜索</button>
             </div>
+            <div id="project-picker" class="project-picker"></div>
             <div id="tool-filter" class="tool-filter hidden"></div>
             <div class="list-toolbar">
               <div id="session-count" class="session-count"></div>

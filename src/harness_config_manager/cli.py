@@ -36,18 +36,19 @@ def sessions_list(
     tool: list[str] = typer.Option([], "--tool", "-t", help="按来源工具过滤，可多选"),
     limit: int = typer.Option(30, "--limit", "-n", min=1, help="最多显示条数"),
     all_sessions: bool = typer.Option(False, "--all", help="显示全部，忽略 --limit"),
+    all_projects: bool = typer.Option(False, "--all-projects", help="列出所有项目的会话（忽略 --project）"),
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
 ) -> None:
-    """列出当前项目在所有本地 AI 编码助手中的历史会话。"""
+    """列出当前项目（或所有项目）在本地 AI 编码助手中的历史会话。"""
     from .sessions import scan_sessions, session_to_dict
 
     project = project.expanduser().resolve(strict=False)
-    items = scan_sessions(project, tools=tool or None)
+    items = scan_sessions(None if all_projects else project, tools=tool or None)
     if not all_sessions:
         items = items[:limit]
     if json_out:
         console.print_json(_json.dumps({
-            "project": str(project),
+            "project": "all" if all_projects else str(project),
             "count": len(items),
             "sessions": [session_to_dict(x) for x in items],
         }, ensure_ascii=False))
@@ -107,17 +108,18 @@ def search(
     project: Path = typer.Option(Path("."), "--project", "-p"),
     tool: list[str] = typer.Option([], "--tool", "-t"),
     limit: int = typer.Option(20, "--limit", "-n", min=1),
+    all_projects: bool = typer.Option(False, "--all-projects", help="搜索所有项目的会话"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """在当前项目的历史会话文本中搜索。"""
+    """在当前项目（或所有项目）的历史会话文本中搜索。"""
     from .sessions import read_session, scan_sessions
 
     project = project.expanduser().resolve(strict=False)
     needle = query.casefold()
     hits: list[tuple[object, str]] = []
-    for info in scan_sessions(project, tools=tool or None):
+    for info in scan_sessions(None if all_projects else project, tools=tool or None):
         try:
-            messages = read_session(info.ref, project, include_tools=False)
+            messages = read_session(info.ref, None if all_projects else project, include_tools=False)
         except (RuntimeError, OSError):
             continue
         matched = [m for m in messages if needle in m.text.casefold()]
@@ -205,6 +207,78 @@ def version(
         console.print_json(_json.dumps({"name": "hcm", "version": v}, ensure_ascii=False))
     else:
         console.print(f"hcm {v}")
+
+
+# ---------------------------------------------------------------------------
+# sessions projects：按项目聚合（桌面 App 第三维度）
+
+
+@sessions_app.command("projects")
+def sessions_projects(
+    project: Path = typer.Option(Path("."), "--project", "-p", help="用于标记当前项目"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """枚举所有本地项目及其跨助手会话分布。"""
+    from datetime import datetime, timezone
+
+    from .sessions import _iso, scan_sessions
+
+    def _same_path(a: str, b: Path) -> bool:
+        if not a:
+            return False
+        try:
+            return Path(a).expanduser().resolve(strict=False) == b
+        except OSError:
+            return False
+
+    current = project.expanduser().resolve(strict=False)
+    agg: dict[str, dict] = {}
+    for item in scan_sessions(None):
+        key = str(item.project) if item.project else ""
+        slot = agg.setdefault(key, {"tools": {}, "sessions": 0, "messages": 0, "last": None})
+        slot["sessions"] += 1
+        slot["messages"] += item.message_count
+        slot["tools"][item.tool] = slot["tools"].get(item.tool, 0) + 1
+        stamp = item.updated_at or item.started_at
+        if stamp and (slot["last"] is None or stamp > slot["last"]):
+            slot["last"] = stamp
+
+    far_past = datetime.min.replace(tzinfo=timezone.utc)
+    rows = sorted(agg.items(), key=lambda kv: kv[1]["last"] or far_past, reverse=True)
+    payload = [
+        {
+            "path": key,
+            "name": Path(key).name if key else "(未知项目)",
+            "sessions": v["sessions"],
+            "messages": v["messages"],
+            "tools": sorted(v["tools"]),
+            "tool_counts": v["tools"],
+            "last_activity": _iso(v["last"]),
+            "current": _same_path(key, current),
+        }
+        for key, v in rows
+    ]
+    if json_out:
+        console.print_json(_json.dumps({"count": len(payload), "projects": payload}, ensure_ascii=False))
+        return
+    table = Table(title="Projects — 所有本地项目")
+    table.add_column("", justify="center")
+    table.add_column("项目", style="cyan")
+    table.add_column("会话", justify="right")
+    table.add_column("消息", justify="right")
+    table.add_column("助手")
+    table.add_column("最近活动", style="dim")
+    for row in payload:
+        table.add_row(
+            "●" if row["current"] else "",
+            row["path"] or row["name"],
+            str(row["sessions"]),
+            str(row["messages"]),
+            ", ".join(row["tools"]) or "-",
+            row["last_activity"] or "-",
+        )
+    console.print(table)
+    console.print("[dim]选择项目：hcm sessions list --project <path>；全部项目：--all-projects[/dim]")
 
 
 # ---------------------------------------------------------------------------

@@ -432,3 +432,149 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 }
 
 .tl-card { padding: 9px 12px; }
+
+/* ---------- matrix view ---------- */
+
+.layer-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+
+.layer-tab {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-raise);
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.layer-tab:hover { color: var(--text); border-color: var(--accent-dim); }
+.layer-tab.active {
+  border-color: rgba(76, 194, 255, .55);
+  background: rgba(76, 194, 255, .1);
+  color: var(--accent);
+}
+
+.gap-toggle {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--text-dim);
+  cursor: pointer; user-select: none;
+}
+.gap-toggle input { accent-color: var(--accent); }
+
+.matrix-legend {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  font-size: 11.5px; color: var(--text-faint);
+  margin-bottom: 10px;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-dot.synced { color: var(--green); }
+.legend-dot.present { color: var(--amber); }
+.legend-dot.missing { color: var(--text-faint); }
+
+.matrix-summary {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.matrix-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raise);
+  padding: 6px 10px 12px 0;
+}
+
+.matrix {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 100%;
+}
+
+.mx-corner { position: sticky; left: 0; z-index: 2; background: var(--bg-raise); }
+
+.mx-tool-head {
+  position: sticky; top: 0;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
+  padding: 10px 4px 8px;
+  background: var(--bg-raise);
+  white-space: nowrap;
+}
+
+.mx-name {
+  position: sticky; left: 0; z-index: 1;
+  display: flex; align-items: center;
+  padding: 7px 14px 7px 12px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  background: var(--bg-raise);
+  border-top: 1px solid rgba(35, 45, 77, .5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 220px;
+}
+
+.mx-cell {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  border-top: 1px solid rgba(35, 45, 77, .5);
+  border-radius: 4px;
+  margin: 0 3px;
+}
+.mx-cell.synced { color: var(--green); }
+.mx-cell.present { color: var(--amber); }
+.mx-cell.missing { color: var(--text-faint); opacity: .55; }
+
+/* ---------- project picker ---------- */
+
+.project-picker {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.project-item {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 11px;
+  cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.project-item:hover { background: var(--bg-hover); }
+.project-item.selected { border-color: var(--accent); background: rgba(76, 194, 255, .07); }
+
+.project-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-name {
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.project-current {
+  font-size: 9.5px; font-weight: 500;
+  color: var(--accent);
+  border: 1px solid rgba(76, 194, 255, .45);
+  border-radius: 4px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.project-count { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); flex-shrink: 0; }
+
+.project-sub { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+.project-dots { display: inline-flex; gap: 4px; }
+.project-last { font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+
+.project-chip {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

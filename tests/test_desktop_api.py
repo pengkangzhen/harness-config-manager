@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -37,3 +38,58 @@ def test_scan_json_includes_doctor(fake_home) -> None:
         assert item["level"] in ("ok", "warn", "error")
         assert "where" in item
         assert "message" in item
+
+
+def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> None:
+    """projects 聚合：跨助手计数 / 最近活动排序 / 当前项目标记。"""
+    from datetime import datetime, timezone
+
+    from harness_config_manager import sessions as sess
+    from harness_config_manager.sessions import SessionInfo
+
+    t = datetime(2026, 9, 18, tzinfo=timezone.utc)
+    captured: list[object] = []
+
+    def fake_scan(project, tools=None):
+        captured.append(project)
+        return [
+            SessionInfo("codex", "s1", tmp_path / "a.jsonl", project=Path("/Users/x/projA"),
+                        updated_at=t, message_count=5),
+            SessionInfo("claude", "s2", tmp_path / "b.jsonl", project=Path("/Users/x/projA"),
+                        updated_at=t, message_count=3),
+            SessionInfo("codex", "s3", tmp_path / "c.jsonl", project=Path("/Users/x/projB"),
+                        started_at=t, message_count=1),
+        ]
+
+    monkeypatch.setattr(sess, "scan_sessions", fake_scan)
+    result = runner.invoke(app, ["sessions", "projects", "--project", "/Users/x/projA", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert captured == [None]  # 全量扫描，不按单项目过滤
+    assert payload["count"] == 2
+    first = payload["projects"][0]
+    assert first["name"] == "projA"
+    assert first["sessions"] == 2
+    assert first["messages"] == 8
+    assert first["tools"] == ["claude", "codex"]
+    assert first["tool_counts"] == {"codex": 1, "claude": 1}
+    assert first["current"] is True
+    assert payload["projects"][1]["current"] is False
+
+
+def test_sessions_list_all_projects(fake_home, monkeypatch, tmp_path) -> None:
+    """--all-projects 时以 project=None 全量扫描。"""
+    from harness_config_manager import sessions as sess
+
+    captured: list[object] = []
+
+    def fake_scan(project, tools=None):
+        captured.append(project)
+        return []
+
+    monkeypatch.setattr(sess, "scan_sessions", fake_scan)
+    result = runner.invoke(app, ["sessions", "list", "--all-projects", "--json"])
+    assert result.exit_code == 0
+    assert captured == [None]
+    payload = json.loads(result.output)
+    assert payload["project"] == "all"

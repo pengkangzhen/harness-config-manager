@@ -29,12 +29,30 @@ function fmtTime(iso) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function relTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffMs = Date.now() - d.getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min} 分钟前`;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return `今天 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const yest = new Date(now);
+  yest.setDate(yest.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return `昨天 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (diffMs < 7 * 86400000) return `${Math.floor(diffMs / 86400000)} 天前`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 function showError(box, err) {
   box.textContent = typeof err === "string" ? err : JSON.stringify(err, null, 2);
   box.classList.remove("hidden");
 }
 
-/* Tool brand colors for badges / timeline dots. */
 const TOOL_COLORS = {
   claude: "#d97757",
   codex: "#10a37f",
@@ -47,32 +65,21 @@ const TOOL_COLORS = {
   continue: "#c792ea",
 };
 const toolColor = (tool) => TOOL_COLORS[tool] || "#8b96b8";
+const basename = (p) => (p || "").split("/").filter(Boolean).pop() || p || "-";
 
-/* Calendar-date key + human label (今天 / 昨天 / YYYY-MM-DD · 周X). */
-function dateKey(iso) {
-  const d = iso ? new Date(iso) : null;
-  if (!d || Number.isNaN(d.getTime())) return "unknown";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+/* ---------------- global state ---------------- */
 
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
-
-function dateLabel(key) {
-  const today = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-  const yest = new Date(today);
-  yest.setDate(yest.getDate() - 1);
-  const yestKey = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
-  if (key === todayKey) return "今天";
-  if (key === yestKey) return "昨天";
-  const d = new Date(key + "T00:00:00");
-  if (!Number.isNaN(d.getTime())) {
-    return `${key} · 周${WEEKDAYS[d.getDay()]}`;
-  }
-  return key;
-}
+const state = {
+  scanCache: null,
+  sessionsLoaded: false,
+  sessions: [],
+  projects: [],
+  projectFilter: null,    // null = 全部项目；string = 项目路径
+  toolFilter: null,       // null = 全部助手
+  viewMode: "timeline",   // "timeline" | "list"
+  matrixLayer: "skills",
+  matrixGapsOnly: false,
+};
 
 /* ---------------- view switching ---------------- */
 
@@ -83,7 +90,8 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     btn.classList.add("active");
     $(`view-${btn.dataset.view}`).classList.add("active");
     if (btn.dataset.view === "overview") loadOverview();
-    if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessions();
+    if (btn.dataset.view === "matrix") loadMatrix();
+    if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
   });
 });
 
@@ -93,10 +101,17 @@ const LAYERS = [
   ["skills", "skills"],
   ["agents", "agents"],
   ["mcp_servers", "MCP"],
-  ["plugins", "plugins"],
+  ["plugins", "插件"],
   ["hooks", "hooks"],
   ["sessions", "sessions"],
 ];
+
+async function fetchScan(force = false) {
+  if (!force && state.scanCache) return state.scanCache;
+  const data = await invoke("hcm_scan");
+  state.scanCache = data;
+  return data;
+}
 
 async function loadOverview() {
   $("scan-error").classList.add("hidden");
@@ -104,7 +119,7 @@ async function loadOverview() {
   $("overview-content").classList.add("hidden");
   let data;
   try {
-    data = await invoke("hcm_scan");
+    data = await fetchScan();
   } catch (err) {
     $("scan-loading").classList.add("hidden");
     showError($("scan-error"), err);
@@ -154,27 +169,230 @@ function renderOverview(data) {
   }
 }
 
-$("btn-refresh-scan").addEventListener("click", loadOverview);
+$("btn-refresh-scan").addEventListener("click", () => {
+  state.scanCache = null;
+  loadOverview();
+});
+
+/* ---------------- matrix: harness × layer ---------------- */
+
+const MATRIX_LAYERS = [
+  { key: "skills", field: "skills", label: "Skills" },
+  { key: "agents", field: "agents", label: "Subagents" },
+  { key: "mcp", field: "mcp_servers", label: "MCP" },
+  { key: "plugins", field: "plugins", label: "插件" },
+  { key: "hooks", field: "hooks", label: "Hooks" },
+];
+
+function matrixItemName(layer, item) {
+  if (layer.key === "plugins") return item.plugin_id;
+  if (layer.key === "hooks") return item.label;
+  return item.name;
+}
+
+function buildMatrix(scan, layerKey) {
+  const layer = MATRIX_LAYERS.find((l) => l.key === layerKey);
+  const tools = (scan.inventory || []).filter((t) => t.installed);
+  const rows = new Map();
+  for (const tool of tools) {
+    for (const item of tool[layer.field] || []) {
+      const name = matrixItemName(layer, item);
+      if (!name) continue;
+      let row = rows.get(name);
+      if (!row) {
+        row = { statuses: new Map() };
+        rows.set(name, row);
+      }
+      const linked = layer.key === "skills" || layer.key === "agents" ? !!item.linked : false;
+      row.statuses.set(tool.tool, linked ? "synced" : "present");
+    }
+  }
+  const list = [...rows.entries()].map(([name, r]) => ({
+    name,
+    statuses: r.statuses,
+    missing: tools.filter((t) => !r.statuses.has(t.tool)).length,
+  }));
+  list.sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
+  return { tools, rows: list };
+}
+
+async function loadMatrix(force = false) {
+  $("matrix-error").classList.add("hidden");
+  $("matrix-loading").classList.remove("hidden");
+  $("matrix-content").classList.add("hidden");
+  let data;
+  try {
+    data = await fetchScan(force);
+  } catch (err) {
+    $("matrix-loading").classList.add("hidden");
+    showError($("matrix-error"), err);
+    return;
+  }
+  $("matrix-loading").classList.add("hidden");
+  renderMatrixLayerTabs();
+  renderMatrix(data);
+  $("matrix-content").classList.remove("hidden");
+}
+
+function renderMatrixLayerTabs() {
+  const tabs = $("matrix-layer-tabs");
+  tabs.replaceChildren();
+  for (const layer of MATRIX_LAYERS) {
+    const btn = el("button", `layer-tab${state.matrixLayer === layer.key ? " active" : ""}`, layer.label);
+    btn.addEventListener("click", () => {
+      state.matrixLayer = layer.key;
+      renderMatrixLayerTabs();
+      renderMatrix(state.scanCache);
+    });
+    tabs.append(btn);
+  }
+}
+
+function renderMatrix(scan) {
+  const layer = MATRIX_LAYERS.find((l) => l.key === state.matrixLayer);
+  const { tools, rows } = buildMatrix(scan, state.matrixLayer);
+  const shown = state.matrixGapsOnly ? rows.filter((r) => r.missing > 0) : rows;
+  const totalGaps = rows.reduce((acc, r) => acc + r.missing, 0);
+
+  $("matrix-summary").textContent =
+    `${layer.label}：${rows.length} 个条目 × ${tools.length} 个工具 · 缺口 ${totalGaps} 处` +
+    (state.matrixGapsOnly ? ` · 仅显示缺口的 ${shown.length} 条` : "");
+
+  const wrap = $("matrix-wrap");
+  wrap.replaceChildren();
+  if (!shown.length) {
+    wrap.append(el("div", "loading", state.matrixGapsOnly ? "没有缺口 — 所有工具均覆盖" : "没有数据"));
+    return;
+  }
+
+  const grid = el("div", "matrix");
+  grid.style.gridTemplateColumns = `220px repeat(${tools.length}, 78px)`;
+
+  // header row
+  grid.append(el("div", "mx-corner"));
+  for (const tool of tools) {
+    const head = el("div", "mx-tool-head");
+    const dot = el("span", "filter-dot");
+    dot.style.backgroundColor = toolColor(tool.tool);
+    head.append(dot, el("span", "", tool.tool));
+    grid.append(head);
+  }
+
+  // data rows
+  for (const row of shown) {
+    const nameCell = el("div", "mx-name", row.name);
+    nameCell.title = row.name;
+    grid.append(nameCell);
+    for (const tool of tools) {
+      const st = row.statuses.get(tool.tool) || "missing";
+      const cell = el("div", `mx-cell ${st}`, st === "synced" ? "●" : st === "present" ? "◐" : "○");
+      cell.title = `${tool.tool}：${st === "synced" ? "已同步（symlink）" : st === "present" ? "已存在" : "缺少"}`;
+      grid.append(cell);
+    }
+  }
+  wrap.append(grid);
+}
+
+$("matrix-gaps-only").addEventListener("change", (e) => {
+  state.matrixGapsOnly = e.target.checked;
+  if (state.scanCache) renderMatrix(state.scanCache);
+});
+
+$("btn-refresh-matrix").addEventListener("click", () => loadMatrix(true));
 
 /* ---------------- sessions ---------------- */
-
-const state = {
-  sessionsLoaded: false,
-  sessions: [],
-  toolFilter: null,      // null = 全部
-  viewMode: "timeline",  // "timeline" | "list"
-};
 
 function currentProject() {
   return $("project-input").value.trim() || ".";
 }
 
+async function loadSessionsView() {
+  await loadSessionProjects();
+  await loadSessions();
+}
+
+/* ---------- dimension 3: project picker ---------- */
+
+async function loadSessionProjects() {
+  const picker = $("project-picker");
+  picker.replaceChildren(el("div", "loading", "读取项目分布…"));
+  let data;
+  try {
+    data = await invoke("hcm_sessions_projects", { project: currentProject() });
+  } catch (err) {
+    picker.replaceChildren();
+    const box = el("div", "error-box");
+    box.textContent = typeof err === "string" ? err : JSON.stringify(err);
+    picker.append(box);
+    return;
+  }
+  state.projects = data.projects || [];
+  renderProjectPicker();
+}
+
+function renderProjectPicker() {
+  const picker = $("project-picker");
+  picker.replaceChildren();
+
+  // "全部项目" row
+  const allRow = el("div", `project-item${state.projectFilter === null ? " selected" : ""}`);
+  const allHead = el("div", "project-head");
+  allHead.append(el("span", "project-name", "全部项目"));
+  const totalSessions = state.projects.reduce((a, p) => a + p.sessions, 0);
+  allHead.append(el("span", "project-count", `${state.projects.length} 个项目 · ${totalSessions} 会话`));
+  allRow.append(allHead);
+  allRow.addEventListener("click", () => {
+    state.projectFilter = null;
+    renderProjectPicker();
+    loadSessions();
+  });
+  picker.append(allRow);
+
+  for (const p of state.projects) {
+    const row = el("div", `project-item${state.projectFilter === p.path ? " selected" : ""}`);
+    const head = el("div", "project-head");
+    const name = el("span", "project-name", p.name || basename(p.path));
+    if (p.current) {
+      const cur = el("span", "project-current", "当前");
+      name.append(cur);
+    }
+    head.append(name);
+    head.append(el("span", "project-count", `${p.sessions} 会话`));
+    row.append(head);
+
+    const sub = el("div", "project-sub");
+    const dots = el("span", "project-dots");
+    for (const tool of p.tools || []) {
+      const dot = el("span", "filter-dot");
+      dot.style.backgroundColor = toolColor(tool);
+      dot.title = tool;
+      dots.append(dot);
+    }
+    sub.append(dots);
+    sub.append(el("span", "project-last", relTime(p.last_activity)));
+    row.append(sub);
+
+    row.title = p.path;
+    row.addEventListener("click", () => {
+      state.projectFilter = p.path;
+      renderProjectPicker();
+      loadSessions();
+    });
+    picker.append(row);
+  }
+}
+
 async function loadSessions() {
   const list = $("sessions-list");
   list.replaceChildren(el("div", "loading", "读取会话…"));
+  const allProjects = state.projectFilter === null;
   let data;
   try {
-    data = await invoke("hcm_sessions_list", { project: currentProject(), limit: 500 });
+    data = await invoke("hcm_sessions_list", {
+      project: currentProject(),
+      limit: 500,
+      allProjects,
+    });
   } catch (err) {
     list.replaceChildren();
     const box = el("div", "error-box");
@@ -233,7 +451,8 @@ function applyToolFilter(items) {
 
 function renderSessions(items) {
   const filtered = applyToolFilter(items);
-  $("session-count").textContent = `${filtered.length} / ${items.length} 个会话`;
+  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
+  $("session-count").textContent = `${scope} · ${filtered.length} / ${items.length} 个会话`;
   if (state.viewMode === "timeline") renderTimeline(filtered);
   else renderFlatList(filtered);
 }
@@ -248,6 +467,9 @@ function sessionCard(s, opts = {}) {
   badge.style.color = toolColor(s.tool);
   badge.style.borderColor = `${toolColor(s.tool)}55`;
   meta.append(badge);
+  if (state.projectFilter === null && s.project) {
+    meta.append(el("span", "project-chip", basename(s.project)));
+  }
   if (opts.timePrefix) meta.append(el("span", "meta-item", opts.timePrefix));
   meta.append(el("span", "meta-item", opts.dateText || fmtDate(s.updated_at)));
   meta.append(el("span", "meta-item", `${s.message_count} 条`));
@@ -278,7 +500,6 @@ function renderTimeline(items) {
     return;
   }
 
-  // group by calendar date (sessions are already sorted newest-first)
   const groups = [];
   const byKey = new Map();
   for (const s of items) {
@@ -307,6 +528,32 @@ function renderTimeline(items) {
   list.append(tl);
 }
 
+/* calendar helpers */
+const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+
+function dateKey(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return "unknown";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function dateLabel(key) {
+  const today = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const yest = new Date(today);
+  yest.setDate(yest.getDate() - 1);
+  const yestKey = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
+  if (key === todayKey) return "今天";
+  if (key === yestKey) return "昨天";
+  const d = new Date(key + "T00:00:00");
+  if (!Number.isNaN(d.getTime())) {
+    return `${key} · 周${WEEKDAYS[d.getDay()]}`;
+  }
+  return key;
+}
+
 /* ---------- view mode toggle ---------- */
 
 function setViewMode(mode) {
@@ -329,11 +576,12 @@ async function selectSession(session, itemEl) {
   detail.className = "session-detail";
   detail.replaceChildren(el("div", "loading", "读取会话详情…"));
 
+  const project = session.project || currentProject();
   let data;
   try {
     data = await invoke("hcm_sessions_show", {
       ref: session.ref,
-      project: currentProject(),
+      project,
       tail: 120,
     });
   } catch (err) {
@@ -374,6 +622,7 @@ function renderSessionDetail(data) {
 
   const grid = el("div", "meta-grid");
   grid.append(metaCell("Ref", s.ref));
+  grid.append(metaCell("项目", basename(s.project)));
   grid.append(metaCell("更新", fmtDate(s.updated_at)));
   grid.append(metaCell("消息数", s.message_count));
   grid.append(metaCell("后端", s.backend));
@@ -387,7 +636,7 @@ function renderSessionDetail(data) {
     try {
       const text = await invoke("hcm_sessions_context", {
         ref: s.ref,
-        project: currentProject(),
+        project: s.project || currentProject(),
         tail: 40,
       });
       let block = detail.querySelector(".handoff-block");
@@ -439,24 +688,26 @@ function renderSessionDetail(data) {
   detail.append(transcript);
 }
 
-$("btn-refresh-sessions").addEventListener("click", loadSessions);
+$("btn-refresh-sessions").addEventListener("click", loadSessionsView);
 $("project-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") loadSessions();
+  if (e.key === "Enter") loadSessionsView();
 });
 
-/* ---------- session search (respects active harness filter) ---------- */
+/* ---------- session search (follows project + harness filters) ---------- */
 
 async function runSearch() {
   const query = $("search-input").value.trim();
   if (!query) return;
   const list = $("sessions-list");
   list.replaceChildren(el("div", "loading", "搜索中…"));
+  const allProjects = state.projectFilter === null;
   let data;
   try {
     data = await invoke("hcm_sessions_search", {
       query,
       project: currentProject(),
       limit: 50,
+      allProjects,
     });
   } catch (err) {
     list.replaceChildren();
@@ -467,7 +718,8 @@ async function runSearch() {
   }
   const allHits = data.hits || [];
   const hits = applyToolFilter(allHits);
-  $("session-count").textContent = `搜索“${query}”：${hits.length} / ${allHits.length} 条`;
+  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
+  $("session-count").textContent = `${scope} · 搜索“${query}”：${hits.length} / ${allHits.length} 条`;
   list.className = "sessions-list";
   list.replaceChildren();
   if (!hits.length) {
@@ -483,7 +735,9 @@ async function runSearch() {
     badge.style.color = toolColor(s.tool);
     badge.style.borderColor = `${toolColor(s.tool)}55`;
     const meta = el("div", "session-meta");
-    meta.append(badge, el("span", "meta-item", fmtDate(s.updated_at)));
+    meta.append(badge);
+    if (allProjects && s.project) meta.append(el("span", "project-chip", basename(s.project)));
+    meta.append(el("span", "meta-item", fmtDate(s.updated_at)));
     item.append(meta);
     const snippet = el("div", "meta-item");
     snippet.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);margin-top:4px;";

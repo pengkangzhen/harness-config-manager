@@ -110,17 +110,30 @@ async fn hcm_scan() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn hcm_sessions_list(project: String, limit: u32) -> Result<Value, String> {
-    run_json_args(arg(&[
-        "sessions",
-        "list",
-        "--project",
-        &project,
-        "--limit",
-        &limit.to_string(),
-        "--json",
-    ]))
-    .await
+async fn hcm_sessions_list(
+    project: String,
+    limit: u32,
+    all_projects: bool,
+) -> Result<Value, String> {
+    let mut parts = vec![
+        "sessions".to_string(),
+        "list".to_string(),
+        "--limit".to_string(),
+        limit.to_string(),
+        "--json".to_string(),
+    ];
+    if all_projects {
+        parts.push("--all-projects".to_string());
+    } else {
+        parts.push("--project".to_string());
+        parts.push(project);
+    }
+    run_json_args(parts).await
+}
+
+#[tauri::command]
+async fn hcm_sessions_projects(project: String) -> Result<Value, String> {
+    run_json_args(arg(&["sessions", "projects", "--project", &project, "--json"])).await
 }
 
 #[tauri::command]
@@ -144,18 +157,23 @@ async fn hcm_sessions_search(
     query: String,
     project: String,
     limit: u32,
+    all_projects: bool,
 ) -> Result<Value, String> {
-    run_json_args(arg(&[
-        "sessions",
-        "search",
-        &query,
-        "--project",
-        &project,
-        "--limit",
-        &limit.to_string(),
-        "--json",
-    ]))
-    .await
+    let mut parts = vec![
+        "sessions".to_string(),
+        "search".to_string(),
+        query,
+        "--limit".to_string(),
+        limit.to_string(),
+        "--json".to_string(),
+    ];
+    if all_projects {
+        parts.push("--all-projects".to_string());
+    } else {
+        parts.push("--project".to_string());
+        parts.push(project);
+    }
+    run_json_args(parts).await
 }
 
 #[tauri::command]
@@ -198,6 +216,7 @@ fn main() {
             hcm_version,
             hcm_scan,
             hcm_sessions_list,
+            hcm_sessions_projects,
             hcm_sessions_show,
             hcm_sessions_search,
             hcm_sessions_context,
