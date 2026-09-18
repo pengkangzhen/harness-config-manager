@@ -1190,6 +1190,35 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   line-height: 1.45;
   white-space: pre;
 }
+.dispatch-compare-diff.line-mode { padding: 4px 8px; white-space: normal; }
+.dispatch-compare-diff.line-mode .diff-line { white-space: pre; }
+.dispatch-compare-diff.line-mode .diff-line.conflict {
+  background: rgba(255, 107, 129, .14);
+  border-left: 2px solid var(--red);
+}
+.dispatch-compare-report {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 7px;
+}
+.dispatch-compare-strategy { font-size: 11.5px; color: var(--text-dim); }
+.dispatch-compare-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.dispatch-compare-class {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.dispatch-compare-class.identical { border-color: rgba(61, 220, 151, .45); color: var(--green); }
+.dispatch-compare-class.conflicting { border-color: rgba(255, 107, 129, .5); color: var(--red); }
+.dispatch-compare-class.overlapping { border-color: rgba(76, 194, 255, .5); color: var(--accent); }
+.dispatch-compare-class.unique { border-color: var(--border); }
 .dispatch-compare-output {
   border-top: 1px solid var(--border);
   color: var(--text-dim);

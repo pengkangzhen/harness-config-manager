@@ -1613,6 +1613,49 @@ function renderDispatchPlan(entry, plan) {
   entry.plan.append(list);
 }
 
+const COMPARISON_LABELS = {
+  identical: "一致",
+  conflicting: "冲突",
+  overlapping: "不同区域",
+  unique: "独有",
+};
+
+function hunkHeaderOf(line) {
+  const m = /^(@@ [^@]*@@)/.exec(line);
+  return m ? m[1] : line;
+}
+
+function renderDelegateDiff(diffText, conflictHeaders) {
+  if (!conflictHeaders || !conflictHeaders.size) {
+    return el("pre", "dispatch-compare-diff", diffText);
+  }
+  // 冲突 hunk 高亮需要行级 DOM；非冲突保持 <pre> 紧凑展示。
+  const box = el("div", "dispatch-compare-diff line-mode");
+  let inConflict = false;
+  for (const line of diffText.split("\n")) {
+    if (line.startsWith("@@ ")) inConflict = conflictHeaders.has(hunkHeaderOf(line));
+    const row = el("div", "diff-line" + (inConflict ? " conflict" : ""));
+    row.textContent = line;
+    box.append(row);
+  }
+  return box;
+}
+
+function appendDelegateComparisonReport(panel, comparison) {
+  const report = el("div", "dispatch-compare-report");
+  if (comparison.strategy) {
+    report.append(el("div", "dispatch-compare-strategy", comparison.strategy));
+  }
+  const chips = el("div", "dispatch-compare-files");
+  for (const file of comparison.files || []) {
+    const label = `${file.path} · ${COMPARISON_LABELS[file.classification] || file.classification}`
+      + ((file.providers || []).length > 1 ? `（${file.providers.join("/")}）` : "");
+    chips.append(el("span", `dispatch-compare-class ${file.classification}`, label));
+  }
+  report.append(chips);
+  panel.append(report);
+}
+
 function updateDelegateComparison(entry, part, result) {
   const args = part.arguments || {};
   const payload = part.result || {};
@@ -1639,11 +1682,21 @@ function updateDelegateComparison(entry, part, result) {
     ? (part.ok ? `exit ${payload.exitCode ?? "-"}` : "失败")
     : "运行中"));
   panel.append(head);
+
+  const comparison = payload.comparison || null;
+  if (comparison) appendDelegateComparisonReport(panel, comparison);
+
+  const conflictHeaders = new Set();
+  for (const conflict of (comparison && comparison.conflicts) || []) {
+    const header = conflict.hunks && conflict.hunks[provider];
+    if (header) conflictHeaders.add(header);
+  }
   const diff = String(payload.diff || "").trim();
-  const body = el("pre", "dispatch-compare-diff", diff || (result
-    ? "（该子代理没有产生 diff）"
-    : "（等待 sandbox 结果…）"));
-  panel.append(body);
+  panel.append(diff
+    ? renderDelegateDiff(diff, conflictHeaders)
+    : el("pre", "dispatch-compare-diff", result
+      ? "（该子代理没有产生 diff）"
+      : "（等待 sandbox 结果…）"));
   if (result) {
     const output = el("pre", "dispatch-compare-output", String(payload.stdout || payload.stderr || "").slice(0, 8000));
     panel.append(output);

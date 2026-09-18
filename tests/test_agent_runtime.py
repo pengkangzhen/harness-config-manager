@@ -168,6 +168,62 @@ def test_delegate_harness_runs_in_disposable_clone(fake_home: Path, tmp_path: Pa
     assert source.read_text(encoding="utf-8") == "original\n"
 
 
+def test_parallel_delegates_receive_structured_comparison(fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import stat
+    import subprocess
+
+    source = tmp_path / "source.txt"
+    source.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "source.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=tmp_path, check=True)
+
+    bin_dir = tmp_path.parent / f"{tmp_path.name}-compare-bin"
+    bin_dir.mkdir()
+    claude = bin_dir / "claude"
+    claude.write_text("#!/bin/sh\nprintf 'line1\\nline2-claude\\nline3\\n' > source.txt\n", encoding="utf-8")
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\nprintf 'line1\\nline2-codex\\nline3\\n' > source.txt\n", encoding="utf-8")
+    for executable in (claude, codex):
+        executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    model = _sequential_model([
+        ModelResponse(tool_calls=(
+            ToolCall("cmp-claude", "delegate_harness", {"provider": "claude", "prompt": "fix line2"}),
+            ToolCall("cmp-codex", "delegate_harness", {"provider": "codex", "prompt": "fix line2"}),
+        )),
+        ModelResponse(content="compared"),
+    ])
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=model,
+        session_channel="ahp-session:/compare-test", home=fake_home,
+    )
+
+    async def run() -> None:
+        result = await runtime.run("consult both")
+        tool_messages = [m for m in result.messages if m.get("role") == "tool"]
+        assert len(tool_messages) == 2
+        for message in tool_messages:
+            payload = json.loads(message["content"])
+            assert payload["exitCode"] == 0
+            comparison = payload["comparison"]
+            assert set(comparison["providers"]) == {"claude", "codex"}
+            assert comparison["files"][0]["path"] == "source.txt"
+            assert comparison["files"][0]["classification"] == "conflicting"
+            assert comparison["conflicts"][0]["hunks"]["claude"].startswith("@@ -1,3")
+            assert "line2-claude" in comparison["conflicts"][0]["added"]["claude"]
+            assert "line2-codex" in comparison["conflicts"][0]["added"]["codex"]
+            assert "conflicting" in comparison["strategy"]
+
+    asyncio.run(run())
+    # 只有 sandbox 被改，真实 workspace 未动
+    assert source.read_text(encoding="utf-8") == "line1\nline2\nline3\n"
+
+
 def test_run_tests_requires_approval_and_uses_fixed_argv(fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import os
     import stat

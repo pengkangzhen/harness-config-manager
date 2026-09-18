@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Protocol
 import aiohttp
 
 from .config import HalterConfig
+from .patch_compare import compare_provider_diffs
 from .runner import RUNNERS
 from .sessions import build_context, redact_text, scan_sessions
 
@@ -1272,6 +1273,9 @@ class AgentRuntime:
         # follow-up turns keep linking evidence to the same steps.
         self.plan_steps: dict[str, str] = {}
         self.plan_evidence: dict[str, dict[str, Any]] = {}
+        # provider -> latest delegate diff of the current run(); feeds the
+        # deterministic multi-harness comparison attached to tool results.
+        self._turn_delegate_diffs: dict[str, str] = {}
 
     async def _emit(self, emit: EventCallback | None, event: AgentEvent) -> None:
         if emit is not None:
@@ -1425,6 +1429,7 @@ class AgentRuntime:
             permissionMode=permission_mode,
         )
         calls_executed = 0
+        self._turn_delegate_diffs = {}
         try:
             for iteration in range(1, self.max_iterations + 1):
                 async def stream_delta(text: str) -> None:
@@ -1490,6 +1495,24 @@ class AgentRuntime:
                 else:
                     tasks = [asyncio.create_task(run_call(call)) for call in calls]
                     outcomes = list(await asyncio.gather(*tasks))
+
+                # Attach a deterministic comparison of this run's delegate
+                # diffs to every delegate result so the model (and the audit
+                # trail) sees identical/conflicting/overlapping/unique files
+                # without re-reading raw diff text.
+                for call, ok, output in outcomes:
+                    if ok and call.name == "delegate_harness" and isinstance(output, dict):
+                        diff = str(output.get("diff") or "")
+                        provider = str(output.get("provider") or "")
+                        if diff.strip() and provider:
+                            self._turn_delegate_diffs[provider] = diff
+                if len(self._turn_delegate_diffs) >= 2:
+                    comparison = compare_provider_diffs(
+                        dict(self._turn_delegate_diffs)
+                    ).to_dict()
+                    for call, ok, output in outcomes:
+                        if call.name == "delegate_harness" and isinstance(output, dict):
+                            output["comparison"] = comparison
 
                 for call, ok, output in outcomes:
                     plan_step_id = self._plan_step_id(call)

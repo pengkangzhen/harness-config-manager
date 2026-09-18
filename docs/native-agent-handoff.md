@@ -1,7 +1,8 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff feat: add native agent handoff support` 时 `141 passed`；Milestone 1（Evidence-linked plan）已完成并连同两处基线修复提交，全量 `146 passed`。
+基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（Evidence-linked plan，`00438b4`）与
+Milestone 2（deterministic patch comparison）已完成，全量 `157 passed`。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -263,6 +264,20 @@ zcode
 opencode
 ```
 
+同一 run 内出现 ≥2 个 provider 的 delegate diff 时，runtime 自动用
+`patch_compare`（纯函数模块）生成结构化比较并注入每个 delegate 工具结果：
+
+```text
+comparison.files[].classification: identical / conflicting / overlapping / unique
+comparison.unrelated（各 provider 文件互不相交）
+comparison.conflicts[]（含每 provider 的 hunk header 与改动行，供 UI 高亮）
+comparison.strategy（合并采纳建议）
+```
+
+分类依据：hunk 指纹只取改动行（+/-，容忍不同 context 设置）；old 侧行区间
+重叠且指纹不同即 conflicting；同文件不同区域为 overlapping；单 provider 为
+unique；全部指纹一致为 identical。
+
 安全流程：
 
 ```text
@@ -396,7 +411,7 @@ desktop/src-tauri/src/main.rs
 - `@halter` 原生 Agent
 - plan 面板（step 级证据展开：工具调用 / 审批 / 事务）
 - 证据条目可跳转 Audit 视图并高亮定位事件
-- 多 Harness sandbox diff 对比面板
+- 多 Harness sandbox diff 对比面板（patch_compare 分类标签 + 冲突 hunk 高亮）
 - 工具事件面板
 - assistant 输出区
 - approval 面板
@@ -564,19 +579,10 @@ curl http://127.0.0.1:7433/healthz
 已在 Milestone 1 落地：step 稳定 id、tool call / approval / transaction / audit 事件的
 `planStepId`、durable `planEvidence`、UI 证据展开与 Audit deep link。
 
-### 缺口 B：多 Harness diff 只有对比，没有 deterministic merge 分析
+### 缺口 B：多 Harness diff 只有对比，没有 deterministic merge 分析 ✅ 已完成（Milestone 2）
 
-桌面可以 side-by-side 显示 diff，但还没有自动分类：
-
-```text
-identical
-conflicting
-only-claude
-only-codex
-semantic-equivalent
-```
-
-也没有生成给原生模型的合并上下文。
+已在 Milestone 2 落地：`patch_compare.py` 纯函数模块 + delegate 结果自动注入结构化
+comparison + UI 分类标签与冲突 hunk 高亮。
 
 ### 缺口 C：模型 provider 健康检查不足
 
@@ -654,53 +660,35 @@ cargo check
 - [x] Audit viewer 能从 plan step 打开对应事件
 - [x] 新增测试覆盖 evidence 关联与恢复（`test_tool_calls_link_evidence_to_plan_steps`、`test_update_plan_step_ids_are_stable_across_updates`、`test_native_plan_evidence_is_broadcast_and_durable`）
 
-## Milestone 2 — Deterministic multi-Harness diff analysis
+## Milestone 2 — Deterministic multi-Harness diff analysis ✅ 已完成
 
 目标：让多子代理结果不只是展示，而是可合并、可解释。
 
-建议新增内部工具或纯函数模块：
+实现说明：
 
-```text
-src/harness_config_manager/patch_compare.py
-```
-
-功能：
-
-1. 解析 unified diff
-2. 按 file 分组
-3. normalize hunk metadata
-4. 分类：
-
-```text
-identical
-conflicting
-unique
-overlapping
-unrelated
-```
-
-5. 输出：
-
-```text
-files
-providers
-classification
-conflict hunks
-suggested merge strategy
-```
-
-6. 把比较结果返回给原生模型
-7. UI 对比面板显示分类标签
-8. 冲突 hunk 高亮
+1. `src/harness_config_manager/patch_compare.py` 纯函数模块：解析 unified diff、
+   按 file 分组、hunk 指纹只取改动行（+/-）、old 侧行区间重叠判定
+2. 文件分类 `identical / conflicting / overlapping / unique`；report 级
+   `unrelated`（≥2 provider 且文件互不相交）；冲突条目含每 provider 的
+   规范化 hunk header（`@@ -a,b +c,d @@`）与截断后的 removed/added 行
+3. `AgentRuntime.run` 维护本 run 各 provider 最新 delegate diff，≥2 个时
+   把 `compare_provider_diffs(...).to_dict()` 注入每个 delegate 工具结果
+   （模型、audit、AHP toolResult 均可见）
+4. 桌面对比面板显示合并策略与每文件分类 chip；conflicting hunk 在各
+   provider 的 diff 中行级高亮（header 精确匹配）
+5. 空 diff / 非 diff 文本（含非 git workspace 的失败输出）解析为无文件，
+   不抛异常
+6. 注意：`semantic_equivalent` 未实现——指纹是逐字节的，格式化差异会被
+   判为 conflicting；如需语义级等价判定，留给后续 milestone
 
 验收标准：
 
-- [ ] 多 provider 相同 patch 被识别为 identical
-- [ ] 同文件同 hunk 不同修改被识别为 conflicting
-- [ ] 不同文件被识别为 unrelated / unique
-- [ ] 原生模型收到结构化 comparison
-- [ ] UI 明确显示冲突与采纳建议
-- [ ] 有无 git repo 场景的错误处理
+- [x] 多 provider 相同 patch 被识别为 identical（context 行差异被忽略）
+- [x] 同文件同 hunk 不同修改被识别为 conflicting
+- [x] 不同文件被识别为 unrelated / unique
+- [x] 原生模型收到结构化 comparison（注入 delegate 工具结果与 audit）
+- [x] UI 明确显示冲突与采纳建议（分类标签 + strategy + 冲突高亮）
+- [x] 有无 git repo 场景的错误处理（空/错误文本 → 无文件，不崩溃）
 
 ## Milestone 3 — Provider health & model diagnostics
 
@@ -909,21 +897,20 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-Milestone 1（`feat: link plan steps to agent evidence`）已完成。
+Milestone 1（`00438b4`）与 Milestone 2（patch comparison）已完成。
 
 下一个最小但高价值的 PR：
 
 ```text
-feat: deterministic multi-harness patch comparison
+feat: provider health checks and model diagnostics
 ```
 
-即 Milestone 2（`src/harness_config_manager/patch_compare.py` 纯函数模块 + UI 分类标签）。
-范围以 Milestone 2 验收标准为准。
+即 Milestone 3（`halter model check` CLI + Model view 状态展示）。
+范围以 Milestone 3 验收标准为准。
 
 不要在同 PR 里同时做：
 
 - MCP bridge
-- provider health
 
 否则风险和 review 面都会过大。
 
