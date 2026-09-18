@@ -26,6 +26,16 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 | Secret handling | `${VAR}` placeholders + 0600 secrets file, redacted output | ❌ | ❌ | ❌ | ❌ |
 | Tech | Python + uv | TypeScript (Deno) | Rust | — | Rust |
 
+## Screenshots
+
+**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable):
+
+![Config matrix](docs/images/app-matrix.png)
+
+**Cross-assistant sessions** — unified project / harness / timeline facets, full-text search, redacted transcripts, and one-click handoff generation:
+
+![Session browser](docs/images/app-sessions.png)
+
 ## Install
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/):

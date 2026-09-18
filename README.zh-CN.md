@@ -4,6 +4,16 @@
 
 一台机器上往往装着多个 AI 编码工具（Claude Code、ZCode、Codex、Cursor、VS Code Copilot、Gemini CLI、OpenCode……），每个工具各管一套用户级 skills、MCP 配置、插件、hooks（钩子：在工具执行特定动作前后自动运行的 shell 命令）、subagents（子代理：每代理一个 Markdown 定义文件）和 session 记录，格式互不相同（JSON 的 `mcpServers`/`servers`/`.mcp`、TOML 的 `[mcp_servers.*]`、command 数组……），配置渐渐各自为政。`hcm` 用单一事实源统一管理这五层配置：先检测与盘点，再按需分发；session 记录则作为只读的项目连续性能力单独调取。
 
+## 界面预览
+
+**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）：
+
+![配置矩阵](docs/images/app-matrix.png)
+
+**跨助手会话** —— 项目 / 助手 / 时间线三个维度统一筛选，支持内容搜索、脱敏 transcript 与一键生成交接上下文：
+
+![会话浏览器](docs/images/app-sessions.png)
+
 ## 安装
 
 ```bash
