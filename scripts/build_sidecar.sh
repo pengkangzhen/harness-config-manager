@@ -58,6 +58,7 @@ uv run pyinstaller \
     --workpath "$WORK/build" \
     --specpath "$WORK" \
     --hidden-import websockets --hidden-import aiohttp \
+    --copy-metadata harness-config-manager \
     desktop/pyinstaller_entry.py
 
 # Move through a private temporary name, then record the hash only after the
