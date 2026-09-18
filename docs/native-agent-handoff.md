@@ -1,9 +1,9 @@
 # halter Native Agent — 交接与后续推进计划
 
 更新时间：2026-09-18  
-基线状态：`a98f1ff` 时 `141 passed`；Milestone 1（`00438b4`）、Milestone 2（`8322aa3`）、
-Milestone 3（provider health，`c6beb26`）与 Milestone 4（audit search）已完成，
-全量 `173 passed`。
+基线状态：`a98f1ff` 时 `141 passed`；Milestone 1-5 已完成（evidence-linked plan
+`00438b4`、patch comparison `8322aa3`、provider health `c6beb26`、audit search
+`0ef963e`、real-workspace final verification），全量 `175 passed`。
 
 本文档给下一个 AI 助手 / 开发者接手使用。目标是避免只看零散上下文，而是从产品目标、当前架构、已验证能力、剩余缺口、建议路线和验收标准继续推进。
 
@@ -318,11 +318,15 @@ target/
 
 多个 delegate tool call 可并发执行。
 
-### 2.7 测试沙箱
+### 2.7 测试沙箱与真实 workspace 终验
 
-`run_tests` 目前在一次性 git clone sandbox 中执行，不直接修改真实 workspace。
+`run_tests` 在一次性 git clone sandbox 中执行，不直接修改真实 workspace。
 
-固定命令族：
+`run_tests_workspace`（workspace-write 模式）是独立的最终验证流：sandbox 测试
+通过后，Agent 说明理由并请求在真实 workspace 复跑同一条固定命令，用户二次
+批准后才执行；执行记录写入独立的 `kind=workspace-tests` 事务与 audit。
+
+固定命令族（两工具共用，不接受自由 shell 字符串）：
 
 ```text
 pytest
@@ -610,17 +614,10 @@ AHP `halter:health` metadata、桌面 Model view 健康面板。
 kind / provider / workspace / 日期组合 + 分页 + 读取上限）、`halter audit
 search` CLI、UI 事件过滤与列表过滤；plan evidence deep link 在 M1 已就绪。
 
-### 缺口 E：真实 workspace 最终测试流缺失
+### 缺口 E：真实 workspace 最终测试流缺失 ✅ 已完成（Milestone 5）
 
-当前 `run_tests` 在 sandbox 中执行。还缺少一个显式流程：
-
-```text
-sandbox 测试通过
-  -> 展示建议
-  -> 用户再次批准
-  -> 在真实 workspace 复跑最小必要命令
-  -> 记录最终验证结果
-```
+已在 Milestone 5 落地：`run_tests_workspace` 工具 + 二次审批 + workspace-tests
+事务 + UI sandbox/workspace 执行环境标识。
 
 ### 缺口 F：MCP tools 尚未接入 native tool loop
 
@@ -744,31 +741,30 @@ cargo check
 - [x] UI 能从 plan evidence 跳转（M1 deep link + M4 过滤清空）
 - [x] 测试覆盖路径穿越与 malformed JSON（`test_search_skips_malformed_files_and_rejects_traversal`）
 
-## Milestone 5 — Real-workspace final verification flow
+## Milestone 5 — Real-workspace final verification flow ✅ 已完成
 
-建议新增 approval type：
+实现说明：
 
-```text
-run_tests_workspace
-```
-
-流程：
-
-1. sandbox 测试结果返回
-2. Agent 提出需要在真实 workspace 复跑的最小命令
-3. UI 展示 sandbox 结果与差异
-4. 用户再次批准
-5. 真实 workspace 执行 fixed argv
-6. 输出写入 transaction / audit
-7. UI 显示最终验证状态
+1. 新写入工具 `run_tests_workspace`（read-only 模式下不出现在 tools schema）：
+   与 sandbox `run_tests` 完全分离——直接以 workspace 为 cwd 执行
+2. 命令仍固定 argv（共用 `TEST_COMMANDS` 表，无自由 shell）；参数要求
+   `reason` 说明为什么 sandbox 通过后还需真实复跑
+3. 二次审批必需：走统一 approval 流（request/response 入 audit，
+   plan_step_id 透传）
+4. 执行记录写入独立事务 `kind=workspace-tests`（state `verified`/`failed`、
+   exitCode、before/after git status、command、reason）
+5. system prompt 明确要求：先 sandbox `run_tests`，通过后才可请求
+   `run_tests_workspace`
+6. 桌面工具事件面板对 run_tests / run_tests_workspace 显示
+   「一次性 sandbox 克隆」/「真实 workspace(二次审批后)」标识徽标
 
 验收标准：
 
-- [ ] 与 sandbox `run_tests` 分离
-- [ ] 二次审批必需
-- [ ] 命令仍固定 argv
-- [ ] 真实执行结果入 audit
-- [ ] UI 明确标识 sandbox vs workspace
+- [x] 与 sandbox `run_tests` 分离（独立工具、独立事务 kind、scope 字段）
+- [x] 二次审批必需（deny → PermissionError，`test_run_tests_workspace_denied_or_read_only_never_runs`）
+- [x] 命令仍固定 argv（共用 TEST_COMMANDS，无自由字符串拼接）
+- [x] 真实执行结果入 audit（approval.requested/response + tool.call/result）
+- [x] UI 明确标识 sandbox vs workspace（事件面板环境徽标）
 
 ## Milestone 6 — Native MCP tool bridge
 
@@ -885,22 +881,22 @@ mcp_<server>_<tool>
 
 ## 9. 建议的下一个 PR
 
-Milestone 1-4 已完成（evidence-linked plan、patch comparison、provider
-health、audit search）。
+Milestone 1-5 已完成。剩余 Milestone 6（Native MCP tool bridge）与
+Milestone 7（desktop e2e and release hardening）。
 
 下一个最小但高价值的 PR：
 
 ```text
-feat: real-workspace final verification flow
+feat: native MCP tool bridge (read-only phase 1)
 ```
 
-即 Milestone 5（`run_tests_workspace` approval type + 二次审批 + 真实
-workspace 最小复跑）。范围以 Milestone 5 验收标准为准。
+即 Milestone 6 Phase 1（declared read-only MCP tools 进入 native tool loop）。
+Milestone 7 依赖 Rust/浏览器工具链（当前机器无 cargo），建议在具备工具链的
+环境再做。
 
 不要在同 PR 里同时做：
 
-- MCP bridge
-- desktop e2e
+- state-changing MCP（Phase 2 单独做）
 
 否则风险和 review 面都会过大。
 

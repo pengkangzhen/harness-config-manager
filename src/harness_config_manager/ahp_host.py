@@ -241,7 +241,7 @@ class AhpHost:
                 "halter:key": "halter",
                 "halter:health": self._native_health_summary(),
                 "halter:tools": [
-                    "update_plan", "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "apply_patch", "run_tests",
+                    "update_plan", "read_file", "list_dir", "search_files", "git_status", "git_diff", "list_project_sessions", "read_project_session", "delegate_harness", "apply_patch", "run_tests", "run_tests_workspace",
                 ],
                 "halter:permissions": ["read-only", "workspace-write (approval required)"],
             },

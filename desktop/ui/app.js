@@ -1805,6 +1805,11 @@ function updateDispatchToolEvent(entry, part, result) {
     ? JSON.stringify(part.result || {}, null, 2).slice(0, 12000)
     : JSON.stringify(part.arguments || {}, null, 2);
   node.append(detail);
+  if (result && (part.name === "run_tests" || part.name === "run_tests_workspace")) {
+    const real = part.result && part.result.scope === "workspace";
+    node.append(el("div", `dispatch-event-scope ${real ? "ws" : "sb"}`,
+      real ? "执行环境:真实 workspace(二次审批后)" : "执行环境:一次性 sandbox 克隆"));
+  }
   if (part.name === "delegate_harness") {
     updateDelegateComparison(entry, part, result);
   }

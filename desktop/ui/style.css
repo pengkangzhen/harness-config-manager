@@ -1067,6 +1067,15 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 }
 .dispatch-event-rollback.ok { border-color: rgba(61, 220, 151, .45); color: var(--green); }
 .dispatch-event-rollback.err { border-color: rgba(255, 107, 129, .45); }
+.dispatch-event-scope {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+.dispatch-event-scope.sb { color: var(--accent); border-color: rgba(76, 194, 255, .45); }
+.dispatch-event-scope.ws { color: var(--red); border-color: rgba(255, 107, 129, .5); }
 
 .dispatch-plan {
   border: 1px solid var(--border);

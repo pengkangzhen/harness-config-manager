@@ -224,6 +224,121 @@ def test_parallel_delegates_receive_structured_comparison(fake_home: Path, tmp_p
     assert source.read_text(encoding="utf-8") == "line1\nline2\nline3\n"
 
 
+def test_run_tests_workspace_requires_second_approval_and_runs_in_real_workspace(
+    fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import stat
+    import subprocess
+
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pytest_bin = bin_dir / "pytest"
+    # 副作用 marker 证明命令真的在真实 workspace（而非 sandbox 克隆）里执行
+    pytest_bin.write_text("#!/bin/sh\necho FINAL-OK\npwd > workspace-marker.txt\n", encoding="utf-8")
+    pytest_bin.chmod(pytest_bin.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    requests: list[dict] = []
+
+    async def approve(request: dict) -> bool:
+        requests.append(request)
+        return True
+
+    model = _sequential_model([
+        ModelResponse(tool_calls=(ToolCall("final-1", "run_tests_workspace", {
+            "command": "pytest", "reason": "sandbox tests passed; final confirm",
+            "plan_step_id": "step-verify",
+        }),)),
+        ModelResponse(content="final verification passed"),
+    ])
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=model,
+        session_channel="ahp-session:/final-verify", home=fake_home,
+        request_approval=approve,
+    )
+
+    async def run() -> None:
+        result = await runtime.run("final verify", permission_mode="workspace-write")
+        evidence = result.plan_evidence["step-verify"]
+        assert evidence["toolCallIds"][0]["name"] == "run_tests_workspace"
+        assert evidence["transactionIds"][0]["id"].startswith("tests-")
+        tool = [m for m in result.messages if m.get("role") == "tool"][0]
+        payload = json.loads(tool["content"])
+        assert payload["scope"] == "workspace"
+        assert payload["state"] == "verified"
+        assert payload["exitCode"] == 0
+        assert "FINAL-OK" in payload["output"]
+        assert payload["planStepId"] == "step-verify"
+
+    asyncio.run(run())
+    assert requests[0]["tool"] == "run_tests_workspace"
+    assert requests[0]["input"]["arguments"]["command"] == "pytest"
+    assert requests[0]["planStepId"] == "step-verify"
+    marker = tmp_path / "workspace-marker.txt"
+    assert marker.is_file()
+    assert marker.read_text(encoding="utf-8").strip() == str(tmp_path)
+
+    transaction_path = next(
+        (fake_home / ".config/halter/agent-transactions").rglob("tests-*.json")
+    )
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    assert transaction["kind"] == "workspace-tests"
+    assert transaction["state"] == "verified"
+    assert transaction["command"] == ["pytest"]
+    assert transaction["planStepId"] == "step-verify"
+
+    audit_path = next((fake_home / ".config/halter/agent-audit").rglob("audit.jsonl"))
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    by_kind = {record["kind"]: record for record in records}
+    assert by_kind["approval.requested"]["tool"] == "run_tests_workspace"
+    assert by_kind["tool.result"]["result"]["scope"] == "workspace"
+
+
+def test_run_tests_workspace_denied_or_read_only_never_runs(
+    fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import stat
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pytest_bin = bin_dir / "pytest"
+    pytest_bin.write_text("#!/bin/sh\necho SHOULD-NOT-RUN\n", encoding="utf-8")
+    pytest_bin.chmod(pytest_bin.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    async def deny(_request: dict) -> bool:
+        return False
+
+    model = _sequential_model([
+        ModelResponse(tool_calls=(ToolCall("denied-1", "run_tests_workspace", {
+            "command": "pytest",
+        }),)),
+        ModelResponse(content="user denied the final run"),
+    ])
+    runtime = AgentRuntime(
+        workspace=tmp_path, model_client=model,
+        session_channel="ahp-session:/final-deny", home=fake_home,
+        request_approval=deny,
+    )
+
+    async def run() -> None:
+        result = await runtime.run("final verify", permission_mode="workspace-write")
+        tool = [m for m in result.messages if m.get("role") == "tool"][0]
+        payload = json.loads(tool["content"])
+        assert payload["error"] == "PermissionError"
+        assert "denied" in payload["message"]
+
+    asyncio.run(run())
+
+    from harness_config_manager.agent import tools_for_permission
+    read_only_tools = {schema["function"]["name"] for schema in tools_for_permission("read-only")}
+    assert "run_tests_workspace" not in read_only_tools
+
+
 def test_run_tests_requires_approval_and_uses_fixed_argv(fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import os
     import stat

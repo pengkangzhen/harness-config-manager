@@ -44,8 +44,11 @@ SYSTEM_PROMPT = (
     "workspace history, and delegate_harness for an independent "
     "external-agent review in a disposable clone, then apply only approved "
     "unified diffs to the real workspace. Workspace writes are available only as "
-    "unified diffs and require explicit user approval. Run tests only through "
-    "run_tests after changes, and report concrete failures. If write mode is "
+    "unified diffs and require explicit user approval. Run tests in the "
+    "disposable sandbox with run_tests first; only after sandbox tests pass and "
+    "the user explicitly needs a final confirmation may you request "
+    "run_tests_workspace, which re-runs one fixed command in the real workspace "
+    "and always requires a second explicit approval. If write mode is "
     "unavailable, propose precise changes without pretending that you edited files."
 )
 
@@ -55,7 +58,7 @@ MAX_PATCH_CHARS = 100_000
 MAX_PATCH_LINES = 5_000
 MAX_HISTORY_TURNS = 12
 MAX_HISTORY_CHARS = 100_000
-WRITE_TOOL_NAMES = {"apply_patch", "run_tests"}
+WRITE_TOOL_NAMES = {"apply_patch", "run_tests", "run_tests_workspace"}
 PLAN_STATUSES = {"pending", "in_progress", "done", "blocked"}
 PLAN_STEP_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}")
 TEST_COMMANDS = {
@@ -210,6 +213,32 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "enum": ["pytest", "npm-test", "cargo-test", "go-test"],
                     },
                     "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 900},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests_workspace",
+            "description": (
+                "Final verification: re-run one fixed test command directly in the "
+                "REAL workspace after sandbox tests passed. Requires a second explicit "
+                "user approval. Use only for the minimal final confirmation run."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["pytest", "npm-test", "cargo-test", "go-test"],
+                    },
+                    "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 900},
+                    "reason": {
+                        "type": "string",
+                        "description": "Why a real-workspace re-run is needed after the sandbox run.",
+                    },
                 },
                 "required": ["command"],
             },
@@ -798,6 +827,86 @@ class WorkspaceTools:
                 },
             }
 
+    async def run_tests_workspace(
+        self, args: dict[str, Any], plan_step_id: str | None = None
+    ) -> dict[str, Any]:
+        """Final verification: fixed argv directly in the REAL workspace.
+
+        Distinct from run_tests on purpose: no sandbox, no snapshot, and the
+        outcome is journalled as its own workspace-tests transaction so the
+        approval and audit trail can tell the two runs apart.
+        """
+        key = str(args.get("command") or "")
+        if key not in TEST_COMMANDS:
+            raise ValueError(f"unsupported test command: {key}")
+        argv = list(TEST_COMMANDS[key])
+        timeout = min(max(int(args.get("timeout_seconds") or 600), 5), 900)
+
+        before_status = await self._git("status", "--porcelain=v1")
+        transaction_id = f"tests-{uuid.uuid4().hex[:16]}"
+        transaction: dict[str, Any] | None = None
+        if self.transaction_root is not None:
+            transaction = {
+                "version": 1,
+                "id": transaction_id,
+                "kind": "workspace-tests",
+                "createdAt": _now_iso(),
+                "workspace": str(self.workspace),
+                "command": argv,
+                "reason": _truncate_text(str(args.get("reason") or ""), 2000),
+                "before": {"status": before_status},
+                "state": "running",
+            }
+            if plan_step_id:
+                transaction["planStepId"] = plan_step_id
+            TransactionStore(self.transaction_root).save(transaction)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, cwd=self.workspace,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                output, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(os.getpgid(proc.pid), 15)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                await proc.wait()
+                raise RuntimeError(f"workspace test command timed out after {timeout}s")
+        except Exception:
+            if transaction is not None:
+                transaction["state"] = "failed"
+                transaction["finishedAt"] = _now_iso()
+                TransactionStore(self.transaction_root or self.workspace).save(transaction)
+            raise
+
+        after_status = await self._git("status", "--porcelain=v1")
+        state = "verified" if proc.returncode == 0 else "failed"
+        if transaction is not None:
+            transaction.update({
+                "state": state,
+                "finishedAt": _now_iso(),
+                "exitCode": proc.returncode,
+                "after": {"status": after_status},
+            })
+            TransactionStore(self.transaction_root).save(transaction)
+        result: dict[str, Any] = {
+            "command": argv,
+            "exitCode": proc.returncode,
+            "output": _truncate_text(output.decode("utf-8", errors="replace"), 40_000),
+            "scope": "workspace",
+            "state": state,
+            "transactionId": transaction_id,
+            "before": {"status": before_status},
+            "after": {"status": after_status},
+        }
+        if plan_step_id:
+            result["planStepId"] = plan_step_id
+        return result
+
     async def delegate_harness(self, args: dict[str, Any]) -> dict[str, Any]:
         """Consult an external harness in a disposable git clone.
 
@@ -981,6 +1090,8 @@ class WorkspaceTools:
             return await self.update_plan(call.arguments, known_steps=known_steps)
         if call.name == "apply_patch":
             return await self.apply_patch(call.arguments, plan_step_id=plan_step_id)
+        if call.name == "run_tests_workspace":
+            return await self.run_tests_workspace(call.arguments, plan_step_id=plan_step_id)
         handler = getattr(self, call.name)
         return await handler(call.arguments)
 
