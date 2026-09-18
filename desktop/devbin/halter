@@ -1,0 +1,5 @@
+#!/bin/sh
+# Dev sidecar: run halter from this repo's venv so `tauri dev` uses local code,
+# regardless of which halter version is installed globally.
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+exec "$REPO/.venv/bin/halter" "$@"

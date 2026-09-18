@@ -69,19 +69,19 @@ def test_scan_agents_basic(claude_agent_dir: Path) -> None:
 
 
 def test_resolve_agents_library_fallbacks(fake_home: Path) -> None:
-    from harness_config_manager.config import HcmConfig
+    from harness_config_manager.config import HalterConfig
 
     # 1. 显式配置优先
-    cfg = HcmConfig(agents_library="/tmp/explicit-agents")
+    cfg = HalterConfig(agents_library="/tmp/explicit-agents")
     assert resolve_agents_library(cfg) == Path("/tmp/explicit-agents").expanduser()
     # 2. ~/.agents/agents 存在则直接用（不 mkdir 自管库）
     shared = _mklib(fake_home, ["session-scribe"])
-    assert resolve_agents_library(HcmConfig()) == shared
-    # 3. 均无 → hcm 自管库；create=True 时创建（移除共享目录还原场景）
+    assert resolve_agents_library(HalterConfig()) == shared
+    # 3. 均无 → halter 自管库；create=True 时创建（移除共享目录还原场景）
     import shutil as _shutil
 
     _shutil.rmtree(shared)
-    empty_cfg = HcmConfig()
+    empty_cfg = HalterConfig()
     assert not resolve_agents_library(empty_cfg).exists()
     created = resolve_agents_library(empty_cfg, create=True)
     assert created.is_dir() and "library/agents" in str(created)
@@ -159,7 +159,7 @@ def test_sync_replace_identical_with_backup(claude_agent_dir: Path, fake_home: P
     run_sync(actions, lib, apply=True)
     t = claude_agent_dir / "alpha.md"
     assert t.is_symlink() and t.resolve() == (lib / "alpha.md").resolve()
-    backups = list((fake_home / ".config/hcm/backups").rglob("alpha.md"))
+    backups = list((fake_home / ".config/halter/backups").rglob("alpha.md"))
     assert backups, "replace 前应产生备份"
 
 
@@ -178,7 +178,7 @@ def test_sync_conflict_default_skip_then_prefer_library(
 
     run_sync(actions, lib, apply=True, prefer="library")
     assert t.is_symlink() and t.resolve() == (lib / "alpha.md").resolve()
-    backups = list((fake_home / ".config/hcm/backups").rglob("alpha.md"))
+    backups = list((fake_home / ".config/halter/backups").rglob("alpha.md"))
     assert backups
 
 

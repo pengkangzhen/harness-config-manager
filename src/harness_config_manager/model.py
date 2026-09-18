@@ -94,7 +94,7 @@ class PluginInfo:
 @dataclass
 class HookInfo:
     event: str                    # canonical 事件名（Claude/ZCode 大写驼峰；cursor-only 保留小驼峰原名）
-    label: str                    # 展示名：hcm id / 第三方标记 / command 首段截断
+    label: str                    # 展示名：halter id / 第三方标记 / command 首段截断
     type: str = "command"         # command / prompt（仅 cursor）
     matcher: str | None = None
     command: str | None = None    # prompt 型为 None

@@ -12,22 +12,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import HcmConfig
+from .config import HalterConfig
 from .model import AgentInfo, ToolReport
 from .registry import BY_KEY, expand
 
 # ---------------------------------------------------------------------------
-# 事实源解析（三层回退：显式配置 > ~/.agents/agents > hcm 自管库）
+# 事实源解析（三层回退：显式配置 > ~/.agents/agents > halter 自管库）
 
 
-def resolve_agents_library(cfg: HcmConfig, create: bool = False) -> Path:
+def resolve_agents_library(cfg: HalterConfig, create: bool = False) -> Path:
     if cfg.agents_library:
         lib = Path(cfg.agents_library).expanduser()
     else:
         candidate = expand(".agents/agents")
         if candidate.is_dir():
             return candidate
-        lib = expand(".config/hcm/library/agents")
+        lib = expand(".config/halter/library/agents")
     if create:
         lib.mkdir(parents=True, exist_ok=True)
     return lib
@@ -163,7 +163,7 @@ class SyncAction:
 
 def backup_dir() -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    d = expand(f".config/hcm/backups/{stamp}/agents")
+    d = expand(f".config/halter/backups/{stamp}/agents")
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -113,7 +113,7 @@ def read_cursor_plugins() -> list[PluginInfo]:
     return result
 
 
-# VS Code 扩展里与 AI 编码相关的关键词（其余为纯编辑器扩展，不属于 hcm 管理范围）
+# VS Code 扩展里与 AI 编码相关的关键词（其余为纯编辑器扩展，不属于 halter 管理范围）
 AI_EXTENSION_KEYWORDS = (
     "copilot", "chatgpt", "claude", "codex", "cursor", "gemini", "continue",
     "cline", "codeium", "windsurf", "tabnine", "cody", "augment", "amazonq",

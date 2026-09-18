@@ -1,7 +1,7 @@
 """hooks 层：各工具配置方言的读取器（写入器见 hooks_write）。
 
 方言一览（macOS 实测，2026-08）：
-  claude   ~/.claude/settings.json   -> hooks{Event: [{matcher, hcm?, hooks:[{type,command,timeout}]}]}
+  claude   ~/.claude/settings.json   -> hooks{Event: [{matcher, halter?, hooks:[{type,command,timeout}]}]}
              三层结构；matcher 层容忍任意自定义键（_otty 等第三方标记先例）
   zcode    ~/.zcode/cli/config.json  -> hooks.events{Event: [...]}（同 claude 三层；
              另有 hooks.enabled 全局开关与 timeoutMs 毫秒超时、statusMessage 描述字段）
@@ -99,7 +99,7 @@ def _expand_nested(events_map: dict, notes: list[str], source: str,
                 info.label = _named(info, counts)
                 infos.append(info)
     if enabled_note and infos:
-        notes.append("hooks 全局开关由 ~/.zcode/cli/config.json hooks.enabled 控制，hcm 不代管")
+        notes.append("hooks 全局开关由 ~/.zcode/cli/config.json hooks.enabled 控制，halter 不代管")
     return infos
 
 

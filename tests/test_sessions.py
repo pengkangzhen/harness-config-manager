@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from harness_config_manager.config import HcmConfig
+from harness_config_manager.config import HalterConfig
 from harness_config_manager.sessions import (
     build_context,
     format_transcript,
@@ -157,7 +157,7 @@ def test_context_is_deterministic_and_scoped(fake_home: Path, tmp_path: Path) ->
     project.mkdir()
     make_codex_session(fake_home, project)
     context = build_context("codex:codex-sid", project, tail=2)
-    assert context.startswith("# HCM session handoff")
+    assert context.startswith("# Halter session handoff")
     assert "Source: `codex:codex-sid`" in context
     assert "Check config." in context
     assert "not a model summary" in context
@@ -169,17 +169,17 @@ def test_install_builtin_skill_to_detected_tools(fake_home: Path) -> None:
     codex = fake_home / ".codex/skills"
     codex.mkdir(parents=True)
 
-    plan = install_session_skill(HcmConfig(), ["claude", "codex"], apply=False)
-    assert not (fake_home / ".config/hcm/library/skills/hcm-sessions/SKILL.md").exists()
-    assert any(x.startswith("install hcm-sessions") for x in plan)
+    plan = install_session_skill(HalterConfig(), ["claude", "codex"], apply=False)
+    assert not (fake_home / ".config/halter/library/skills/halter-sessions/SKILL.md").exists()
+    assert any(x.startswith("install halter-sessions") for x in plan)
 
-    applied = install_session_skill(HcmConfig(), ["claude", "codex"], apply=True)
-    assert any(x.startswith("install hcm-sessions") for x in applied)
-    lib = fake_home / ".config/hcm/library/skills/hcm-sessions/SKILL.md"
+    applied = install_session_skill(HalterConfig(), ["claude", "codex"], apply=True)
+    assert any(x.startswith("install halter-sessions") for x in applied)
+    lib = fake_home / ".config/halter/library/skills/halter-sessions/SKILL.md"
     assert lib.is_file()
-    assert (claude / "hcm-sessions").is_symlink()
-    assert (codex / "hcm-sessions").is_symlink()
-    assert "hcm sessions list --project . --json" in lib.read_text(encoding="utf-8")
+    assert (claude / "halter-sessions").is_symlink()
+    assert (codex / "halter-sessions").is_symlink()
+    assert "halter sessions list --project . --json" in lib.read_text(encoding="utf-8")
 
 
 def test_cli_json_list_and_context(fake_home: Path, tmp_path: Path) -> None:

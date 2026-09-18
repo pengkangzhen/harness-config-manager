@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate HCM desktop app icons (PNG / ICNS / ICO) with no third-party deps.
+"""Generate Halter desktop app icons (PNG / ICNS / ICO) with no third-party deps.
 
 Renders a rounded-square "config distribution" mark — three nodes linked by
 lines — at 4x supersampling, then packages the PNGs into macOS .icns and

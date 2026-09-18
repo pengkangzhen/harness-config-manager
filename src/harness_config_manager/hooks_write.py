@@ -1,6 +1,6 @@
 """hooks 方言写入器：canonical -> 各工具配置（读-改-写，保留其余键；原子替换）。
 
-归属跟踪：hcm 写入的条目在其条目对象上携带 "hcm": "<id>" 标记键；
+归属跟踪：halter 写入的条目在其条目对象上携带 "halter": "<id>" 标记键；
 同步时仅 upsert 自家条目，第三方注入的无标记条目一律不触碰。
 claude/zcode 为三层结构（事件 -> [matcher 层条目 -> hooks 数组]，超时分别为秒/毫秒），
 cursor 为扁平两层（事件 -> [{command,...}]，必须保留根上 version:1）。
@@ -30,7 +30,7 @@ def _event_for_claude_family(event: str) -> bool:
 
 
 def _strip_managed(entries: list, id_: str) -> list:
-    return [e for e in entries if not (isinstance(e, dict) and e.get("hcm") == id_)]
+    return [e for e in entries if not (isinstance(e, dict) and e.get("halter") == id_)]
 
 
 def _inner_common(spec: HookSpec) -> dict:
@@ -62,7 +62,7 @@ def write_claude(specs: list[HookSpec]) -> list[str]:
                 entry["hooks"][0]["timeout"] = max(1, int(round(s.timeout)))
             for k, v in s.extra.items():
                 entry.setdefault(k, v)
-            entry["hcm"] = s.id
+            entry["halter"] = s.id
             entries.append(entry)
     _atomic_write_json(path, data)
     ids = ", ".join(s.id for s in specs)
@@ -90,7 +90,7 @@ def write_zcode(specs: list[HookSpec]) -> list[str]:
                 entry["matcher"] = s.matcher
             for k, v in s.extra.items():
                 entry.setdefault(k, v)
-            entry["hcm"] = s.id
+            entry["halter"] = s.id
             entries.append(entry)
     _atomic_write_json(path, data)
     ids = ", ".join(s.id for s in specs)
@@ -117,7 +117,7 @@ def write_cursor(specs: list[HookSpec]) -> list[str]:
                 entry["timeout"] = s.timeout
             for k, v in s.extra.items():
                 entry.setdefault(k, v)
-            entry["hcm"] = s.id
+            entry["halter"] = s.id
             entries.append(entry)
     _atomic_write_json(path, data)
     ids = ", ".join(s.id for s in specs)
@@ -132,11 +132,11 @@ HOOK_WRITERS = {
 
 
 # ---------------------------------------------------------------------------
-# 冲突比较：工具侧 hcm 打标条目 <-> manifest 期望
+# 冲突比较：工具侧 halter 打标条目 <-> manifest 期望
 
 
 def _managed_form(tool: str) -> dict[str, tuple]:
-    """工具侧 hcm 标记条目 -> {id: (events有序组, matcher, command/type载体, timeout)}。"""
+    """工具侧 halter 标记条目 -> {id: (events有序组, matcher, command/type载体, timeout)}。"""
     found: dict[str, dict] = {}
 
     def _put(id_, ev, matcher, carrier, timeout):
@@ -150,10 +150,10 @@ def _managed_form(tool: str) -> dict[str, tuple]:
             if not isinstance(entries, list):
                 continue
             for e in entries:
-                if isinstance(e, dict) and isinstance(e.get("hcm"), str):
+                if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     for inner in e.get("hooks") or []:
                         t = inner.get("timeout")
-                        _put(e["hcm"], ev, e.get("matcher"),
+                        _put(e["halter"], ev, e.get("matcher"),
                              (inner.get("type", "command"), inner.get("command")),
                              float(t) if t is not None else None)
     elif tool == "zcode":
@@ -163,11 +163,11 @@ def _managed_form(tool: str) -> dict[str, tuple]:
             if not isinstance(entries, list):
                 continue
             for e in entries:
-                if isinstance(e, dict) and isinstance(e.get("hcm"), str):
+                if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     for inner in e.get("hooks") or []:
                         t = inner.get("timeoutMs")
                         sec = t / 1000 if t is not None else inner.get("timeout")
-                        _put(e["hcm"], ev, e.get("matcher"),
+                        _put(e["halter"], ev, e.get("matcher"),
                              (inner.get("type", "command"), inner.get("command")),
                              float(sec) if sec is not None else None)
     elif tool == "cursor":
@@ -178,9 +178,9 @@ def _managed_form(tool: str) -> dict[str, tuple]:
                 continue
             canonical = rev.get(ev, ev)
             for e in entries:
-                if isinstance(e, dict) and isinstance(e.get("hcm"), str):
+                if isinstance(e, dict) and isinstance(e.get("halter"), str):
                     t = e.get("timeout")
-                    _put(e["hcm"], canonical, e.get("matcher"),
+                    _put(e["halter"], canonical, e.get("matcher"),
                          (e.get("type", "command"), e.get("command")),
                          float(t) if t is not None else None)
 

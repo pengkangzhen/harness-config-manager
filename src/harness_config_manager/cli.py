@@ -1,4 +1,4 @@
-"""hcm 命令行入口：只有两个命令——scan（看）/ sync（同步）。"""
+"""halter 命令行入口：只有两个命令——scan（看）/ sync（同步）。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ console = Console()
 
 sessions_app = typer.Typer(help="查看并按需复用当前项目在多个 AI 编码工具中的历史会话。")
 app.add_typer(sessions_app, name="sessions")
+
+tasks_app = typer.Typer(help="查看/跟踪通过 halter run 派发的多 Harness 任务。")
+app.add_typer(tasks_app, name="tasks")
 
 
 @app.callback()
@@ -69,7 +72,7 @@ def sessions_list(
             (item.title or "-")[:100],
         )
     console.print(table)
-    console.print("[dim]按需查看：hcm sessions show <ref> --transcript；交接：hcm sessions context <ref>[/dim]")
+    console.print("[dim]按需查看：halter sessions show <ref> --transcript；交接：halter sessions context <ref>[/dim]")
 
 
 @sessions_app.command()
@@ -176,7 +179,7 @@ def context(
 def install(
     apply: bool = typer.Option(False, "--apply", help="实际安装（默认 dry-run）"),
 ) -> None:
-    """把 hcm-sessions skill 安装到所有已检测工具，供任意助手调用历史会话。"""
+    """把 halter-sessions skill 安装到所有已检测工具，供任意助手调用历史会话。"""
     from .config import load_config
     from .detect import detect_tools
     from .sessions import install_session_skill
@@ -189,6 +192,141 @@ def install(
 
 
 # ---------------------------------------------------------------------------
+# run / tasks：多 Harness 任务调度
+
+
+@app.command()
+def run(
+    message: str = typer.Argument(..., help="任务消息，用 @claude/@codex/@zcode/@opencode 指定执行者，可多选"),
+    project: Path = typer.Option(Path("."), "--project", "-p", help="任务运行的项目路径，默认当前目录"),
+    mode: str = typer.Option("safe", "--mode", help="safe=权限受控（默认）；yolo=跳过全部权限确认"),
+    detached: bool = typer.Option(False, "--detached", "-d", help="后台运行，立即返回任务 id"),
+    timeout: float = typer.Option(3600.0, "--timeout", min=1, help="前台模式超时秒数（默认 3600）"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """在同一界面 @ 不同 Harness 完成任务（无头执行，输出带前缀流式回传）。"""
+    import threading
+
+    from .runner import RUNNERS, HarnessRunError, dispatch
+
+    if mode not in ("safe", "yolo"):
+        raise typer.BadParameter("mode 只能是 safe 或 yolo")
+    try:
+        if json_out or detached:
+            infos = dispatch(message, project=project, mode=mode, detached=detached, timeout=timeout)
+        else:
+            lock = threading.Lock()
+
+            def _print(tool: str, line: str) -> None:
+                with lock:
+                    console.print(f"[cyan]\\[{tool}][/cyan] {line}")
+
+            infos = dispatch(message, project=project, mode=mode, timeout=timeout, on_line=_print)
+    except HarnessRunError as e:
+        console.print(f"[red]错误[/red] {e}")
+        raise typer.Exit(code=2)
+
+    if json_out:
+        console.print_json(_json.dumps({
+            "tasks": [t.to_dict() for t in infos],
+        }, ensure_ascii=False))
+        return
+    if detached:
+        for t in infos:
+            console.print(f"[green]已派发[/green] @{t.tool} -> task {t.task_id}（halter tasks show {t.task_id}）")
+        return
+    for t in infos:
+        style = "green" if t.status == "done" else "red" if t.status in ("failed", "cancelled") else "yellow"
+        console.print(f"[{style}]任务 {t.task_id} @{t.tool} -> {t.status}[/{style}]")
+
+
+@tasks_app.command("list")
+def tasks_list(
+    limit: int = typer.Option(20, "--limit", "-n", min=1, help="最多显示条数"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """列出已派发的任务。"""
+    from .runner import list_tasks, refresh_task
+
+    items = [refresh_task(t) for t in list_tasks(limit)]
+    if json_out:
+        console.print_json(_json.dumps({"count": len(items), "tasks": [t.to_dict() for t in items]}, ensure_ascii=False))
+        return
+    table = Table(title="Tasks")
+    table.add_column("Task ID", style="cyan", no_wrap=True)
+    table.add_column("Tool")
+    table.add_column("Status")
+    table.add_column("Started")
+    table.add_column("Prompt", overflow="fold")
+    for t in items:
+        table.add_row(t.task_id, f"@{t.tool}", t.status, t.started_at, t.prompt[:60])
+    console.print(table)
+
+
+@tasks_app.command()
+def show(
+    task_id: str = typer.Argument(..., help="任务 id（见 halter tasks list）"),
+    tail: int = typer.Option(4000, "--tail", min=100, help="输出的末尾字符数"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """查看任务详情与输出末尾（已脱敏）。"""
+    from .runner import load_task, refresh_task
+
+    try:
+        info = refresh_task(load_task(task_id))
+    except FileNotFoundError as e:
+        console.print(f"[red]错误[/red] {e}")
+        raise typer.Exit(code=2)
+    if json_out:
+        console.print_json(_json.dumps(info.to_dict(include_tail=tail), ensure_ascii=False))
+        return
+    console.print(f"[cyan]任务[/cyan] {info.task_id}  @{info.tool}  [{info.status}]")
+    console.print(f"[dim]项目 {info.project}  开始于 {info.started_at}[/dim]")
+    console.print(f"[dim]命令 {' '.join(info.argv)}[/dim]")
+    out = read_output_tail_safe(info.task_id, tail)
+    if out:
+        console.print(out)
+
+
+def read_output_tail_safe(task_id: str, tail: int) -> str:
+    from .runner import read_output_tail
+
+    return read_output_tail(task_id, tail)
+
+
+# ---------------------------------------------------------------------------
+# models：查看/校验各 harness 的默认 LLM 配置
+
+
+@app.command()
+def models(
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """查看 [models] 配置（config.toml 中每个 harness 的默认模型）。"""
+    from .config import load_config
+    from .runner import RUNNERS
+
+    cfg = load_config()
+    configured = {k: v for k, v in cfg.models.items() if k in RUNNERS}
+    if json_out:
+        console.print_json(_json.dumps({
+            "models": configured,
+            "runners": {k: {"display": r.display} for k, r in RUNNERS.items()},
+        }, ensure_ascii=False))
+        return
+    if not configured:
+        console.print("[dim]未配置默认模型（@harness/model 内联指定仍可用）。\n"
+                      "在 ~/.config/halter/config.toml 中添加：\n[models]\nclaude = \"sonnet\"\ncodex = \"o3\"[/dim]")
+        return
+    table = Table(title="Default models")
+    table.add_column("Harness", style="cyan")
+    table.add_column("Model")
+    for k in sorted(configured):
+        table.add_row(f"@{k}", configured[k])
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # version：桌面 App / 脚本探测用
 
 
@@ -196,7 +334,7 @@ def install(
 def version(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
 ) -> None:
-    """显示 hcm 版本。"""
+    """显示 halter 版本。"""
     from importlib.metadata import PackageNotFoundError, version as pkg_version
 
     try:
@@ -204,9 +342,9 @@ def version(
     except PackageNotFoundError:
         v = "0.0.0+dev"
     if json_out:
-        console.print_json(_json.dumps({"name": "hcm", "version": v}, ensure_ascii=False))
+        console.print_json(_json.dumps({"name": "halter", "version": v}, ensure_ascii=False))
     else:
-        console.print(f"hcm {v}")
+        console.print(f"halter {v}")
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +457,7 @@ def sessions_projects(
             row["last_activity"] or "-",
         )
     console.print(table)
-    console.print("[dim]选择项目：hcm sessions list --project <path>；全部项目：--all-projects[/dim]")
+    console.print("[dim]选择项目：halter sessions list --project <path>；全部项目：--all-projects[/dim]")
 
 
 # ---------------------------------------------------------------------------

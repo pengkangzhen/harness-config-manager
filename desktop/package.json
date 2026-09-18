@@ -1,8 +1,8 @@
 {
-  "name": "hcm-desktop",
+  "name": "halter-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "Harness Config Manager desktop app (Tauri + hcm sidecar)",
+  "description": "Harness Config Manager desktop app (Tauri + halter sidecar)",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

@@ -1,4 +1,4 @@
-"""hooks canonical 清单：~/.config/hcm/hooks.toml（期望状态的事实源）。
+"""hooks canonical 清单：~/.config/halter/hooks.toml（期望状态的事实源）。
 
 每个 [[hook]] 是一次注册：一个命令挂到一（或多）个事件、可选 matcher。
 canonical 事件名 = Claude/ZCode 大写驼峰；cursor 小驼峰通过 EVENT_TO_CURSOR 互转，
@@ -19,7 +19,7 @@ import tomlkit
 from .model import HookInfo, redact
 from .registry import expand
 
-HOOK_MANIFEST = lambda: expand(".config/hcm/hooks.toml")  # noqa: E731
+HOOK_MANIFEST = lambda: expand(".config/halter/hooks.toml")  # noqa: E731
 
 HOOK_CAPABLE = ("claude", "zcode", "cursor")   # 分发遍历顺序即此序
 
@@ -57,7 +57,7 @@ _SCRIPT_PATH_RE = re.compile(r"[\w./$~-]{2,}\.(?:sh|py|mjs|cmd|ps1|bash|zsh)\b")
 
 def gen_hook_id(info: HookInfo) -> str:
     """从盘点条目生成稳定 id：归属标记 > 脚本路径 stem > 命令首段 > 哈希。"""
-    for k in ("hcm", "_otty", "_orca"):
+    for k in ("halter", "_otty", "_orca"):
         v = info.extra.get(k)
         if isinstance(v, str) and v:
             return v

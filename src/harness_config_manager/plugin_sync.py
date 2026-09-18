@@ -22,7 +22,7 @@ import tomlkit
 
 from .registry import expand
 
-PLUGINS_MANIFEST = lambda: expand(".config/hcm/plugins.toml")  # noqa: E731
+PLUGINS_MANIFEST = lambda: expand(".config/halter/plugins.toml")  # noqa: E731
 
 
 @dataclass

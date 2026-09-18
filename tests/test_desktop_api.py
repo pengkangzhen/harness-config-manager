@@ -16,7 +16,7 @@ def test_version_json_contract() -> None:
     result = runner.invoke(app, ["version", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["name"] == "hcm"
+    assert payload["name"] == "halter"
     assert isinstance(payload["version"], str)
     assert payload["version"]
 
@@ -24,7 +24,7 @@ def test_version_json_contract() -> None:
 def test_version_plain() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.output.startswith("hcm ")
+    assert result.output.startswith("halter ")
 
 
 def test_scan_json_includes_doctor(fake_home) -> None:

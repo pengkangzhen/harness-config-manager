@@ -1,4 +1,4 @@
-// HCM desktop frontend — no build step, talks to Rust commands via Tauri IPC.
+// Halter desktop frontend — no build step, talks to Rust commands via Tauri IPC.
 "use strict";
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
@@ -49,7 +49,10 @@ function relTime(iso) {
 }
 
 function showError(box, err) {
-  box.textContent = typeof err === "string" ? err : JSON.stringify(err, null, 2);
+  const detail = typeof err === "string"
+    ? err
+    : (err && (err.message || err.toString && err.toString())) || JSON.stringify(err, null, 2);
+  box.textContent = detail;
   box.classList.remove("hidden");
 }
 
@@ -90,6 +93,10 @@ const state = {
   expandedFamilies: new Set(),
   projectsError: null,
   projectMatches: [],
+  dispatchLoaded: false,
+  dispatchModels: {},      // harness -> 默认模型（config.toml [models]）
+  dispatchProjects: [],
+  dispatchCards: new Map(),   // task_id -> {node, timer}
 };
 
 /* ---------------- view switching ---------------- */
@@ -103,6 +110,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     if (btn.dataset.view === "overview") loadOverview();
     if (btn.dataset.view === "matrix") loadMatrix();
     if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
+    if (btn.dataset.view === "dispatch") loadDispatchView();
   });
 });
 
@@ -119,7 +127,7 @@ const LAYERS = [
 
 async function fetchScan(force = false) {
   if (!force && state.scanCache) return state.scanCache;
-  const data = await invoke("hcm_scan");
+  const data = await invoke("halter_scan");
   state.scanCache = data;
   return data;
 }
@@ -364,7 +372,7 @@ function renderMatrix(scan) {
   const CELL_GLYPH = { synced: "●", present: "◐", partial: "◔", missing: "○" };
   const CELL_TEXT = {
     synced: "已同步（symlink）",
-    present: "已存在（非 hcm 管理）",
+    present: "已存在（非 halter 管理）",
     partial: "部分成员存在",
     missing: "缺少",
   };
@@ -456,7 +464,7 @@ async function loadSessionProjects() {
   state.projectsError = null;
   let data;
   try {
-    data = await invoke("hcm_sessions_projects", { project: currentProject() });
+    data = await invoke("halter_sessions_projects", { project: currentProject() });
   } catch (err) {
     state.projectsError = typeof err === "string" ? err : JSON.stringify(err);
     renderProjectInput();
@@ -634,7 +642,7 @@ async function loadSessions() {
   const allProjects = state.projectFilter === null;
   let data;
   try {
-    data = await invoke("hcm_sessions_list", {
+    data = await invoke("halter_sessions_list", {
       project: projectArg(),
       limit: 500,
       allProjects,
@@ -833,7 +841,7 @@ async function selectSession(session, itemEl) {
   const project = session.project || state.projectFilter || ".";
   let data;
   try {
-    data = await invoke("hcm_sessions_show", {
+    data = await invoke("halter_sessions_show", {
       ref: session.ref,
       project,
       tail: 120,
@@ -888,7 +896,7 @@ function renderSessionDetail(data) {
     handoffBtn.disabled = true;
     handoffBtn.textContent = "生成中…";
     try {
-      const text = await invoke("hcm_sessions_context", {
+      const text = await invoke("halter_sessions_context", {
         ref: s.ref,
         project: s.project || state.projectFilter || ".",
         tail: 40,
@@ -954,7 +962,7 @@ async function runSearch() {
   const allProjects = state.projectFilter === null;
   let data;
   try {
-    data = await invoke("hcm_sessions_search", {
+    data = await invoke("halter_sessions_search", {
       query,
       project: projectArg(),
       limit: 50,
@@ -1003,6 +1011,242 @@ $("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
 });
 
+/* ---------------- dispatch（多 Harness 任务调度） ---------------- */
+
+const DISPATCH_RUNNERS = [
+  { key: "claude", label: "Claude Code", aliases: ["claude", "claudecode", "cc"] },
+  { key: "codex", label: "Codex", aliases: ["codex", "cx"] },
+  { key: "zcode", label: "ZCode", aliases: ["zcode", "z"] },
+  { key: "opencode", label: "OpenCode", aliases: ["opencode", "oc"] },
+];
+
+function parseDispatchMentions(text) {
+  const found = [];   // {tool, model|null}
+  const rest = text.replace(
+    /(^|[^\w@])@([a-z][a-z0-9-]*(?:\/[^\s@]+)?)/gi,
+    (m, pre, raw) => {
+      const [name, ...modelParts] = raw.split("/");
+      const spec = DISPATCH_RUNNERS.find((r) => r.aliases.includes(name.toLowerCase()));
+      if (spec) {
+        const model = modelParts.join("/") || null;
+        if (!found.some((t) => t.tool === spec.key && t.model === model)) {
+          found.push({ tool: spec.key, model });
+        }
+        return pre;
+      }
+      return m;
+    }
+  );
+  return { targets: found, prompt: rest.replace(/\s+/g, " ").trim() };
+}
+
+async function loadDispatchView() {
+  if (!state.dispatchLoaded) {
+    bindDispatchEvents();
+    state.dispatchLoaded = true;
+  }
+  loadDispatchModels();
+  renderDispatchHarnesses();
+  await loadDispatchProjects();
+  updateDispatchHint();
+}
+
+async function loadDispatchModels() {
+  try {
+    const data = await invoke("halter_models");
+    state.dispatchModels = data.models || {};
+    renderDispatchHarnesses();
+  } catch {
+    state.dispatchModels = {};
+  }
+}
+
+function renderDispatchHarnesses() {
+  const box = $("dispatch-harnesses");
+  box.replaceChildren();
+  const detected = new Set();
+  if (state.scanCache) {
+    for (const t of state.scanCache.tools_detected || []) detected.add(t.tool);
+  }
+  for (const spec of DISPATCH_RUNNERS) {
+    const chip = el("span", "dispatch-harness-chip" + (detected.has(spec.key) ? "" : " off"));
+    const dot = el("span", "dispatch-harness-dot");
+    dot.style.background = toolColor(spec.key);
+    chip.append(dot, el("span", "", spec.label));
+    const model = state.dispatchModels[spec.key];
+    if (model) chip.append(el("span", "dispatch-harness-model", model));
+    chip.title = detected.has(spec.key)
+      ? `@${spec.key} 可用${model ? `（默认模型 ${model}）` : ""}；点击插入提及，可加 /model 指定模型`
+      : `@${spec.key} 未检测到（点击仍会尝试派发）`;
+    chip.addEventListener("click", () => insertDispatchMention(spec.key));
+    box.append(chip);
+  }
+}
+
+async function loadDispatchProjects() {
+  const select = $("dispatch-project");
+  try {
+    const data = await invoke("halter_sessions_projects", { project: "." });
+    state.dispatchProjects = (data.projects || []).filter((p) => (p.kind || "project") === "project");
+  } catch {
+    state.dispatchProjects = [];
+  }
+  const prev = select.value;
+  select.replaceChildren();
+  if (!state.dispatchProjects.length) {
+    select.append(new Option("当前目录", ""));
+    select.value = "";
+    return;
+  }
+  for (const p of state.dispatchProjects) {
+    select.append(new Option(shortenPath(p.path) || p.path, p.path));
+  }
+  // 默认选会话最多的项目；保留用户已选
+  const busiest = [...state.dispatchProjects].sort((a, b) => b.sessions - a.sessions)[0];
+  select.value = prev && [...select.options].some((o) => o.value === prev)
+    ? prev
+    : (busiest ? busiest.path : "");
+}
+
+function insertDispatchMention(key) {
+  const input = $("dispatch-input");
+  const at = input.value.slice(0, input.selectionStart);
+  const rest = input.value.slice(input.selectionStart);
+  const glue = at && !/\s$/.test(at) ? " " : "";
+  input.value = `${at}${glue}@${key} ${rest}`;
+  input.focus();
+  const pos = (at + glue + "@" + key + " ").length;
+  input.setSelectionRange(pos, pos);
+  updateDispatchHint();
+}
+
+function updateDispatchHint() {
+  const hint = $("dispatch-mention-hint");
+  const { targets, prompt } = parseDispatchMentions($("dispatch-input").value);
+  if (!targets.length) {
+    hint.textContent = "未识别到 @harness，可用：@claude @codex @zcode @opencode（支持 @harness/model 指定模型）";
+    hint.className = "dispatch-mention-hint none";
+  } else {
+    const labels = targets.map((t) => "@" + t.tool + (t.model ? "/" + t.model : ""));
+    hint.textContent = `将派发给 ${labels.join(" ")}${prompt ? "" : "（缺少任务描述）"}`;
+    hint.className = "dispatch-mention-hint" + (prompt ? "" : " none");
+  }
+}
+
+function bindDispatchEvents() {
+  $("dispatch-input").addEventListener("input", updateDispatchHint);
+  $("dispatch-input").addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      sendDispatch();
+    }
+  });
+  $("btn-dispatch-send").addEventListener("click", sendDispatch);
+}
+
+async function sendDispatch() {
+  const errBox = $("dispatch-error");
+  errBox.classList.add("hidden");
+  const message = $("dispatch-input").value.trim();
+  const { targets, prompt } = parseDispatchMentions(message);
+  if (!targets.length || !prompt) {
+    errBox.textContent = !targets.length
+      ? "消息中未找到 @harness 提及（可用：@claude @codex @zcode @opencode）"
+      : "@提及之外还需要任务描述";
+    errBox.classList.remove("hidden");
+    return;
+  }
+  const project = $("dispatch-project").value || ".";
+  const mode = $("dispatch-yolo").checked ? "yolo" : "safe";
+  const btn = $("btn-dispatch-send");
+  btn.disabled = true;
+  btn.textContent = "派发中…";
+  try {
+    const data = await invoke("halter_dispatch_run", { message, project, mode });
+    $("dispatch-input").value = "";
+    updateDispatchHint();
+    for (const t of data.tasks || []) {
+      try {
+        addDispatchCard(t);
+        pollDispatchTask(t.task_id);
+      } catch (cardErr) {
+        showError(errBox, "任务卡渲染失败: " + (cardErr && cardErr.message ? cardErr.message : String(cardErr)));
+      }
+    }
+  } catch (err) {
+    showError(errBox, err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⏵ 派发 ⌘↵";
+  }
+}
+
+function dispatchStatusBadge(status) {
+  const map = {
+    running: ["run", "运行中"],
+    done: ["ok", "完成"],
+    failed: ["err", "失败"],
+    cancelled: ["cancel", "已取消"],
+  };
+  const [cls, label] = map[status] || ["", status || "-"];
+  return el("span", `dispatch-status ${cls}`, label);
+}
+
+function addDispatchCard(task) {
+  const list = $("dispatch-tasks");
+  const card = el("div", "dispatch-card");
+  card.dataset.taskId = task.task_id;
+
+  const head = el("div", "dispatch-card-head");
+  const badge = el("span", "dispatch-tool-badge");
+  badge.style.setProperty("--c", toolColor(task.tool));
+  badge.textContent = "@" + task.tool;
+  const title = el("span", "dispatch-prompt", task.prompt);
+  head.append(badge, title, dispatchStatusBadge(task.status));
+  if (task.model) head.append(el("span", "dispatch-model-tag", task.model));
+  if (task.mode === "yolo") head.append(el("span", "dispatch-yolo-tag", "yolo"));
+
+  const meta = el("div", "dispatch-card-meta");
+  meta.append(el("span", "", shortenPath(task.project)));
+  meta.append(el("span", "", task.started_at || ""));
+
+  const out = el("pre", "dispatch-output", "");
+  card.append(head, meta, out);
+  list.prepend(card);
+  state.dispatchCards.set(task.task_id, { node: card, output: out, timer: null });
+}
+
+function pollDispatchTask(taskId) {
+  const entry = state.dispatchCards.get(taskId);
+  if (!entry) return;
+  const tick = async () => {
+    try {
+      const t = await invoke("halter_task_show", { taskId, tail: 8000 });
+      const card = state.dispatchCards.get(taskId);
+      if (!card) return; // 已被移除
+      const badge = card.node.querySelector(".dispatch-status");
+      const next = dispatchStatusBadge(t.status);
+      badge.replaceWith(next);
+      card.output.textContent = t.output_tail || "（等待输出…）";
+      card.output.classList.toggle("streaming", t.status === "running");
+      if (t.status !== "running") {
+        clearInterval(card.timer);
+        card.timer = null;
+        card.node.classList.add("finished");
+      }
+    } catch (err) {
+      const card = state.dispatchCards.get(taskId);
+      if (card) {
+        clearInterval(card.timer);
+        card.timer = null;
+        card.output.textContent = "轮询失败：" + (typeof err === "string" ? err : JSON.stringify(err));
+      }
+    }
+  };
+  entry.timer = setInterval(tick, 1500);
+  tick();
+}
+
 /* ---------------- sync ---------------- */
 
 function selectedLayers() {
@@ -1020,7 +1264,7 @@ async function runSync(apply) {
   $("btn-sync-preview").disabled = true;
   $("btn-sync-apply").disabled = true;
   try {
-    const result = await invoke("hcm_sync", { apply, layers: selectedLayers() });
+    const result = await invoke("halter_sync", { apply, layers: selectedLayers() });
     const parts = [];
     parts.push(`exit code: ${result.code} (${result.ok ? "ok" : "failed"})`);
     if (result.stdout.trim()) parts.push("--- stdout ---\n" + result.stdout.trim());
@@ -1068,11 +1312,11 @@ $("btn-sync-apply").addEventListener("click", () => {
 
 (async function boot() {
   try {
-    const v = await invoke("hcm_version");
-    $("hcm-version").textContent = `hcm ${v.version}`;
+    const v = await invoke("halter_version");
+    $("halter-version").textContent = `halter ${v.version}`;
   } catch (err) {
-    $("hcm-version").textContent = "hcm 不可用";
-    $("hcm-version").title = typeof err === "string" ? err : JSON.stringify(err);
+    $("halter-version").textContent = "halter 不可用";
+    $("halter-version").title = typeof err === "string" ? err : JSON.stringify(err);
   }
   loadOverview();
 })();

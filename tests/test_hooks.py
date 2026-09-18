@@ -20,7 +20,7 @@ def claude_settings(fake_home: Path) -> Path:
         "model": "glm-5.1",
         "hooks": {
             "PreToolUse": [
-                {"matcher": "Bash", "hcm": "gh-proxy-guard", "hooks": [
+                {"matcher": "Bash", "halter": "gh-proxy-guard", "hooks": [
                     {"type": "command", "command": '"$HOME/.local/bin/gh-proxy-guard"',
                      "timeout": 40}]},
                 {"_otty": True, "hooks": [
@@ -237,13 +237,13 @@ def test_sync_apply_three_dialects(all_three: None, fake_home: Path) -> None:
 
     cl = json.loads((fake_home / ".claude/settings.json").read_text())
     entries = cl["hooks"]["PreToolUse"]
-    mine = [e for e in entries if e.get("hcm") == "my-hook"][0]
+    mine = [e for e in entries if e.get("halter") == "my-hook"][0]
     assert mine["matcher"] == "Bash" and mine["hooks"][0]["timeout"] == 40
     assert cl["hooks"]["Stop"]
 
     zc = json.loads((fake_home / ".zcode/cli/config.json").read_text())
     ze = zc["hooks"]["events"]["PreToolUse"]
-    zm = [e for e in ze if e.get("hcm") == "my-hook"][0]["hooks"][0]
+    zm = [e for e in ze if e.get("halter") == "my-hook"][0]["hooks"][0]
     assert zm["timeoutMs"] == 40000
     assert zm.get("statusMessage") is None            # 无 description 不写该键
     assert zc["hooks"]["enabled"] is True                 # 全局开关未被触碰
@@ -251,7 +251,7 @@ def test_sync_apply_three_dialects(all_three: None, fake_home: Path) -> None:
 
     cu = json.loads((fake_home / ".cursor/hooks.json").read_text())
     assert cu["version"] == 1
-    cm = [e for e in cu["hooks"]["preToolUse"] if e.get("hcm") == "my-hook"][0]
+    cm = [e for e in cu["hooks"]["preToolUse"] if e.get("halter") == "my-hook"][0]
     assert cm["timeout"] == 40 and cm["matcher"] == "Bash"
     assert cu["hooks"]["stop"]                            # Stop->stop 大小写映射
 

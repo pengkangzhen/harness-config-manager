@@ -1,6 +1,6 @@
-"""MCP canonical 清单：~/.config/hcm/mcp.toml（期望状态的事实源）。
+"""MCP canonical 清单：~/.config/halter/mcp.toml（期望状态的事实源）。
 
-密钥策略：manifest 中一律 ${VAR} 占位；真实值存 ~/.config/hcm/secrets.toml（0600），
+密钥策略：manifest 中一律 ${VAR} 占位；真实值存 ~/.config/halter/secrets.toml（0600），
 展开顺序 os.environ > secrets.toml。终端与报告永不打印真实值。
 """
 
@@ -16,8 +16,8 @@ import tomlkit
 from .model import SENSITIVE_KEYS, redact
 from .registry import expand
 
-MCP_MANIFEST = lambda: expand(".config/hcm/mcp.toml")  # noqa: E731
-SECRETS_FILE = lambda: expand(".config/hcm/secrets.toml")  # noqa: E731
+MCP_MANIFEST = lambda: expand(".config/halter/mcp.toml")  # noqa: E731
+SECRETS_FILE = lambda: expand(".config/halter/secrets.toml")  # noqa: E731
 
 HTTP_CAPABLE = {"claude", "zcode"}  # 仅这两家支持 http/sse 类型
 

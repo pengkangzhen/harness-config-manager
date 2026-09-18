@@ -9,22 +9,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import HcmConfig
+from .config import HalterConfig
 from .model import SkillInfo, ToolReport
 from .registry import BY_KEY, expand
 
 # ---------------------------------------------------------------------------
-# 事实源解析（三层回退：显式配置 > ~/.agents/skills > hcm 自管库）
+# 事实源解析（三层回退：显式配置 > ~/.agents/skills > halter 自管库）
 
 
-def resolve_library(cfg: HcmConfig, create: bool = False) -> Path:
+def resolve_library(cfg: HalterConfig, create: bool = False) -> Path:
     if cfg.library:
         lib = Path(cfg.library).expanduser()
     else:
         candidate = expand(".agents/skills")
         if candidate.is_dir():
             return candidate
-        lib = expand(".config/hcm/library/skills")
+        lib = expand(".config/halter/library/skills")
     if create:
         lib.mkdir(parents=True, exist_ok=True)
     return lib
@@ -152,7 +152,7 @@ def dirs_equal(a: Path, b: Path) -> bool:
 
 def backup_dir() -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    d = expand(f".config/hcm/backups/{stamp}/skills")
+    d = expand(f".config/halter/backups/{stamp}/skills")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -176,7 +176,7 @@ def plan_sync(library: Path, reports: list[ToolReport], exclude: list[str]) -> l
         for s in r.skills:
             if s.name not in lib_skills and not s.linked and s.name not in exclude:
                 actions.append(SyncAction("adopt-hint", r.tool, s.name, s.path,
-                                          "仅此工具有，建议先 hcm adopt（sync 自动收集）"))
+                                          "仅此工具有，建议先 halter adopt（sync 自动收集）"))
         # 库 → 工具
         tool_entries = {s.name: s for s in r.skills}
         for skill_dir in sorted(seen):

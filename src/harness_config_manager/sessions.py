@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from .config import HcmConfig
+from .config import HalterConfig
 from .registry import BY_KEY, expand
 from .skills import resolve_library
 
@@ -630,7 +630,7 @@ def build_context(ref: str, project: Path | None = None, tail: int = 40) -> str:
     info = find_session(ref, project)
     messages = read_session(ref, project, include_tools=False)
     lines = [
-        "# HCM session handoff",
+        "# Halter session handoff",
         "",
         f"- Source: `{info.ref}`",
         f"- Tool: `{info.tool}`",
@@ -649,26 +649,26 @@ def build_context(ref: str, project: Path | None = None, tail: int = 40) -> str:
     return "\n".join(lines)
 
 
-def install_session_skill(cfg: HcmConfig, installed: list[str], apply: bool = False) -> list[str]:
+def install_session_skill(cfg: HalterConfig, installed: list[str], apply: bool = False) -> list[str]:
     """Install the built-in cross-assistant session lookup skill through the skills library."""
     library = resolve_library(cfg, create=apply)
-    skill_dir = library / "hcm-sessions"
+    skill_dir = library / "halter-sessions"
     skill_file = skill_dir / "SKILL.md"
     lines: list[str] = []
     exists = skill_file.is_file()
     current = skill_file.read_text(encoding="utf-8") if exists else ""
     same = current == SESSION_SKILL
-    managed = "<!-- hcm-managed: hcm-sessions -->" in current
+    managed = "<!-- halter-managed: halter-sessions -->" in current
     if exists and not same and not managed:
-        return [f"conflict hcm-sessions library copy differs -> {skill_file}"]
+        return [f"conflict halter-sessions library copy differs -> {skill_file}"]
     if not same:
         action = "install" if not exists else "update"
-        lines.append(f"{action} hcm-sessions -> {skill_file}")
+        lines.append(f"{action} halter-sessions -> {skill_file}")
         if apply:
             skill_dir.mkdir(parents=True, exist_ok=True)
             skill_file.write_text(SESSION_SKILL, encoding="utf-8")
     else:
-        lines.append(f"ok hcm-sessions library -> {skill_file}")
+        lines.append(f"ok halter-sessions library -> {skill_file}")
 
     seen: set[Path] = set()
     for key in installed:
@@ -681,48 +681,48 @@ def install_session_skill(cfg: HcmConfig, installed: list[str], apply: bool = Fa
             if canonical in seen:
                 continue
             seen.add(canonical)
-            target = target_root / "hcm-sessions"
+            target = target_root / "halter-sessions"
             if canonical == library.resolve(strict=False):
                 continue
             if not target.exists():
-                lines.append(f"link hcm-sessions -> {key}:{target}")
+                lines.append(f"link halter-sessions -> {key}:{target}")
                 if apply:
                     target_root.mkdir(parents=True, exist_ok=True)
                     target.symlink_to(skill_dir)
             elif target.is_symlink() and target.resolve() == skill_dir.resolve():
-                lines.append(f"ok hcm-sessions -> {key}:{target}")
+                lines.append(f"ok halter-sessions -> {key}:{target}")
             else:
-                lines.append(f"conflict hcm-sessions exists -> {key}:{target}")
+                lines.append(f"conflict halter-sessions exists -> {key}:{target}")
     return lines
 
 
 SESSION_SKILL = """---
-name: hcm-sessions
+name: halter-sessions
 description: List and selectively reuse project-scoped history from local AI coding assistants. Use when the user mentions prior sessions, switching coding assistants, continuing previous work, or asks what happened in Claude Code, ZCode, Codex, OpenCode, or another assistant.
 ---
 
-<!-- hcm-managed: hcm-sessions -->
+<!-- halter-managed: halter-sessions -->
 
-# HCM Sessions
+# Halter Sessions
 
 You can query project-local session history without leaving the current AI coding assistant.
 
 1. List sessions for the current project:
 
 ```bash
-hcm sessions list --project . --json
+halter sessions list --project . --json
 ```
 
 2. Choose a relevant `ref` from the output, then inspect only that session:
 
 ```bash
-hcm sessions show <tool>:<session-id> --transcript --tail 80
+halter sessions show <tool>:<session-id> --transcript --tail 80
 ```
 
 3. For a compact handoff while switching assistants, generate deterministic context:
 
 ```bash
-hcm sessions context <tool>:<session-id>
+halter sessions context <tool>:<session-id>
 ```
 
 Rules:

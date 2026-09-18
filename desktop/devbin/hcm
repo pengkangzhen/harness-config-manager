@@ -1,5 +1,0 @@
-#!/bin/sh
-# Dev sidecar: run hcm from this repo's venv so `tauri dev` uses local code,
-# regardless of which hcm version is installed globally.
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-exec "$REPO/.venv/bin/hcm" "$@"

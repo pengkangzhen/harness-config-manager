@@ -1,5 +1,5 @@
 [package]
-name = "hcm-desktop"
+name = "halter-desktop"
 version = "0.1.0"
 description = "Harness Config Manager desktop app"
 authors = ["pengkangzhen"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from harness_config_manager.config import HcmConfig
+from harness_config_manager.config import HalterConfig
 from harness_config_manager.model import SkillInfo, ToolReport
 from harness_config_manager.skills import (
     plan_adopt,
@@ -24,7 +24,7 @@ from conftest import make_skill
 def test_library_fallback_to_agents_dir(fake_home: Path) -> None:
     lib = fake_home / ".agents/skills"
     make_skill(lib, "alpha")
-    assert resolve_library(HcmConfig()) == lib
+    assert resolve_library(HalterConfig()) == lib
 
 
 def test_library_explicit_config_wins(fake_home: Path) -> None:
@@ -32,11 +32,11 @@ def test_library_explicit_config_wins(fake_home: Path) -> None:
     make_skill(lib, "alpha")
     custom = fake_home / "mylib"
     custom.mkdir()
-    assert resolve_library(HcmConfig(library=str(custom))) == custom
+    assert resolve_library(HalterConfig(library=str(custom))) == custom
 
 
 def test_library_self_managed(fake_home: Path) -> None:
-    assert resolve_library(HcmConfig()) == fake_home / ".config/hcm/library/skills"
+    assert resolve_library(HalterConfig()) == fake_home / ".config/halter/library/skills"
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ def test_sync_replace_identical(fake_home: Path) -> None:
     assert target.is_symlink()
     assert Path(os.readlink(target)) == lib / "alpha" or target.resolve() == (lib / "alpha").resolve()
     # 备份存在
-    backups = list((fake_home / ".config/hcm/backups").rglob("alpha"))
+    backups = list((fake_home / ".config/halter/backups").rglob("alpha"))
     assert backups, "replace 前应产生备份"
 
 
