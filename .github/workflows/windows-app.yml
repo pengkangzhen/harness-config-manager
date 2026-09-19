@@ -66,6 +66,31 @@ jobs:
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             windows-portable/*
 
+      - name: Report failure logs (windows-build-failed branch)
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DIST="$(mktemp -d)"
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "commit=$GITHUB_SHA"
+            date
+          } > "$DIST/info.txt"
+          gh run view "$GITHUB_RUN_ID" --log-failed > "$DIST/failed.log" 2>&1 || true
+          (
+            cd "$DIST"
+            git init -q -b windows-build-failed
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -q -m "windows build FAILED ${GITHUB_SHA}"
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push -q --force origin windows-build-failed
+          )
+
       # WSL 侧 api.github.com 被墙而 SSH 通：把产物发布到 windows-build 分支，
       # 本机用 git fetch --depth=1 origin windows-build 拉取。
       - name: Publish dist branch (windows-build)
