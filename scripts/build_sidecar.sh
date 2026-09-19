@@ -20,8 +20,16 @@ if [ -z "$TRIPLE" ]; then
     echo "build_sidecar: unable to determine target triple" >&2
     exit 1
 fi
-FINAL="$OUT/halter-$TRIPLE"
+BIN_NAME="halter"
+case "$TRIPLE" in
+    *windows-msvc|*windows-gnu) FINAL="$OUT/halter-$TRIPLE.exe"; BIN_NAME="halter.exe" ;;
+    *) FINAL="$OUT/halter-$TRIPLE" ;;
+esac
 HASH="$FINAL.sha256"
+
+# Git Bash 没有 shasum（perl 脚本）时用 coreutils 的 sha256sum。
+SHA256_CMD="shasum -a 256"
+command -v sha256sum >/dev/null 2>&1 && SHA256_CMD="sha256sum"
 
 # Hash all build inputs instead of relying on mtimes. Include the lock files and
 # this script so dependency/tooling changes always invalidate the old artifact.
@@ -29,8 +37,8 @@ new_hash="$(
     find src pyproject.toml uv.lock desktop/pyinstaller_entry.py scripts/build_sidecar.sh \
         -type f -print0 2>/dev/null |
     LC_ALL=C sort -z |
-    xargs -0 shasum -a 256 |
-    shasum -a 256 |
+    xargs -0 $SHA256_CMD |
+    $SHA256_CMD |
     sed 's/ .*$//'
 )"
 if [ -f "$FINAL" ] && [ -f "$HASH" ] && [ -z "${FORCE_SIDECAR:-}" ]; then
@@ -62,7 +70,7 @@ uv run pyinstaller \
 
 # Move through a private temporary name, then record the hash only after the
 # final artifact is in place.
-cp "$WORK/dist/halter" "$FINAL.new.$$"
+cp "$WORK/dist/$BIN_NAME" "$FINAL.new.$$"
 chmod 755 "$FINAL.new.$$"
 mv "$FINAL.new.$$" "$FINAL"
 printf '%s\n' "$new_hash" > "$HASH"

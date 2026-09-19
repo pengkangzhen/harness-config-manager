@@ -28,7 +28,9 @@ fn resolve_halter() -> String {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for name in ["halter", "halter-bin"] {
+            // Windows bundles carry the sidecar as halter.exe / halter-bin.exe;
+            // extra .exe candidates are harmless on other platforms.
+            for name in ["halter", "halter-bin", "halter.exe", "halter-bin.exe"] {
                 let candidate: PathBuf = dir.join(name);
                 if candidate.is_file() {
                     return candidate.to_string_lossy().into_owned();
