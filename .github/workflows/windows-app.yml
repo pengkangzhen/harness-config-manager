@@ -1,9 +1,10 @@
 name: windows-app
 
 on:
-  workflow_dispatch:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
