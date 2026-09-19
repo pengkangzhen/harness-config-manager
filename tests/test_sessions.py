@@ -170,12 +170,12 @@ def test_install_builtin_skill_to_detected_tools(fake_home: Path) -> None:
     codex.mkdir(parents=True)
 
     plan = install_session_skill(HalterConfig(), ["claude", "codex"], apply=False)
-    assert not (fake_home / ".config/halter/library/skills/halter-sessions/SKILL.md").exists()
+    assert not (fake_home / ".agents/skills/halter-sessions/SKILL.md").exists()
     assert any(x.startswith("install halter-sessions") for x in plan)
 
     applied = install_session_skill(HalterConfig(), ["claude", "codex"], apply=True)
     assert any(x.startswith("install halter-sessions") for x in applied)
-    lib = fake_home / ".config/halter/library/skills/halter-sessions/SKILL.md"
+    lib = fake_home / ".agents/skills/halter-sessions/SKILL.md"
     assert lib.is_file()
     assert (claude / "halter-sessions").is_symlink()
     assert (codex / "halter-sessions").is_symlink()

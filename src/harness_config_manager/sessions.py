@@ -454,6 +454,16 @@ def find_session(ref: str, project: Path | None = None) -> SessionInfo:
         if item.session_id == wanted or (item.source_id and item.source_id == wanted):
             if wanted_tool is None or item.tool == wanted_tool:
                 return item
+    # 唯一前缀匹配：表格中展示短 ref（tool:id前8位），show/context 可直接复用
+    matched = [
+        item for item in scan_sessions(project)
+        if (item.session_id.startswith(wanted) or (item.source_id or "").startswith(wanted))
+        and (wanted_tool is None or item.tool == wanted_tool)
+    ]
+    if len(matched) == 1:
+        return matched[0]
+    if len(matched) > 1:
+        raise RuntimeError(f"session ref 前缀不唯一（{len(matched)} 个匹配）: {ref}")
     raise KeyError(f"session not found in current project: {ref}")
 
 

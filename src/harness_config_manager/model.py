@@ -78,6 +78,7 @@ class SkillInfo:
     path: Path
     linked: bool = False          # 是否为 symlink（已同步的标志）
     builtin: bool = False         # 工具内置技能，同步时跳过
+    description: str | None = None  # SKILL.md frontmatter 的 description（展示用）
 
 
 @dataclass

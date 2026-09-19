@@ -30,6 +30,9 @@ uv tool install .          # 从本仓库安装，得到 halter 命令
 halter scan                   # 看一眼：装了哪些工具、各配置了什么 skills/MCP/插件/hooks/subagents、有无健康问题
 halter scan -d skills -d mcp  # 查看某层明细；--json 输出机器可读格式
 
+halter assess                 # 评估五层配置对当前项目的有用度（语言/框架/领域信号匹配）
+halter assess -p ../my-paper  # 评估指定项目；-l skills -l mcp 只看部分层；--json 机器可读
+
 halter sync                   # 同步一下：清单/库 -> 所有工具（默认 dry-run）
 halter sync --apply           # 实际执行（冲突默认跳过保护）
 halter sync --no-skills --no-plugins --no-mcp   # 只保留 hooks + sessions（各层默认全开，按需关闭）
@@ -74,54 +77,13 @@ halter tasks show <task-id>          # 查看输出末尾（已脱敏）
 claude = "sonnet"
 codex = "o3"
 opencode = "zhipu/glm-4.7"
-halter = "openai/gpt-5"       # native AHP provider
 ```
 
 `halter models` 查看当前配置。模型映射：claude `--model`、codex `-m`、opencode `-m`；ZCode 无公开无头模型开关，v1 仅记录不注入（用其自身默认模型）。
 
 安全语义：默认 `--mode safe`（各助手权限受控，能改动的范围由各自沙箱决定）；`--mode yolo` 才映射到各家的“跳过确认”开关。提示词作为独立 argv 元素传递，不经过 shell。任务记录写入 `~/.config/halter/tasks/`（0700/0600 私有权限），输出查看时自动脱敏。前台模式 Ctrl-C 或 `--timeout` 会终止整个进程组。
 
-桌面「模型」视图可配置非敏感的 OpenAI-compatible 路由（base URL 与 API key 环境变量名），不会保存真实密钥。
-
-桌面 App 提供原生 Agent「审计」视图，可检查模型/工具决策、审批、回滚与上下文压缩。
-
-桌面 App 的「调度」视图提供同一能力的图形界面：@提及、可用性徽标、项目选择、任务卡片实时轮询输出。
-
-## AHP：自建 Agent Host（协议级挂载全部 Harness）
-
-`halter ahp serve` 启动一个符合 [Agent Host Protocol 0.9.0](https://microsoft.github.io/agent-host-protocol/) 的自建服务器（WebSocket + JSON-RPC），把 claude / codex / zcode / opencode 全部挂载为标准 AHP agent backend：
-
-```bash
-halter ahp serve --port 7433
-```
-
-AHP host 只绑定本机地址，并会把随机 bearer token 写入 `~/.config/halter/ahp-token`（权限 `0600`）。所有 WebSocket、JSON-RPC 与 SSE 请求都必须通过 `Authorization: Bearer <token>`（或 `?token=`）认证；浏览器请求还必须命中显式 allow-list。桌面端会读取同一个 token 文件，并用一次已认证 ping 验证 host。可用 `HALTER_AHP_ALLOWED_ORIGINS=vscode-webview://...,https://your-app.example` 配置浏览器来源；不要使用 `*`。
-
-任何 AHP 客户端（VS Code Agents 窗口、AHPX、官方 Rust/TS/Go/Swift/Kotlin client 库）连接后即可：
-
-```
-initialize（版本协商 + agents 目录快照）
-  -> createSession(provider="claude")      # 或 codex / zcode / opencode
-  -> createChat
-  -> dispatchAction(chat/turnStarted)      # message.model.id 自动映射 --model/-m
-  <- chat/responsePart + chat/delta...     # harness 输出逐行流式广播
-  <- chat/turnComplete
-```
-
-实现要点：channel URI 路由（`ahp-root://` / `ahp-session:/<uuid>` / `ahp-chat:/<uuid>`）、服务端单调 `serverSeq` 广播、客户端 action `origin` 回显、`root/sessionAdded` 目录通知、模型路由（`[models]` 配置 + `message.model` 覆盖）。任务执行复用 runner 层的进程组管理与无头 argv 组装。
-
-第五个 backend 是 `provider="halter"`：Halter 自己拥有 model/tool 决策循环，并持久化脱敏后的 session 与模型/工具历史。当前提供可持久展示的结构化计划工具（`update_plan`）以及被限制在 workspace 内的只读/项目记忆工具（`read_file`、`list_dir`、`search_files`、`git_status`、`git_diff`、`list_project_sessions`、`read_project_session`）、需要逐 diff 审批且可按事务回滚的 `apply_patch`、固定命令且需审批的 `run_tests`，以及把 Claude/Codex/ZCode/OpenCode 并发委派到一次性 git clone（含 tracked+untracked 快照）并 side-by-side 对比 diff的 `delegate_harness`，支持 OpenAI / Zhipu 兼容模型流式路由，广播结构化 `halter/toolCall` / `halter/toolResult` 事件，并把每个模型响应与工具调用写入私有 JSONL 审计日志；外部 runner 的调用与输出同样留档。详见 [docs/native-agent.md](docs/native-agent.md)；交接与后续路线见 [docs/native-agent-handoff.md](docs/native-agent-handoff.md)。
-
-```bash
-uv run pytest tests/test_agent_runtime.py tests/test_ahp_host.py   # 原生 runtime + 协议级端到端
-```
-
-**桌面 App 直连**：调度视图经 Tauri Rust 桥（`halter_ahp_connect/rpc/notify` IPC + `ahp-message` 事件流）连接 AHP host 的 HTTP+SSE 传输，任务卡由 `chat/delta`/`chat/turnComplete` action 流驱动（WebView 禁止明文 ws/http，网络由 Rust 侧代理）。GUI 环境部署用 PyInstaller onefile（绕过 venv python 在 launchd/GUI 会话的 getpath 启动问题，并自动补 homebrew PATH）：
-
-```bash
-uv run pyinstaller --onefile --name halter \
-  --hidden-import websockets --hidden-import aiohttp desktop/pyinstaller_entry.py
-```
+桌面 App 的「调度」视图提供同一能力的图形界面：@提及、项目选择、任务卡片实时轮询输出。
 
 ## Session 连续性
 
@@ -150,8 +112,8 @@ halter sessions search "authentication migration" --project .
 
 | 层 | 事实源 | 分发方式 |
 |---|---|---|
-| skills | skills 库目录（三层回退：配置指定 > `~/.agents/skills`（cc-switch 用户兼容）> `~/.config/halter/library/skills`） | 条目级 symlink；同名冲突默认跳过，`--prefer library` 备份后覆盖 |
-| subagents | subagents 库目录（三层回退：配置 `agents_library` > `~/.agents/agents` > `~/.config/halter/library/agents`） | 条目级 symlink（每代理一个 `.md` 文件）；冲突语义与 skills 相同；frontmatter 字段（如 `model: opus`）原样分发，Claude 系别名在其它工具可能无效 |
+| skills | skills 库目录（默认 `~/.agents/skills`；可用配置 `library` 覆盖；旧自管库 `~/.config/halter/library/skills` 首次解析时自动迁移） | 条目级 symlink；同名冲突默认跳过，`--prefer library` 备份后覆盖 |
+| subagents | subagents 库目录（默认 `~/.agents/agents`；可用配置 `agents_library` 覆盖；旧路径自动迁移） | 条目级 symlink（每代理一个 `.md` 文件）；冲突语义与 skills 相同；frontmatter 字段（如 `model: opus`）原样分发，Claude 系别名在其它工具可能无效 |
 | MCP | `~/.config/halter/mcp.toml`（canonical：stdio/http、env、headers） | 六方言转换写入：claude（`.claude.json` 读改写）、zcode、codex（TOML 保注释）、cursor、vscode（`servers` 键）、gemini、opencode（command 数组）；http 类型只分发支持的工具 |
 | 插件 | `~/.config/halter/plugins.toml`（family: claude / codex / vscode） | claude 用 `claude plugin install -y`；zcode 镜像 claude 缓存 + 登记同源清单；codex 写 TOML 开关；vscode 用 `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml`（每条注册：id、事件列表、matcher、命令、超时秒） | 三方言转换写入：claude（`settings.json` 顶层 `hooks`）、zcode（`cli/config.json` 的 `hooks.events`，超时自动换算毫秒）、cursor（`hooks.json` 扁平结构）；写入条目带 `"halter": "<id>"` 归属标记，**只增删改自家电位，第三方注入的无标记条目一律不碰**；仅 cursor 支持的事件（如 `beforeShellExecution`）或 claude 独有事件（如 `PermissionRequest`）分发到无此事件的工具时跳过并提示 |
@@ -168,11 +130,11 @@ halter sessions search "authentication migration" --project .
 `~/.config/halter/config.toml`（可选）：
 
 ```toml
-library = "~/.agents/skills"     # skills 事实源；缺省走三层回退
+library = "~/.agents/skills"     # skills 事实源；缺省即此路径
 exclude_skills = []              # 不分发的 skill 名单
 exclude_mcp = []
 exclude_hooks = []               # 不分发的 hook id 名单（id 见 hooks.toml / scan -d hooks）
-agents_library = ""              # subagents 事实源；缺省走三层回退
+agents_library = ""              # subagents 事实源；缺省为 ~/.agents/agents
 exclude_agents = []              # 不分发的 subagent 名单
 ```
 

@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - name: Full pytest suite (runtime, AHP host, audit, release contracts)
+      - name: Full pytest suite (runtime, desktop API, release contracts)
         run: uv run --no-sync pytest -q
 
   desktop-rust:
@@ -31,7 +31,7 @@ jobs:
       - name: cargo check
         working-directory: desktop/src-tauri
         run: cargo check --all-targets
-      - name: cargo test (includes AHP auth negative tests in the bridge)
+      - name: cargo test (sidecar bridge)
         working-directory: desktop/src-tauri
         run: cargo test
 

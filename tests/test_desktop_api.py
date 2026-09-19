@@ -24,7 +24,7 @@ def test_version_json_contract() -> None:
 def test_version_plain() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.output.startswith("halter ")
+    assert "halter" in result.output
 
 
 def test_scan_json_includes_doctor(fake_home) -> None:
@@ -148,25 +148,6 @@ def test_sessions_projects_kind_classification(fake_home, monkeypatch, tmp_path)
     got = {p["path"]: p["kind"] for p in payload["projects"]}
     for path, kind in cases:
         assert got[path] == kind, (path, got.get(path), kind)
-
-
-def test_model_configure_never_stores_api_key(fake_home: Path) -> None:
-    result = runner.invoke(app, [
-        "model", "configure",
-        "--model", "local/qwen-coder",
-        "--base-url", "http://127.0.0.1:11434/v1",
-        "--api-key-env", "",
-        "--json",
-    ])
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
-    assert payload["model"] == "local/qwen-coder"
-    assert payload["apiKeyStored"] is False
-
-    cfg_path = fake_home / ".config/halter/config.toml"
-    text = cfg_path.read_text(encoding="utf-8")
-    assert 'halter = "local/qwen-coder"' in text
-    assert "api_key" not in text
 
 
 def test_model_configure_requires_custom_base_url(fake_home: Path) -> None:

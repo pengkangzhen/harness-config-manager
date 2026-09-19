@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json as _json
+from datetime import datetime
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 
 from .detect import detect_tools
@@ -17,21 +20,35 @@ app = typer.Typer(
 )
 console = Console()
 
+
+def _short_time(value: datetime | None) -> str:
+    """表格用的紧凑本地时间：当年显示 MM-DD HH:MM，往年显示日期。"""
+    if value is None:
+        return "-"
+    local = value.astimezone()
+    return local.strftime("%m-%d %H:%M") if local.year == datetime.now().year else local.strftime("%Y-%m-%d")
+
+
+def _short_ref(ref: str, keep: int = 8) -> str:
+    """tool:session-id -> tool:id前8位，find_session 支持唯一前缀匹配。"""
+    tool, sep, session_id = ref.partition(":")
+    return f"{tool}:{session_id[:keep]}…" if sep and len(session_id) > keep else ref
+
+
+def _fmt_task_status(status: str) -> str:
+    style, icon = {
+        "done": ("green", "✓"),
+        "failed": ("red", "✕"),
+        "cancelled": ("red", "⊘"),
+        "running": ("yellow", "▶"),
+    }.get(status, ("white", "•"))
+    return f"[{style}]{icon} {status}[/{style}]"
+
 sessions_app = typer.Typer(help="查看并按需复用当前项目在多个 AI 编码工具中的历史会话。")
 app.add_typer(sessions_app, name="sessions")
 
 tasks_app = typer.Typer(help="查看/跟踪通过 halter run 派发的多 Harness 任务。")
 app.add_typer(tasks_app, name="tasks")
-
-ahp_app = typer.Typer(help="AHP（Agent Host Protocol）服务器：把 claude/codex/zcode 挂载为标准 agent backend。")
-app.add_typer(ahp_app, name="ahp")
-
-audit_app = typer.Typer(help="查看原生 Agent 的私有审计轨迹。")
-app.add_typer(audit_app, name="audit")
-
-model_app = typer.Typer(help="配置原生 Agent 的 OpenAI-compatible 模型路由。")
-app.add_typer(model_app, name="model")
-
 
 @app.callback()
 def _root() -> None:
@@ -65,20 +82,23 @@ def sessions_list(
             "sessions": [session_to_dict(x) for x in items],
         }, ensure_ascii=False))
         return
-    table = Table(title=f"Sessions — {project}")
+    if not items:
+        scope = "所有项目" if all_projects else str(project)
+        console.print(f"[dim]{scope} 暂无历史会话 — 与任一 AI 编码助手对话后即可出现在这里。[/dim]")
+        return
+    table = Table(title=f"Sessions — {'所有项目' if all_projects else project}")
     table.add_column("Ref", style="cyan", no_wrap=True)
-    table.add_column("Updated")
-    table.add_column("Messages", justify="right")
-    table.add_column("Branch", style="dim")
-    table.add_column("Title", style="dim")
-    from .sessions import _iso
+    table.add_column("Updated", no_wrap=True)
+    table.add_column("Msgs", justify="right")
+    table.add_column("Branch", style="dim", no_wrap=True)
+    table.add_column("Title", style="dim", ratio=1, overflow="ellipsis")
     for item in items:
         table.add_row(
-            item.ref,
-            _iso(item.updated_at) or "-",
+            _short_ref(item.ref),
+            _short_time(item.updated_at or item.started_at),
             str(item.message_count),
             item.branch or "-",
-            (item.title or "-")[:100],
+            item.title or "-",
         )
     console.print(table)
     console.print("[dim]按需查看：halter sessions show <ref> --transcript；交接：halter sessions context <ref>[/dim]")
@@ -109,7 +129,18 @@ def show(
             payload["transcript"] = format_transcript(messages, tail)
         console.print_json(_json.dumps(payload, ensure_ascii=False))
         return
-    console.print_json(_json.dumps(session_to_dict(info), ensure_ascii=False))
+    data = session_to_dict(info)
+    meta = Table.grid(padding=(0, 2))
+    meta.add_column(style="cyan", justify="right", no_wrap=True)
+    meta.add_column(overflow="fold")
+    for key, label in (
+        ("ref", "Ref"), ("tool", "Tool"), ("title", "Title"), ("project", "Project"),
+        ("branch", "Branch"), ("model", "Model"), ("started_at", "Started"),
+        ("updated_at", "Updated"), ("message_count", "Messages"),
+    ):
+        value = data.get(key)
+        meta.add_row(label, "-" if value in (None, "") else str(value))
+    console.print(Panel(meta, title=f"Session — {info.ref}", border_style="cyan"))
     if transcript:
         console.print(format_transcript(messages, tail))
 
@@ -151,11 +182,15 @@ def search(
             ]
         }, ensure_ascii=False))
         return
+    if not hits:
+        console.print(f"[dim]没有匹配 “{query}” 的会话。[/dim]")
+        return
     table = Table(title=f"Session search — {query}")
     table.add_column("Ref", style="cyan", no_wrap=True)
-    table.add_column("Snippet", style="dim")
+    table.add_column("Updated", no_wrap=True)
+    table.add_column("Snippet", style="dim", ratio=1, overflow="fold")
     for info, snippet in hits:
-        table.add_row(info.ref, snippet.replace("\n", " "))
+        table.add_row(_short_ref(info.ref), _short_time(info.updated_at or info.started_at), snippet.replace("\n", " "))
     console.print(table)
 
 
@@ -261,14 +296,18 @@ def tasks_list(
     if json_out:
         console.print_json(_json.dumps({"count": len(items), "tasks": [t.to_dict() for t in items]}, ensure_ascii=False))
         return
+    if not items:
+        console.print('[dim]暂无任务。派发：[/dim][cyan]halter run "任务描述，交给 @claude / @codex"[/cyan]')
+        return
     table = Table(title="Tasks")
     table.add_column("Task ID", style="cyan", no_wrap=True)
     table.add_column("Tool")
     table.add_column("Status")
-    table.add_column("Started")
-    table.add_column("Prompt", overflow="fold")
+    table.add_column("Started", no_wrap=True)
+    table.add_column("Prompt", ratio=1, overflow="fold")
     for t in items:
-        table.add_row(t.task_id, f"@{t.tool}", t.status, t.started_at, t.prompt[:60])
+        started = t.started_at[:16].replace("T", " ")
+        table.add_row(t.task_id, f"@{t.tool}", _fmt_task_status(t.status), started, t.prompt[:60])
     console.print(table)
 
 
@@ -289,7 +328,7 @@ def show(
     if json_out:
         console.print_json(_json.dumps(info.to_dict(include_tail=tail), ensure_ascii=False))
         return
-    console.print(f"[cyan]任务[/cyan] {info.task_id}  @{info.tool}  [{info.status}]")
+    console.print(f"[cyan]任务[/cyan] {info.task_id}  @{info.tool}  {_fmt_task_status(info.status)}")
     console.print(f"[dim]项目 {info.project}  开始于 {info.started_at}[/dim]")
     console.print(f"[dim]命令 {' '.join(info.argv)}[/dim]")
     out = read_output_tail_safe(info.task_id, tail)
@@ -311,34 +350,32 @@ def read_output_tail_safe(task_id: str, tail: int) -> str:
 def models(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
 ) -> None:
-    """查看 [models] 配置（config.toml 中每个 harness 的默认模型）。"""
+    """查看各 harness 的默认模型配置（config.toml 的 models 段）。"""
     from .config import load_config
     from .runner import RUNNERS
 
     cfg = load_config()
-    configured = {k: v for k, v in cfg.models.items() if k in RUNNERS or k == "halter"}
+    configured = {k: v for k, v in cfg.models.items() if k in RUNNERS}
     catalog = model_catalog(cfg)
     if json_out:
-        from .model_health import check_model_health
-
         console.print_json(_json.dumps({
             "models": configured,
-            "health": check_model_health(cfg),
             "catalog": catalog,
-            "providers": cfg.model_providers,
-            "runners": {
-                **{k: {"display": r.display} for k, r in RUNNERS.items()},
-                "halter": {
-                    "display": "halter Native",
-                    "native": True,
-                    "permissions": ["read-only"],
-                },
-            },
+            "runners": {k: {"display": r.display} for k, r in RUNNERS.items()},
         }, ensure_ascii=False))
         return
     if not configured:
-        console.print("[dim]未配置默认模型（@harness/model 内联指定仍可用）。\n"
-                      "在 ~/.config/halter/config.toml 中添加：\n[models]\nclaude = \"sonnet\"\ncodex = \"o3\"[/dim]")
+        hint = Syntax(
+            '[models]\nclaude = "sonnet"\ncodex = "o3"',
+            "toml", theme="ansi_dark", word_wrap=False,
+        )
+        console.print(Panel(
+            hint,
+            title="配置默认模型",
+            subtitle="~/.config/halter/config.toml",
+            border_style="cyan",
+        ))
+        console.print("[dim]未配置默认模型；@harness/model 内联指定仍可用。[/dim]")
         return
     table = Table(title="Default models")
     table.add_column("Harness", style="cyan")
@@ -349,92 +386,6 @@ def models(
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# model：原生 Agent 模型路由配置
-
-
-@model_app.command()
-def configure(
-    model: str = typer.Option(..., "--model", "-m", help="原生默认模型，如 local/qwen-coder 或 zhipu/glm-4.7"),
-    base_url: str = typer.Option(None, "--base-url", help="OpenAI-compatible base URL；内置 openai/zhipu 可省略"),
-    api_key_env: str = typer.Option(None, "--api-key-env", help="读取 API key 的环境变量名；本地 endpoint 可留空"),
-    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
-) -> None:
-    """配置 provider 路由元数据；不会写入真实 API key。"""
-    import re as _re
-    from .config import load_config, save_config
-
-    model = model.strip()
-    if not model or any(ch.isspace() for ch in model):
-        console.print("[red]模型名不能为空，也不能包含空白[/red]")
-        raise typer.Exit(code=2)
-    provider, separator, _ = model.partition("/")
-    provider = provider if separator else ""
-    if provider and not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", provider):
-        console.print(f"[red]无效 provider 前缀：{provider}[/red]")
-        raise typer.Exit(code=2)
-
-    cfg = load_config()
-    existing = cfg.model_providers.get(provider, {}) if provider else {}
-    if provider and provider not in {"openai", "zhipu"}:
-        if not base_url and not existing.get("base_url"):
-            console.print("[red]自定义 provider 必须配置 --base-url[/red]")
-            raise typer.Exit(code=2)
-
-    if provider:
-        entry = dict(existing)
-        if base_url is not None:
-            entry["base_url"] = base_url
-        if api_key_env is not None:
-            if api_key_env:
-                entry["api_key_env"] = api_key_env
-            else:
-                entry.pop("api_key_env", None)
-        cfg.model_providers[provider] = entry
-    cfg.models["halter"] = model
-    save_config(cfg)
-
-    result = {
-        "model": model,
-        "provider": provider or None,
-        "providerConfig": cfg.model_providers.get(provider) if provider else None,
-        "apiKeyStored": False,
-    }
-    if json_out:
-        console.print_json(_json.dumps(result, ensure_ascii=False))
-        return
-    console.print("[green]已保存原生模型配置[/green]")
-    console.print(f"[dim]model={model}[/dim]")
-    if provider:
-        console.print(f"[dim]provider={provider} config={cfg.model_providers[provider]}[/dim]")
-    console.print("[dim]API key 只从环境变量读取，不会写入 config.toml[/dim]")
-
-
-@model_app.command()
-def check(
-    probe: bool = typer.Option(False, "--probe", help="同时轻量探测 base URL 连通性（GET /models）"),
-    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
-) -> None:
-    """诊断原生模型路由：配置、前缀、base URL、key 环境变量与连通性。"""
-    from .config import load_config
-    from .model_health import check_model_health
-
-    report = check_model_health(load_config(), probe=probe)
-    if json_out:
-        console.print_json(_json.dumps(report, ensure_ascii=False))
-        return
-
-    tone = {"ok": "green", "warn": "yellow", "error": "red", "skipped": "dim"}
-    icon = {"ok": "✓", "warn": "!", "error": "✕", "skipped": "-"}
-    verdict = "[green]可用[/green]" if report["ok"] else "[red]不可用[/red]"
-    console.print(f"原生模型健康检查：{verdict}  model={report['model'] or '-'}")
-    for item in report["checks"]:
-        line = f"[{tone[item['status']]}]{icon[item['status']]}[/{tone[item['status']]}] {item['label']}"
-        if item["detail"]:
-            line += f" [dim]— {item['detail']}[/dim]"
-        console.print(line)
-    console.print("[dim]不输出任何 secret 值，只显示环境变量名[/dim]")
-
 
 # ---------------------------------------------------------------------------
 # model_catalog：内置可选模型列表 + 配置覆盖（下拉选择用）
@@ -444,7 +395,6 @@ BUILTIN_MODEL_CATALOG: dict[str, list[str]] = {
     "codex": ["glm-4.7", "glm-4.6", "o3", "o4-mini"],
     "zcode": ["glm-4.7", "glm-4.6", "glm-4.5"],
     "opencode": ["zhipu/glm-4.7", "zhipu/glm-4.6", "zhipu/glm-4.5"],
-    "halter": ["openai/gpt-5", "openai/gpt-5-mini", "zhipu/glm-4.7", "zhipu/glm-4.6"],
 }
 
 
@@ -455,159 +405,6 @@ def model_catalog(cfg) -> dict[str, list[str]]:
         configured = cfg.model_catalog.get(key)
         out[key] = list(configured) if configured else list(BUILTIN_MODEL_CATALOG.get(key, []))
     return out
-
-
-# ---------------------------------------------------------------------------
-# audit：原生 Agent 审计查看
-
-
-@audit_app.command("list")
-def audit_list(
-    limit: int = typer.Option(100, "--limit", "-n", min=1, help="最多显示条数"),
-    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
-) -> None:
-    """列出原生 Agent 的私有审计轨迹。"""
-    from .agent_audit import list_audits
-
-    items = list_audits(limit)
-    if json_out:
-        console.print_json(_json.dumps({
-            "count": len(items),
-            "audits": [item.to_dict() for item in items],
-        }, ensure_ascii=False))
-        return
-    table = Table(title="Native agent audits")
-    table.add_column("Session", style="cyan", no_wrap=True)
-    table.add_column("Updated", style="dim")
-    table.add_column("Events", justify="right")
-    table.add_column("Provider")
-    table.add_column("Title", overflow="fold")
-    for item in items:
-        table.add_row(
-            item.session_id,
-            item.last_event_at or "-",
-            str(item.event_count),
-            item.provider or "-",
-            (item.title or "-")[:100],
-        )
-    console.print(table)
-
-
-@audit_app.command()
-def show(
-    session_id: str = typer.Argument(help="审计 session id"),
-    kind: str = typer.Option(None, "--kind", help="按事件类型过滤"),
-    tail: int = typer.Option(200, "--tail", "-n", min=0, help="仅返回最后 N 条事件；0 表示全部"),
-    json_out: bool = typer.Option(True, "--json/--no-json", help="以 JSON 输出"),
-) -> None:
-    """查看一个原生 Agent 审计轨迹。"""
-    from .agent_audit import show_audit
-
-    try:
-        result = show_audit(session_id, kind=kind, tail=tail)
-    except (FileNotFoundError, OSError, ValueError) as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
-    if json_out:
-        console.print_json(_json.dumps(result, ensure_ascii=False))
-        return
-    table = Table(title=f"Audit — {session_id}")
-    table.add_column("Time", style="dim")
-    table.add_column("Kind", style="cyan")
-    table.add_column("Event", overflow="fold")
-    for event in result["events"]:
-        table.add_row(
-            str(event.get("ts") or "-"),
-            str(event.get("kind") or "-"),
-            _json.dumps({k: v for k, v in event.items() if k not in {"ts", "kind"}}, ensure_ascii=False),
-        )
-    console.print(table)
-
-
-@audit_app.command("search")
-def audit_search(
-    query: str = typer.Argument(None, help="全文子串（多词为 AND）；可空，仅按过滤条件"),
-    kind: str = typer.Option(None, "--kind", help="按事件类型精确过滤"),
-    tool: str = typer.Option(None, "--tool", help="按工具名过滤（tool.call/tool.result/approval）"),
-    workspace: str = typer.Option(None, "--workspace", help="按 workspace 子串过滤（读 session store）"),
-    provider: str = typer.Option(None, "--provider", help="按 provider 过滤（读 session store）"),
-    transaction_id: str = typer.Option(None, "--transaction-id", help="按事务 id 定位相关事件"),
-    date_from: str = typer.Option(None, "--from", help="起始日期（YYYY-MM-DD 或完整时间戳）"),
-    date_to: str = typer.Option(None, "--to", help="结束日期（YYYY-MM-DD 或完整时间戳）"),
-    session_id: str = typer.Option(None, "--session", help="限定单个审计 session"),
-    limit: int = typer.Option(50, "--limit", "-n", min=1, help="每页条数"),
-    offset: int = typer.Option(0, "--offset", min=0, help="分页偏移"),
-    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
-) -> None:
-    """跨审计轨迹搜索事件（transaction id / 工具名 / 全文 / 日期组合）。"""
-    from .agent_audit import search_audits
-
-    try:
-        result = search_audits(
-            text=query, kind=kind, tool_name=tool, workspace=workspace,
-            provider=provider, transaction_id=transaction_id,
-            date_from=date_from, date_to=date_to, session_id=session_id,
-            limit=limit, offset=offset,
-        )
-    except (FileNotFoundError, OSError, ValueError) as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
-    if json_out:
-        console.print_json(_json.dumps(result, ensure_ascii=False))
-        return
-    console.print(
-        f"[dim]{result['total']} 个匹配 / 扫描 {result['sessions_scanned']} 个 session"
-        f"（返回 {result['returned']}，offset {offset}）[/dim]"
-    )
-    if result["skipped_files"]:
-        console.print(f"[yellow]跳过损坏文件：{', '.join(result['skipped_files'])}[/yellow]")
-    if result["truncated_files"]:
-        console.print(f"[yellow]部分文件超读取上限被截断：{', '.join(result['truncated_files'])}[/yellow]")
-    table = Table(title="Audit search")
-    table.add_column("Session", style="dim")
-    table.add_column("Line", justify="right", style="dim")
-    table.add_column("Time", style="dim")
-    table.add_column("Kind", style="cyan")
-    table.add_column("Event", overflow="fold")
-    for match in result["matches"]:
-        event = match["event"]
-        table.add_row(
-            match["session_id"],
-            str(match["line"]),
-            str(event.get("ts") or "-"),
-            str(event.get("kind") or "-"),
-            _json.dumps({k: v for k, v in event.items() if k not in {"ts", "kind"}}, ensure_ascii=False),
-        )
-    console.print(table)
-
-
-# ---------------------------------------------------------------------------
-# ahp：自建 Agent Host Protocol 服务器
-
-
-@ahp_app.command("serve")
-def ahp_serve(
-    host: str = typer.Option("127.0.0.1", "--host", help="监听地址"),
-    port: int = typer.Option(7433, "--port", "-p", help="监听端口"),
-    token_file: Path | None = typer.Option(
-        None,
-        "--token-file",
-        help="AHP bearer token 输出文件（默认 ~/.config/halter/ahp-token，权限 0600）",
-    ),
-) -> None:
-    """启动 halter AHP host（WebSocket JSON-RPC，协议 0.9.0）。
-
-    任何 AHP 客户端（VS Code Agents 窗口、AHPX、官方 client 库）连接后可
-    createSession(provider=claude/codex/zcode/opencode) 并流式驱动对话。
-    """
-    import asyncio
-
-    from .ahp_host import serve as run_ahp_serve
-
-    try:
-        asyncio.run(run_ahp_serve(host, port, token_file=token_file))
-    except KeyboardInterrupt:
-        console.print("[dim]AHP host 已停止[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +425,7 @@ def version(
     if json_out:
         console.print_json(_json.dumps({"name": "halter", "version": v}, ensure_ascii=False))
     else:
-        console.print(f"halter {v}")
+        console.print(f"⚓ [bold]halter[/bold] [cyan]{v}[/cyan]")
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +521,9 @@ def sessions_projects(
     if json_out:
         console.print_json(_json.dumps({"count": len(payload), "projects": payload}, ensure_ascii=False))
         return
+    if not payload:
+        console.print("[dim]未发现任何历史会话项目。[/dim]")
+        return
     table = Table(title="Projects — 所有本地项目")
     table.add_column("", justify="center")
     table.add_column("项目", style="cyan")
@@ -733,7 +533,7 @@ def sessions_projects(
     table.add_column("最近活动", style="dim")
     for row in payload:
         table.add_row(
-            "●" if row["current"] else "",
+            "[green]●[/green]" if row["current"] else "·",
             row["path"] or row["name"],
             str(row["sessions"]),
             str(row["messages"]),
@@ -779,6 +579,7 @@ def scan(
 
     console.print(f"⚓ 检测到 [cyan]{n_installed}[/cyan] 个 AI 编码工具")
     rp.print_summary(reports)
+    console.print("[dim]Skills 中的 (n链) = 其中 n 个为指向事实源库的 symlink（halter sync 分发，一处修改全部生效）；其余为本地拷贝[/dim]")
 
     # 默认显示五层覆盖矩阵（每个条目铺到了哪些工具）
     if detail:
@@ -801,6 +602,7 @@ def scan(
         rp.print_plugins_matrix(reports)
         rp.print_hooks_matrix(reports)
         rp.print_sessions_matrix(reports)
+        console.print("[dim]图例  [green]●[/green] symlink 同步 · [yellow]◐[/yellow] 本地拷贝 · · 缺失[/dim]")
     notes = [(r.tool, n) for r in reports for n in r.scan_notes]
     if notes:
         console.print("[dim]扫描备注：[/dim]")
@@ -812,6 +614,96 @@ def scan(
         console.print("\n[red]⚠ 健康问题：[/red]")
         for level, where, msg in issues:
             console.print(f"  [{'red' if level == 'error' else 'yellow'}]{where}[/] {msg}")
+
+
+# ---------------------------------------------------------------------------
+# assess：五层配置对当前项目的有用度评估
+
+
+@app.command()
+def assess(
+    project: Path = typer.Option(Path("."), "--project", "-p", help="被评估的项目路径，默认当前目录"),
+    layer: list[str] = typer.Option([], "--layer", "-l",
+                                    help="只评估指定层，可多选：skills / agents / mcp / plugins / hooks"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """根据项目画像（语言/框架/领域/云信号）评估五层配置的有用度。"""
+    from .assess import VERDICT_LABEL, assess_all, profile_project
+    from .scan import scan_all
+
+    valid_layers = ("skills", "agents", "mcp", "plugins", "hooks")
+    chosen = [x for x in layer if x] or list(valid_layers)
+    bad = [x for x in chosen if x not in valid_layers]
+    if bad:
+        raise typer.BadParameter(f"未知层：{', '.join(bad)}（可选 {', '.join(valid_layers)}）")
+
+    profile = profile_project(project)
+    reports = scan_all(detect_tools())
+    result = assess_all(profile, reports)
+    result = {k: v for k, v in result.items() if k in chosen}
+
+    if json_out:
+        console.print_json(_json.dumps({
+            "project": str(profile.path),
+            "profile": {
+                "languages": sorted(profile.languages),
+                "frameworks": sorted(profile.frameworks),
+                "domains": sorted(profile.domains),
+                "clouds": sorted(profile.clouds),
+                "is_repo": profile.is_repo,
+            },
+            "summary": {
+                k: {v: sum(1 for a in items if a.verdict == v) for v in ("useful", "maybe", "useless")}
+                for k, items in result.items()
+            },
+            "assessments": [a.to_dict() for items in result.values() for a in items],
+        }, ensure_ascii=False))
+        return
+
+    signals = profile.all_signals()
+    console.print(f"[cyan]项目画像[/cyan] [dim]{profile.path}[/dim]")
+    console.print(f"[dim]信号：{', '.join(sorted(signals)) or '无'}"
+                  f"{' · git 仓库' if profile.is_repo else ''}[/dim]\n")
+
+    style = {"useful": "green", "maybe": "yellow", "useless": "red"}
+    order = {"useless": 0, "maybe": 1, "useful": 2}
+    layer_title = {"skills": "Skills", "agents": "Subagents", "mcp": "MCP", "plugins": "插件", "hooks": "Hooks"}
+    for key, items in result.items():
+        if not items:
+            continue
+        counts = {v: sum(1 for a in items if a.verdict == v) for v in ("useful", "maybe", "useless")}
+        table = Table(title=f"{layer_title[key]} 评估 — ✓{counts['useful']} ?{counts['maybe']} ✕{counts['useless']}")
+        table.add_column("条目", style="cyan", no_wrap=True)
+        table.add_column("判定", no_wrap=True)
+        table.add_column("理由", ratio=1, overflow="fold")
+        table.add_column("建议", no_wrap=True)
+        table.add_column("工具", style="dim", no_wrap=True)
+        for a in sorted(items, key=lambda x: (order[x.verdict], x.item)):
+            table.add_row(
+                a.item,
+                f"[{style[a.verdict]}]{VERDICT_LABEL[a.verdict]}[/{style[a.verdict]}]",
+                a.reason, a.suggestion, ",".join(a.tools),
+            )
+        console.print(table)
+    console.print("[dim]✕ 无用项：skills 可从 ~/.agents/skills 删除；MCP/插件/hooks 可用 config exclude 或手动卸载。评估为启发式规则，人工复核后再删。[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# tui：交互式全屏矩阵浏览器
+
+
+@app.command()
+def tui() -> None:
+    """交互式全屏矩阵浏览器（1-6 切层 · 方向键看详情 · g 缺口 · / 过滤 · q 退出）。"""
+    import sys
+
+    from .scan import scan_all
+    from .tui import HalterTui
+
+    if not sys.stdout.isatty():
+        console.print("[red]tui 需要交互式终端；管道/脚本场景请用 [cyan]halter scan[/cyan][/red]")
+        raise typer.Exit(code=1)
+    HalterTui(scan_all(detect_tools())).run()
 
 
 # ---------------------------------------------------------------------------

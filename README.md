@@ -59,6 +59,9 @@ Three commands. That's it.
 halter scan                   # look: which tools are installed, what each has, any health issues
 halter scan -d skills -d mcp  # per-layer detail; --json for machine-readable output
 
+halter assess                 # assess per-layer usefulness against the current project
+halter assess -p ../my-paper  # any project; -l skills -l mcp to pick layers; --json supported
+
 halter sync                   # sync: manifest/library -> all tools (dry-run by default)
 halter sync --apply           # actually write (conflicts skipped by default)
 halter sync --no-skills --no-plugins --no-mcp   # only hooks + sessions (all layers on by default)
@@ -103,36 +106,13 @@ Routing targets and headless invocation:
 claude = "sonnet"
 codex = "o3"
 opencode = "zhipu/glm-4.7"
-halter = "openai/gpt-5"       # native AHP provider
 ```
 
 `halter models` shows the current mapping. Flags: claude `--model`, codex `-m`, opencode `-m`; ZCode has no public headless model switch in v1 (recorded, not injected).
 
 Safety: `--mode safe` is the default (each harness keeps its own permission gates); `--mode yolo` maps to each tool's bypass flags. Prompts are passed as single argv elements — never through a shell. Task records live under `~/.config/halter/tasks/` (0700/0600) and output is redacted when displayed. Ctrl-C or `--timeout` kills the whole process group in foreground mode.
 
-The desktop **Model** view configures non-secret OpenAI-compatible routing (base URL plus API-key environment-variable name) without storing credentials.
-
-The desktop app includes a read-only native-agent **Audit** view for model/tool decisions, approvals, rollbacks, and context compaction.
-
-The desktop app's **Dispatch** view wraps the same capability: mention chips, availability badges, project picker, and live task cards.
-
-## AHP: self-hosted Agent Host (protocol-level harness mounting)
-
-`halter ahp serve` starts a standalone server speaking [Agent Host Protocol 0.9.0](https://microsoft.github.io/agent-host-protocol/) (WebSocket + JSON-RPC), mounting claude / codex / zcode / opencode as standard AHP agent backends:
-
-```bash
-halter ahp serve --port 7433
-```
-
-The host binds to localhost and writes a random bearer token to `~/.config/halter/ahp-token` (`0600`). Every WebSocket, JSON-RPC, and SSE request must send it as `Authorization: Bearer <token>` (or `?token=`); browser requests must also match an explicitly configured origin. The desktop reads the same token file and validates the host with an authenticated ping. Browser origins can be allow-listed with `HALTER_AHP_ALLOWED_ORIGINS=vscode-webview://...,https://your-app.example` — do not use `*`.
-
-Any AHP client (VS Code Agents window, AHPX, official Rust/TS/Go/Swift/Kotlin client libraries) can then `initialize` → `createSession(provider="claude")` → `createChat` → dispatch `chat/turnStarted` and receive streaming `chat/delta` actions until `chat/turnComplete`. Model routing flows from `[models]` config and `message.model.id` into each harness's `--model` / `-m` flag. Execution reuses the runner layer (process groups, headless argv building).
-
-A fifth backend, `provider="halter"`, runs Halter's native auditable agent loop with durable, redacted session/model-tool history. It exposes a durable planning tool (`update_plan`), workspace-confined read/project-memory tools (`read_file`, `list_dir`, `search_files`, `git_status`, `git_diff`, `list_project_sessions`, `read_project_session`) plus approval-gated `apply_patch` with per-transaction rollback and fixed `run_tests`, can concurrently delegate Claude/Codex/ZCode/OpenCode to disposable git clones with tracked+untracked snapshots and side-by-side diff comparison, supports streaming OpenAI- and Zhipu-compatible model routing, emits structured tool/approval events, and writes every model/tool/permission decision to a private JSONL audit trail. External runner invocations and output are audited too. See [docs/native-agent.md](docs/native-agent.md) and the handoff/roadmap in [docs/native-agent-handoff.md](docs/native-agent-handoff.md).
-
-```bash
-uv run pytest tests/test_agent_runtime.py tests/test_ahp_host.py   # native runtime + protocol e2e
-```
+The desktop app's **Dispatch** view wraps the same capability: mention chips, project picker, and live task cards.
 
 ## Session continuity
 
@@ -161,8 +141,8 @@ The built-in `halter-sessions` skill teaches every detected assistant the same l
 
 | Layer | Source of truth | Distribution |
 |---|---|---|
-| skills | skills library dir (fallback chain: config-specified > `~/.agents/skills` > `~/.config/halter/library/skills`) | per-entry symlinks; same-name conflicts skipped by default, `--prefer library` to override |
-| subagents | subagents library dir (fallback chain: config `agents_library` > `~/.agents/agents` > `~/.config/halter/library/agents`) | per-entry symlinks (each agent is one `.md` file); same conflict semantics as skills; frontmatter (`model: opus`, …) is distributed as-is — aliases may not resolve in non-Claude-family tools |
+| skills | skills library dir (default `~/.agents/skills`; config `library` overrides; legacy `~/.config/halter/library/skills` is auto-migrated once) | per-entry symlinks; same-name conflicts skipped by default, `--prefer library` to override |
+| subagents | subagents library dir (default `~/.agents/agents`; config `agents_library` overrides; legacy path auto-migrated once) | per-entry symlinks (each agent is one `.md` file); same conflict semantics as skills; frontmatter (`model: opus`, …) is distributed as-is — aliases may not resolve in non-Claude-family tools |
 | MCP | `~/.config/halter/mcp.toml` (canonical: stdio/http, env, headers) | six dialect writers: claude (read-modify-write of `~/.claude.json`), zcode, codex (TOML, comments preserved), cursor, vscode (`servers` key), gemini, opencode (array-style command); http-type servers only go to tools that support them |
 | plugins | `~/.config/halter/plugins.toml` (families: claude / codex / vscode) | claude via `claude plugin install -y`; zcode mirrors the claude-side cache + registers the same-origin manifest; codex via TOML toggle; vscode via `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml` (per registration: id, events, matcher, command, timeout in seconds) | three dialect writers: claude (top-level `hooks` of `settings.json`), zcode (`hooks.events` in `cli/config.json`, timeouts converted ms→s), cursor (flat two-level `hooks.json`); every entry halter writes carries an `"halter": "<id>"` ownership tag — **entries without it (injected by Otty, Orca, …) are never touched**; tool-unsupported events (cursor-only like `beforeShellExecution`, claude-only like `PermissionRequest`) are skipped with a note |
@@ -179,11 +159,11 @@ The built-in `halter-sessions` skill teaches every detected assistant the same l
 `~/.config/halter/config.toml` (optional):
 
 ```toml
-library = "~/.agents/skills"     # skills source of truth; defaults to the fallback chain
+library = "~/.agents/skills"     # skills source of truth; this path is also the default
 exclude_skills = []              # skills to never distribute
 exclude_mcp = []
 exclude_hooks = []               # hook ids to never distribute (see hooks.toml / scan -d hooks)
-agents_library = ""              # subagents source of truth; defaults to the fallback chain
+agents_library = ""              # subagents source of truth; defaults to ~/.agents/agents
 exclude_agents = []              # agent names to never distribute
 ```
 

@@ -6,6 +6,7 @@ import dataclasses
 import json
 from datetime import datetime, timezone
 
+from rich import box
 from rich.console import Console
 from rich.table import Table
 
@@ -24,7 +25,8 @@ def to_json(reports: list[ToolReport]) -> str:
             "installed": r.installed,
             "category": r.category,
             "skills": [
-                {"name": s.name, "path": str(s.path), "linked": s.linked}
+                {"name": s.name, "path": str(s.path), "linked": s.linked,
+                 "description": s.description}
                 for s in r.skills
             ],
             "agents": [
@@ -54,18 +56,17 @@ def print_summary(reports: list[ToolReport]) -> None:
     table = Table(title="⚓ AI 编码工具配置盘点")
     table.add_column("工具", style="cyan")
     table.add_column("Skills", justify="right")
-    table.add_column("  已链接", justify="right", style="green")
-    table.add_column("Agents", justify="right")
+    table.add_column("Subagents", justify="right")
     table.add_column("MCP", justify="right")
     table.add_column("插件", justify="right")
     table.add_column("Hooks", justify="right")
     table.add_column("Sessions", justify="right")
     for r in reports:
         linked = sum(1 for s in r.skills if s.linked)
+        skills_cell = str(len(r.skills)) + (f" [green]({linked}链)[/green]" if linked else "")
         table.add_row(
             r.display,
-            str(len(r.skills)),
-            str(linked) if linked else "-",
+            skills_cell,
             str(len(r.agents)) if r.agents else "-",
             str(len(r.mcp_servers)),
             str(len(r.plugins)),
@@ -75,17 +76,29 @@ def print_summary(reports: list[ToolReport]) -> None:
     console.print(table)
 
 
+def _first_sentence(text: str, limit: int = 60) -> str:
+    """取描述首句并截断（表格紧凑展示；全文见 --json 或桌面端悬停）。"""
+    import re
+
+    body = text.strip().splitlines()[0] if text.strip() else ""
+    match = re.search(r"[.。!！?？]", body)
+    first = body[: match.end()] if match else body
+    if len(first) > limit:
+        return first[: limit - 1].rstrip() + "…"
+    return first
+
+
 def print_skills_detail(reports: list[ToolReport]) -> None:
     for r in reports:
         if not r.skills:
             continue
         table = Table(title=f"{r.display} — skills ({len(r.skills)})")
-        table.add_column("名称", style="cyan")
-        table.add_column("链接", justify="center")
-        table.add_column("路径", style="dim")
+        table.add_column("名称", style="cyan", no_wrap=True)
+        table.add_column("链接", justify="center", no_wrap=True)
+        table.add_column("描述", style="dim", ratio=1, overflow="fold")
         for s in sorted(r.skills, key=lambda x: x.name):
             mark = "[green]→link[/green]" if s.linked else " "
-            table.add_row(s.name, mark, str(s.path))
+            table.add_row(s.name, mark, _first_sentence(s.description or ""))
         console.print(table)
 
 
@@ -165,60 +178,126 @@ def print_hooks_detail(reports: list[ToolReport]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 覆盖矩阵（默认视图）：条目为行、工具为列、交叉点 ✓/·
+# 覆盖矩阵（默认视图）：条目为行、工具为列、交叉点 ●/◐/·
 
 
-def _print_matrix(title: str, first_col: str, reports: list[ToolReport],
-                  has_entry: callable, names: list[str]) -> None:
-    table = Table(title=title)
-    table.add_column(first_col, style="cyan", no_wrap=True)
-    for r in reports:
-        table.add_column(r.tool, justify="center")
+def _print_matrix(label: str, first_col: str, reports: list[ToolReport],
+                  get_entry: callable, names: list[str], *,
+                  linked: bool = False, merge_base: bool = False) -> None:
+    """极简线框矩阵：缺口优先 + 全覆盖折叠 + 信号点交叉格。
+
+    - linked 层（skills/agents）区分 symlink(●)/本地拷贝(◐)；
+    - merge_base 层（插件）按 @marketplace 前的基名合并同一逻辑条目；
+    - 只展开有缺口的行（缺口多者在前），全覆盖条目折叠为一行摘要。
+    """
+    if not reports or not names:
+        return
+
+    def canon(name: str) -> str:
+        return name.split("@", 1)[0] if merge_base else name
+
+    # 基名合并：任一变体存在即算该工具已配置
+    rows: dict[str, dict[str, object]] = {}
     for name in names:
+        key = canon(name)
+        slot = rows.setdefault(key, {})
+        for r in reports:
+            entry = get_entry(r, name)
+            if entry is None:
+                continue
+            prev = slot.get(r.tool)
+            if prev is None:
+                slot[r.tool] = entry
+            elif getattr(entry, "linked", False) and not getattr(prev, "linked", False):
+                slot[r.tool] = entry  # symlink(●) 优先于本地拷贝(◐)
+
+    gapped = [(n, cells) for n, cells in rows.items() if len(cells) < len(reports)]
+    complete = sorted(n for n, cells in rows.items() if len(cells) == len(reports))
+    gapped.sort(key=lambda kv: (-(len(reports) - len(kv[1])), kv[0]))
+    gaps = sum(len(reports) - len(cells) for _, cells in rows.items())
+
+    console.print()
+    if not gapped:
+        console.print(f"[bold cyan]▸ {label}[/bold cyan]"
+                      f"  [dim]{len(rows)} × {len(reports)} · [/dim][green]✓ 全部覆盖[/green]")
+        return
+    stats = f"{len(rows)} × {len(reports)} · gap {gaps}"
+    if complete:
+        stats += f" · [green]✓{len(complete)}[/green] 折叠"
+    console.print(f"[bold cyan]▸ {label}[/bold cyan]  [dim]{stats}[/dim]")
+
+    table = Table(
+        box=box.MINIMAL_HEAVY_HEAD,
+        header_style="dim",
+        pad_edge=False,
+        show_edge=False,
+        collapse_padding=True,
+    )
+    table.add_column(first_col, style="cyan", overflow="ellipsis")
+    for r in reports:
+        table.add_column(r.tool, justify="center", no_wrap=True)
+    for name, cells in gapped:
         row = [name]
         for r in reports:
-            row.append("[green]✓[/green]" if has_entry(r, name) else "[dim]·[/dim]")
+            entry = cells.get(r.tool)
+            if entry is None:
+                row.append("[dim]·[/dim]")
+            elif linked and getattr(entry, "linked", False):
+                row.append("[green]●[/green]")
+            elif linked:
+                row.append("[yellow]◐[/yellow]")
+            else:
+                row.append("●")
         table.add_row(*row)
     console.print(table)
+    if complete:
+        shown = "、".join(complete[:6]) + ("…" if len(complete) > 6 else "")
+        console.print(f"  [green]✓[/green] [dim]全覆盖 {len(complete)} 项：{shown}[/dim]")
 
 
 def print_skills_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.skills]
     names = sorted({s.name for r in capable for s in r.skills})
-    _print_matrix(f"⚓ 矩阵：AI 编码工具 × Skills（{len(names)}）", "Skill \\ 工具",
-                  capable, lambda r, n: any(s.name == n for s in r.skills), names)
+    _print_matrix("SKILLS", "SKILL", capable,
+                  lambda r, n: next((s for s in r.skills if s.name == n), None),
+                  names, linked=True)
 
 
 def print_agents_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.agents]
     names = sorted({a.name for r in capable for a in r.agents})
-    _print_matrix(f"⚓ 矩阵：AI 编码工具 × Subagents（{len(names)}）", "Agent \\ 工具",
-                  capable, lambda r, n: any(a.name == n for a in r.agents), names)
+    _print_matrix("SUBAGENTS", "AGENT", capable,
+                  lambda r, n: next((a for a in r.agents if a.name == n), None),
+                  names, linked=True)
 
 
 def print_mcp_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.mcp_servers]
     names = sorted({m.name for r in capable for m in r.mcp_servers})
-    _print_matrix(f"⚓ 矩阵：AI 编码工具 × MCP（{len(names)}）", "Server \\ 工具",
-                  capable, lambda r, n: any(m.name == n for m in r.mcp_servers), names)
+    _print_matrix("MCP", "SERVER", capable,
+                  lambda r, n: next((m for m in r.mcp_servers if m.name == n), None), names)
 
 
 def print_plugins_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.plugins]
     names = sorted({p.plugin_id for r in capable for p in r.plugins})
-    _print_matrix(f"⚓ 矩阵：AI 编码工具 × 插件（{len(names)}）", "插件 / 扩展 \\ 工具",
-                  capable, lambda r, n: any(p.plugin_id == n for p in r.plugins), names)
+    _print_matrix("PLUGINS", "PLUGIN", capable,
+                  lambda r, n: next((p for p in r.plugins if p.plugin_id == n), None),
+                  names, merge_base=True)
 
 
 def print_hooks_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.hooks]
     names = sorted({h.label for r in capable for h in r.hooks})
-    _print_matrix(f"⚓ 矩阵：AI 编码工具 × Hooks（{len(names)}）", "Hook \\ 工具",
-                  capable, lambda r, n: any(h.label == n for h in r.hooks), names)
+    _print_matrix("HOOKS", "HOOK", capable,
+                  lambda r, n: next((h for h in r.hooks if h.label == n), None), names)
+
+
 def print_sessions_matrix(reports: list[ToolReport]) -> None:
     capable = [r for r in reports if r.sessions]
     sessions = {s.ref for r in capable for s in r.sessions}
     if not capable or not sessions:
         return
-    _print_matrix(f"⚓ 矩阵：当前项目 × Sessions（{len(sessions)}）", "Session \\ 工具",
-                  capable, lambda r, n: any(s.ref == n for s in r.sessions), sorted(sessions))
+    _print_matrix("SESSIONS", "SESSION", capable,
+                  lambda r, n: next((s for s in r.sessions if s.ref == n), None),
+                  sorted(sessions))

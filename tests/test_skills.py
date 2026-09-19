@@ -9,6 +9,7 @@ from harness_config_manager.config import HalterConfig
 from harness_config_manager.model import SkillInfo, ToolReport
 from harness_config_manager.skills import (
     plan_adopt,
+    scan_skills,
     plan_sync,
     resolve_library,
     run_sync,
@@ -18,25 +19,58 @@ from conftest import make_skill
 
 
 # ---------------------------------------------------------------------------
-# resolve_library 三层回退
+# resolve_library：显式配置 > ~/.agents/skills（统一默认）
 
 
-def test_library_fallback_to_agents_dir(fake_home: Path) -> None:
-    lib = fake_home / ".agents/skills"
-    make_skill(lib, "alpha")
-    assert resolve_library(HalterConfig()) == lib
+def test_library_defaults_to_agents_dir(fake_home: Path) -> None:
+    lib = resolve_library(HalterConfig())
+    assert lib == fake_home / ".agents/skills"
+    assert not lib.exists()  # 只解析不创建
+    assert resolve_library(HalterConfig(), create=True).is_dir()
 
 
 def test_library_explicit_config_wins(fake_home: Path) -> None:
-    lib = fake_home / ".agents/skills"
-    make_skill(lib, "alpha")
+    make_skill(fake_home / ".agents/skills", "alpha")
     custom = fake_home / "mylib"
     custom.mkdir()
     assert resolve_library(HalterConfig(library=str(custom))) == custom
 
 
-def test_library_self_managed(fake_home: Path) -> None:
-    assert resolve_library(HalterConfig()) == fake_home / ".config/halter/library/skills"
+def test_library_migrates_legacy_self_managed(fake_home: Path) -> None:
+    legacy = make_skill(fake_home / ".config/halter/library/skills", "alpha")
+    tool_dir = fake_home / ".claude/skills"
+    tool_dir.mkdir(parents=True)
+    link = tool_dir / "alpha"
+    link.symlink_to(legacy)
+
+    lib = resolve_library(HalterConfig())
+    assert lib == fake_home / ".agents/skills"
+    assert (lib / "alpha" / "SKILL.md").is_file()
+    assert not legacy.exists()
+    # 工具目录里的旧 symlink 被重定向到新库
+    assert link.is_symlink() and link.resolve() == lib / "alpha"
+
+
+# ---------------------------------------------------------------------------
+# SKILL.md description 解析（扫描时提取，供桌面端悬停预览）
+
+
+def test_scan_skills_extracts_description(fake_home: Path) -> None:
+    from harness_config_manager.registry import BY_KEY
+
+    make_skill(fake_home / ".claude/skills", "single", body=(
+        "---\nname: single\ndescription: 一句话描述\n---\n# skill\n"))
+    make_skill(fake_home / ".claude/skills", "folded", body=(
+        "---\nname: folded\ndescription: >\n  语言润色 — Academic English polishing.\n"
+        "  支持 LaTeX 手稿。\n---\n# skill\n"))
+    make_skill(fake_home / ".claude/skills", "none", body="# 无 frontmatter\n")
+
+    skills, _ = scan_skills(BY_KEY["claude"])
+    by_name = {s.name: s for s in skills}
+    assert by_name["single"].description == "一句话描述"
+    assert by_name["folded"].description == (
+        "语言润色 — Academic English polishing. 支持 LaTeX 手稿。")
+    assert by_name["none"].description is None
 
 
 # ---------------------------------------------------------------------------

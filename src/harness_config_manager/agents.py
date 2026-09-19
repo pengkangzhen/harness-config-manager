@@ -15,19 +15,18 @@ from pathlib import Path
 from .config import HalterConfig
 from .model import AgentInfo, ToolReport
 from .registry import BY_KEY, expand
+from .skills import migrate_legacy_library
 
 # ---------------------------------------------------------------------------
-# 事实源解析（三层回退：显式配置 > ~/.agents/agents > halter 自管库）
+# 事实源解析：显式配置 > ~/.agents/agents（统一默认；发现旧自管库时一次性迁移）
 
 
 def resolve_agents_library(cfg: HalterConfig, create: bool = False) -> Path:
     if cfg.agents_library:
         lib = Path(cfg.agents_library).expanduser()
     else:
-        candidate = expand(".agents/agents")
-        if candidate.is_dir():
-            return candidate
-        lib = expand(".config/halter/library/agents")
+        lib = expand(".agents/agents")
+        migrate_legacy_library(expand(".config/halter/library/agents"), lib, "agents_dirs")
     if create:
         lib.mkdir(parents=True, exist_ok=True)
     return lib

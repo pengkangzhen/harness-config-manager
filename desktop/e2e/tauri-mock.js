@@ -3,7 +3,6 @@
 //   命令必须在 initScript 里以纯数据形式就位
 // - setHandler(page, command, fn)：页面就绪后注入动态 handler（可读 args）
 // - window.__calls 记录 [command, args] 序列
-// - emitAhp(page, channel, action)：注入一条 server->client 的 AHP action
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
@@ -69,18 +68,4 @@ async function callsWithArgs(page) {
   return page.evaluate(() => window.__calls);
 }
 
-// 注入一条 server->client 的 AHP action 信封（同 Rust 桥的 ahp-message 载荷）
-async function emitAhp(page, channel, action) {
-  await page.evaluate(({ channel, action }) => {
-    const payload = JSON.stringify({
-      jsonrpc: "2.0",
-      method: "action",
-      params: { channel, action },
-    });
-    for (const callback of window.__listeners["ahp-message"] || []) {
-      callback({ payload });
-    }
-  }, { channel, action });
-}
-
-module.exports = { openApp, setHandler, calls, callsWithArgs, emitAhp, UI_URL };
+module.exports = { openApp, setHandler, calls, callsWithArgs, UI_URL };

@@ -2,7 +2,6 @@
 "use strict";
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
-const tauriListen = (...a) => window.__TAURI__.event.listen(...a);
 const $ = (id) => document.getElementById(id);
 
 /* ---------------- helpers ---------------- */
@@ -98,16 +97,10 @@ const state = {
   expandedFamilies: new Set(),
   projectsError: null,
   projectMatches: [],
-  modelsLoaded: false,
-  auditLoaded: false,
-  auditItems: [],
-  selectedAudit: null,
-  auditJump: null,
   dispatchLoaded: false,
   dispatchModels: {},      // harness -> 默认模型（config.toml [models]）
   dispatchCatalog: {},     // harness -> 可选模型列表（[model_catalog] 或内置 GLM 系）
   dispatchProjects: [],
-  ahp: null,               // {ready, agents, sessions, cards, nativeChats}
   dispatchCards: new Map(),   // task_id -> {node, timer}
 };
 
@@ -126,8 +119,6 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     if (btn.dataset.view === "overview") loadOverview();
     if (btn.dataset.view === "matrix") loadMatrix();
     if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
-    if (btn.dataset.view === "models") loadModelsView();
-    if (btn.dataset.view === "audit") loadAuditView();
     if (btn.dataset.view === "dispatch") loadDispatchView();
   });
 });
@@ -245,16 +236,20 @@ function buildMatrix(scan, layerKey) {
       if (!name) continue;
       let row = rows.get(name);
       if (!row) {
-        row = { statuses: new Map() };
+        row = { statuses: new Map(), items: [] };
         rows.set(name, row);
       }
       const linked = layer.key === "skills" || layer.key === "agents" ? !!item.linked : false;
       row.statuses.set(tool.tool, linked ? "synced" : "present");
+      row.items.push(item);
     }
   }
   const list = [...rows.entries()].map(([name, r]) => ({
     name,
     statuses: r.statuses,
+    items: r.items,
+    // 预览用代表条目：优先取带 description 的（各工具同名条目内容一致）
+    item: r.items.find((x) => x.description) || r.items[0],
     missing: tools.filter((t) => !r.statuses.has(t.tool)).length,
   }));
   list.sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
@@ -343,6 +338,90 @@ function renderMatrixLayerTabs() {
   }
 }
 
+/* ---------------- hover preview card（skill 悬停预览） ---------------- */
+
+let hoverTimer = null;
+
+function ensureHoverCard() {
+  let card = document.getElementById("hover-card");
+  if (!card) {
+    card = el("div", "hover-card hidden");
+    card.id = "hover-card";
+    document.body.append(card);
+  }
+  return card;
+}
+
+function hideHoverCard() {
+  clearTimeout(hoverTimer);
+  const card = document.getElementById("hover-card");
+  if (card) card.classList.add("hidden");
+}
+
+function showHoverCard(target, buildBody) {
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    const card = ensureHoverCard();
+    card.replaceChildren(...buildBody());
+    card.classList.remove("hidden");
+    // 先复位再测量，避免上一位置的尺寸影响定位
+    card.style.left = "0px";
+    card.style.top = "0px";
+    const rect = target.getBoundingClientRect();
+    let x = rect.left;
+    let y = rect.bottom + 6;
+    if (x + card.offsetWidth > window.innerWidth - 8) {
+      x = Math.max(8, window.innerWidth - card.offsetWidth - 8);
+    }
+    if (y + card.offsetHeight > window.innerHeight - 8) {
+      y = Math.max(8, rect.top - card.offsetHeight - 6);
+    }
+    card.style.left = `${x}px`;
+    card.style.top = `${y}px`;
+  }, 180);
+}
+
+function attachHoverPreview(cell, buildBody) {
+  cell.addEventListener("mouseenter", () => showHoverCard(cell, buildBody));
+  cell.addEventListener("mouseleave", hideHoverCard);
+}
+
+function skillHoverBody(row) {
+  const nodes = [el("div", "hc-name", row.name)];
+  const desc = row.item && row.item.description;
+  nodes.push(el("div", `hc-desc${desc ? "" : " empty"}`, desc || "（SKILL.md 未提供 description）"));
+  const meta = el("div", "hc-meta");
+  if (row.item && row.item.path) {
+    meta.append(el("span", "hc-path", shortenPath(row.item.path)));
+  }
+  if (row.statuses.size && [...row.statuses.values()].includes("synced")) {
+    meta.append(el("span", "hc-linked", "库链接"));
+  }
+  nodes.push(meta);
+  return nodes;
+}
+
+function familyHoverBody(group) {
+  const nodes = [el("div", "hc-name", `${group.root} 家族`)];
+  nodes.push(el("div", "hc-sub", `${group.members.length} 个成员`));
+  const list = el("div", "hc-member-list");
+  for (const m of group.members) {
+    const item = el("div", "hc-member");
+    item.append(el("div", "hc-member-name", m.name));
+    item.append(el("div", "hc-member-desc", m.item && m.item.description
+      ? firstLine(m.item.description)
+      : "（无描述）"));
+    list.append(item);
+  }
+  nodes.push(list);
+  return nodes;
+}
+
+const firstLine = (text) => {
+  const line = String(text).split(/(?<=[。.!?；;])\s+/)[0] || String(text);
+  return line.length > 90 ? `${line.slice(0, 90)}…` : line;
+};
+
 function renderMatrix(scan) {
   const layer = MATRIX_LAYERS.find((l) => l.key === state.matrixLayer);
   const { tools, rows } = buildMatrix(scan, state.matrixLayer);
@@ -398,6 +477,10 @@ function renderMatrix(scan) {
   const renderRow = (row, cls) => {
     const nameCell = el("div", `mx-name ${cls || ""}`);
     nameCell.title = row.name;
+    if (layer.key === "skills") {
+      nameCell.removeAttribute("title");
+      attachHoverPreview(nameCell, () => skillHoverBody(row));
+    }
     nameCell.append(el("span", "", row.name));
     grid.append(nameCell);
     for (const tool of tools) {
@@ -418,6 +501,10 @@ function renderMatrix(scan) {
     const expanded = state.expandedFamilies.has(group.root);
     const nameCell = el("div", "mx-name family");
     nameCell.title = `${group.root} 家族（${group.members.length} 个成员）`;
+    if (layer.key === "skills") {
+      nameCell.removeAttribute("title");
+      attachHoverPreview(nameCell, () => familyHoverBody(group));
+    }
     const caret = el("span", "mx-caret", expanded ? "▾" : "▸");
     nameCell.append(caret, el("span", "", group.root));
     nameCell.append(el("span", "mx-family-count", String(group.members.length)));
@@ -1047,315 +1134,6 @@ $("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
 });
 
-/* ---------------- models（原生模型配置） ---------------- */
-
-const HEALTH_ICONS = { ok: "✓", warn: "!", error: "✕", skipped: "-" };
-
-function renderModelHealth(health) {
-  const box = $("model-health");
-  if (!box) return;
-  box.classList.remove("hidden");
-  box.replaceChildren();
-  if (!health) {
-    box.classList.add("hidden");
-    return;
-  }
-  const head = el("div", "model-health-head",
-    health.ok ? "模型路由可用" : "模型路由不可用");
-  head.className = `model-health-head ${health.ok ? "ok" : "err"}`;
-  box.append(head);
-  const list = el("div", "model-health-list");
-  for (const item of health.checks || []) {
-    const row = el("div", `model-health-item ${item.status}`);
-    row.append(el("span", "model-health-icon", HEALTH_ICONS[item.status] || "-"));
-    const text = el("span", "model-health-text");
-    text.append(el("span", "model-health-label", item.label || item.id || "-"));
-    if (item.detail) text.append(el("span", "model-health-detail", item.detail));
-    row.append(text);
-    list.append(row);
-  }
-  box.append(list);
-}
-
-async function loadModelsView(force = false) {
-  if (!force && state.modelsLoaded) return;
-  const status = $("model-status");
-  status.textContent = "";
-  try {
-    const data = await invoke("halter_models");
-    const model = (data.models || {}).halter || "";
-    $("native-model-input").value = model;
-    const provider = model.includes("/") ? model.split("/")[0] : "";
-    const providerConfig = (data.providers || {})[provider] || {};
-    $("native-base-url-input").value = providerConfig.base_url || "";
-    $("native-api-key-env-input").value = providerConfig.api_key_env || "";
-    renderModelHealth(data.health);
-    state.modelsLoaded = true;
-  } catch (err) {
-    showError($("models-error"), err);
-  }
-}
-
-async function saveNativeModel() {
-  const errorBox = $("models-error");
-  const status = $("model-status");
-  errorBox.classList.add("hidden");
-  status.className = "model-status";
-  status.textContent = "保存中…";
-  const button = $("btn-save-native-model");
-  button.disabled = true;
-  try {
-    const model = $("native-model-input").value.trim();
-    const baseUrl = $("native-base-url-input").value.trim();
-    const apiKeyEnv = $("native-api-key-env-input").value.trim();
-    if (!model) throw new Error("默认模型不能为空");
-    await invoke("halter_model_configure", {
-      model,
-      baseUrl: baseUrl || null,
-      apiKeyEnv,
-    });
-    // AHP host caches config at startup. Stop our managed host so the next
-    // dispatch recreates it with the new provider routing.
-    try {
-      await invoke("halter_ahp_stop");
-    } catch (_err) {
-      // An externally managed host may refuse stop; surface a restart hint.
-    }
-    state.ahp = null;
-    state.dispatchLoaded = false;
-    state.modelsLoaded = false;
-    await loadModelsView(true);
-    status.className = "model-status ok";
-    status.textContent = "已保存。托管 AHP 将在下次派发时重启；外部手动 host 需要重启后生效。";
-  } catch (err) {
-    status.className = "model-status";
-    status.textContent = "";
-    showError(errorBox, err);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-$("btn-refresh-models").addEventListener("click", () => {
-  state.modelsLoaded = false;
-  loadModelsView(true);
-});
-$("btn-save-native-model").addEventListener("click", saveNativeModel);
-
-/* ---------------- audit（原生 Agent 审计） ---------------- */
-
-async function loadAuditView(force = false) {
-  const loading = $("audit-loading");
-  const content = $("audit-content");
-  const errorBox = $("audit-error");
-  errorBox.classList.add("hidden");
-  if (!force && state.auditLoaded) return;
-  loading.classList.remove("hidden");
-  content.classList.add("hidden");
-  try {
-    const data = await invoke("halter_audit_list", { limit: 100 });
-    state.auditItems = data.audits || [];
-    state.auditLoaded = true;
-    loading.classList.add("hidden");
-    renderAuditList();
-    content.classList.remove("hidden");
-  } catch (err) {
-    loading.classList.add("hidden");
-    showError(errorBox, err);
-  }
-}
-
-function auditKindTone(kind) {
-  if (kind === "turn.failed" || kind === "transaction.rollbackFailed") return "err";
-  if (kind === "approval.response" || kind === "transaction.rolledBack") return "approval";
-  if (kind === "tool.call" || kind === "tool.result") return "tool";
-  if (kind.startsWith("context.")) return "context";
-  return "";
-}
-
-function auditEventFilter() {
-  const text = $("audit-text-input")?.value.trim() || "";
-  const from = $("audit-from-input")?.value || "";
-  const to = $("audit-to-input")?.value || "";
-  return { text, from: from ? `${from}T00:00:00` : "", to: to ? `${to}T23:59:59` : "" };
-}
-
-function auditEventMatches(event, filter) {
-  const ts = String(event.ts || "");
-  if (filter.from && ts && ts < filter.from) return false;
-  if (filter.to && ts && ts > filter.to) return false;
-  if (filter.text) {
-    const haystack = JSON.stringify(event).toLowerCase();
-    const hit = filter.text.toLowerCase().split(/\s+/).every((term) => !term || haystack.includes(term));
-    if (!hit) return false;
-  }
-  return true;
-}
-
-function auditListFilterValue() {
-  return ($("audit-list-filter")?.value || "").trim().toLowerCase();
-}
-
-function renderAuditList() {
-  const list = $("audit-list");
-  list.replaceChildren();
-  if (!state.auditItems.length) {
-    const empty = el("div", "empty-state", "暂无原生 Agent 审计轨迹");
-    list.append(empty);
-    return;
-  }
-  const needle = auditListFilterValue();
-  const items = needle
-    ? state.auditItems.filter((item) =>
-        `${item.workspace || ""} ${item.provider || ""} ${item.title || ""} ${item.session_id || ""}`
-          .toLowerCase().includes(needle))
-    : state.auditItems;
-  if (!items.length) {
-    list.append(el("div", "empty-state", "没有匹配的审计会话"));
-    return;
-  }
-  for (const item of items) {
-    const row = el("div", "audit-item" + (state.selectedAudit?.session_id === item.session_id ? " selected" : ""));
-    const title = el("div", "audit-title", item.title || item.session_id);
-    const meta = el("div", "audit-meta");
-    meta.append(el("span", "tool-badge", item.provider || "native"));
-    meta.append(el("span", "meta-item", `${item.event_count} events`));
-    meta.append(el("span", "meta-item", fmtDate(item.last_event_at)));
-    const kindRow = el("div", "audit-kind-row");
-    const kinds = Object.entries(item.kinds || {}).slice(0, 6);
-    for (const [kind, count] of kinds) {
-      const chip = el("span", `audit-kind-chip ${auditKindTone(kind)}`, `${kind} ×${count}`);
-      chip.addEventListener("click", () => {
-        $("audit-kind-input").value = kind;
-        if (state.selectedAudit) selectAudit(state.selectedAudit);
-      });
-      kindRow.append(chip);
-    }
-    row.append(title, meta, kindRow);
-    row.addEventListener("click", () => selectAudit(item));
-    list.append(row);
-  }
-}
-
-async function selectAudit(item) {
-  state.selectedAudit = item;
-  renderAuditList();
-  const detail = $("audit-detail");
-  detail.className = "audit-detail";
-  detail.replaceChildren(el("div", "loading", "正在读取审计事件…"));
-  const kind = $("audit-kind-input").value.trim();
-  try {
-    const data = await invoke("halter_audit_show", {
-      sessionId: item.session_id,
-      kind: kind || null,
-      tail: 300,
-    });
-    renderAuditDetail(data);
-  } catch (err) {
-    detail.className = "audit-detail";
-    detail.replaceChildren();
-    const box = el("div", "error-box");
-    box.textContent = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
-    detail.append(box);
-  }
-}
-
-function renderAuditDetail(data) {
-  const detail = $("audit-detail");
-  detail.className = "audit-detail";
-  detail.replaceChildren();
-  const summary = data.summary || {};
-  const header = el("div", "detail-header");
-  header.append(el("h2", "detail-title", summary.title || summary.session_id || "Audit"));
-  const meta = el("div", "meta-grid");
-  const fields = [
-    ["Session", summary.session_id],
-    ["Provider", summary.provider],
-    ["Workspace", summary.workspace],
-    ["Events", `${data.returned_events || 0} / ${data.total_events || 0}`],
-    ["First", summary.first_event_at],
-    ["Last", summary.last_event_at],
-    ["Size", `${summary.size_bytes || 0} B`],
-  ];
-  for (const [label, value] of fields) {
-    const cell = el("div", "meta-cell");
-    cell.append(el("div", "meta-label", label));
-    cell.append(el("div", "meta-value", value || "-"));
-    meta.append(cell);
-  }
-  header.append(meta);
-  detail.append(header);
-
-  const events = el("div", "audit-events");
-  const filter = auditEventFilter();
-  const shown = (data.events || []).filter((event) => auditEventMatches(event, filter));
-  for (const event of shown) {
-    const item = el("div", `audit-event ${auditKindTone(event.kind)}`);
-    item.dataset.eventId = String(event.id ?? "");
-    const txnId = event.result && typeof event.result === "object"
-      ? String(event.result.transactionId ?? "")
-      : "";
-    if (txnId) item.dataset.transactionId = txnId;
-    const head = el("div", "audit-event-head");
-    head.append(el("span", "audit-event-kind", event.kind || "-"));
-    head.append(el("span", "audit-event-time", event.ts || "-"));
-    item.append(head);
-    const body = el("pre", "audit-event-body");
-    const payload = { ...event };
-    delete payload.ts;
-    delete payload.kind;
-    body.textContent = JSON.stringify(payload, null, 2);
-    item.append(body);
-    events.append(item);
-  }
-  detail.append(events);
-
-  // Plan-evidence deep link: highlight and scroll to the target event.
-  const jump = state.auditJump;
-  state.auditJump = null;
-  if (jump && jump.sessionId === summary.session_id) {
-    const matched = [...events.querySelectorAll(".audit-event")].filter((node) =>
-      node.dataset.eventId === jump.matchId || node.dataset.transactionId === jump.matchId);
-    matched.forEach((node) => node.classList.add("jump"));
-    if (matched.length) matched[0].scrollIntoView({ block: "center", behavior: "smooth" });
-  }
-}
-
-async function jumpToAuditEvidence(sessionId, matchId) {
-  if (!sessionId || !matchId) return;
-  state.auditJump = { sessionId, matchId: String(matchId) };
-  // 清空过滤条件，保证目标事件可见
-  $("audit-kind-input").value = "";
-  if ($("audit-text-input")) $("audit-text-input").value = "";
-  if ($("audit-from-input")) $("audit-from-input").value = "";
-  if ($("audit-to-input")) $("audit-to-input").value = "";
-  const nav = document.querySelector('.nav-item[data-view="audit"]');
-  if (nav && !nav.classList.contains("active")) nav.click();
-  await loadAuditView();
-  const item = (state.auditItems || []).find((x) => x.session_id === sessionId)
-    || { session_id: sessionId };
-  await selectAudit(item);
-}
-
-$("btn-refresh-audit").addEventListener("click", () => {
-  state.auditLoaded = false;
-  state.selectedAudit = null;
-  loadAuditView(true);
-});
-$("audit-kind-input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && state.selectedAudit) selectAudit(state.selectedAudit);
-});
-$("audit-text-input")?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && state.selectedAudit) selectAudit(state.selectedAudit);
-});
-$("audit-from-input")?.addEventListener("change", () => {
-  if (state.selectedAudit) selectAudit(state.selectedAudit);
-});
-$("audit-to-input")?.addEventListener("change", () => {
-  if (state.selectedAudit) selectAudit(state.selectedAudit);
-});
-$("audit-list-filter")?.addEventListener("input", () => renderAuditList());
-
 /* ---------------- dispatch（多 Harness 任务调度） ---------------- */
 
 const DISPATCH_RUNNERS = [
@@ -1363,7 +1141,6 @@ const DISPATCH_RUNNERS = [
   { key: "codex", label: "Codex", aliases: ["codex", "cx"] },
   { key: "zcode", label: "ZCode", aliases: ["zcode", "z"] },
   { key: "opencode", label: "OpenCode", aliases: ["opencode", "oc"] },
-  { key: "halter", label: "halter（原生 Agent）", aliases: ["halter", "h"] },
 ];
 
 function parseDispatchMentions(text) {
@@ -1503,11 +1280,11 @@ function updateDispatchHint() {
   const { targets, prompt } = dispatchTargets();
   if (!targets.length && !raw) {
     // 空输入：中性引导（不是警告）
-    hint.textContent = "用 @claude / @codex / @zcode / @opencode / @halter 选择执行者；@halter 是可审计的原生 Agent；默认只读，可开启逐 patch 写入";
+    hint.textContent = "用 @claude / @codex / @zcode / @opencode 选择执行者；指定模型如 @claude/opus";
     hint.className = "dispatch-mention-hint";
   } else if (!targets.length) {
     // 有内容但没识别到提及：提示可用项
-    hint.textContent = "未识别到 @harness，可用：@claude @codex @zcode @opencode @halter；指定模型如 @claude/opus";
+    hint.textContent = "未识别到 @harness，可用：@claude @codex @zcode @opencode；指定模型如 @claude/opus";
     hint.className = "dispatch-mention-hint none";
   } else {
     const labels = targets.map((t) => "@" + t.tool + (t.model ? "/" + t.model : ""));
@@ -1530,569 +1307,6 @@ function bindDispatchEvents() {
   $("btn-dispatch-send").addEventListener("click", sendDispatch);
   $("dispatch-harness-select").addEventListener("change", (e) => { onHarnessSelect(e.target.value); updateDispatchHint(); });
   $("dispatch-model-select").addEventListener("change", (e) => { onModelSelect(e.target.value); });
-}
-
-/* ---------- AHP 直连客户端 ---------- */
-
-let ahpConnecting = null;
-
-async function ensureAhp() {
-  if (state.ahp && state.ahp.ready) return state.ahp;
-  if (ahpConnecting) return ahpConnecting;
-  ahpConnecting = (async () => {
-    if (state.ahp && state.ahp.stop) {
-      try { state.ahp.stop(); } catch { /* listener already gone */ }
-      state.ahp = null;
-    }
-    const init = await invoke("halter_ahp_connect");
-    const fresh = {
-      ready: false,
-      agents: [],
-      sessions: [],
-      cards: new Map(),       // chatUri -> active output card
-      nativeChats: new Map(), // `${provider}:${project}` -> {sessionUri, chatUri}
-      stop: null,
-    };
-    // Rust 桥把 server->client 消息以 ahp-message 事件转发
-    fresh.stop = await tauriListen("ahp-message", (ev) => handleAhpData(fresh, ev.payload));
-    state.ahp = fresh;
-    const root = ((init.init || {}).snapshots || []).find((x) => x.resource === "ahp-root://");
-  fresh.agents = (root && root.state && root.state.agents) || [];
-  try {
-    const listed = await ahpRequest(fresh, "listSessions", {});
-    fresh.sessions = (listed && listed.items) || [];
-  } catch {
-    fresh.sessions = [];
-  }
-  fresh.ready = true;
-  return fresh;
-  })();
-  try {
-    return await ahpConnecting;
-  } finally {
-    ahpConnecting = null;
-  }
-}
-
-function ahpRequest(st, method, params) {
-  return invoke("halter_ahp_rpc", { method, params });
-}
-
-function ahpNotify(st, method, params) {
-  return invoke("halter_ahp_notify", { method, params });
-}
-
-function handleAhpData(st, data) {
-  let msg;
-  try { msg = JSON.parse(data); } catch { return; }
-  if (msg.method === "action") ahpApplyAction(st, msg.params);
-}
-
-function updateApprovalHistory(entry, record) {
-  if (!entry.approvalHistory) entry.approvalHistory = [];
-  const existing = entry.approvalHistory.find((item) => item.id === record.id);
-  if (existing) Object.assign(existing, record);
-  else entry.approvalHistory.push(record);
-  if (!entry.approvalPanel) {
-    entry.approvalPanel = el("section", "dispatch-approval-history");
-    entry.root.insertBefore(entry.approvalPanel, entry.output);
-  }
-  entry.approvalPanel.replaceChildren(
-    el("div", "dispatch-approval-history-title", `审批历史（${entry.approvalHistory.length}）`)
-  );
-  const list = el("div", "dispatch-approval-history-list");
-  for (const item of entry.approvalHistory) {
-    const row = el("div", `dispatch-approval-history-item ${item.status || "pending"}`);
-    const marker = el("span", "dispatch-approval-history-marker", {
-      pending: "…", approved: "✓", denied: "×",
-    }[item.status] || "…");
-    const body = el("div", "dispatch-approval-history-body");
-    body.append(el("div", "dispatch-approval-history-tool", item.tool || "-"));
-    if (item.summary) body.append(el("div", "dispatch-approval-history-summary", item.summary));
-    if (item.decidedAt) body.append(el("div", "dispatch-approval-history-time", new Date(item.decidedAt).toLocaleString()));
-    row.append(marker, body);
-    list.append(row);
-  }
-  entry.approvalPanel.append(list);
-}
-
-function planEvidenceBadge(evidence) {
-  if (!evidence) return "";
-  const tools = (evidence.toolCallIds || []).length;
-  const approvals = (evidence.approvalIds || []).length;
-  const txns = (evidence.transactionIds || []).length;
-  if (!tools && !approvals && !txns) return "";
-  return `证据 ${tools + approvals + txns}（工具 ${tools} / 审批 ${approvals} / 事务 ${txns}）`;
-}
-
-function renderPlanEvidenceItem(entry, kind, item) {
-  const row = el("div", "dispatch-plan-evidence-item");
-  const kindLabel = { tool: "工具", approval: "审批", txn: "事务" }[kind] || kind;
-  row.append(el("span", `dispatch-plan-evidence-kind ${kind}`, kindLabel));
-  const label = kind === "tool"
-    ? `${item.name || "-"} · ${item.id || "-"}`
-    : kind === "approval"
-      ? `${item.tool || "-"} · ${item.approved === true ? "已批准" : item.approved === false ? "已拒绝" : "待审批"}`
-      : (item.id || "-");
-  row.append(el("span", "dispatch-plan-evidence-label", label));
-  if (item.ts) row.append(el("span", "dispatch-plan-evidence-time", new Date(item.ts).toLocaleTimeString()));
-  const link = el("button", "dispatch-plan-evidence-link", "审计");
-  link.type = "button";
-  link.addEventListener("click", () => jumpToAuditEvidence(entry.auditSessionId, item.id));
-  row.append(link);
-  return row;
-}
-
-function renderDispatchPlan(entry, plan) {
-  if (!entry.plan) return;
-  if (plan) entry.currentPlan = plan;
-  entry.plan.replaceChildren();
-  const current = entry.currentPlan;
-  if (!current || !(current.steps || []).length) {
-    entry.plan.classList.add("empty");
-    entry.plan.append(el("div", "dispatch-plan-empty", "尚无结构化计划"));
-    return;
-  }
-  entry.plan.classList.remove("empty");
-  if (current.note) entry.plan.append(el("div", "dispatch-plan-note", current.note));
-  const list = el("div", "dispatch-plan-list");
-  for (const step of current.steps) {
-    const evidence = (entry.planEvidence || {})[step.id];
-    const badge = planEvidenceBadge(evidence);
-    const item = el("div", `dispatch-plan-item ${step.status || "pending"}`);
-    item.append(el("span", "dispatch-plan-marker", {
-      pending: "○", in_progress: "◐", done: "●", blocked: "✕",
-    }[step.status] || "○"));
-    const body = el("div", "dispatch-plan-body");
-    body.append(el("div", "dispatch-plan-title", step.title || "-"));
-    if (step.detail) body.append(el("div", "dispatch-plan-detail", step.detail));
-    if (badge) {
-      const expanded = entry.expandedSteps?.has(step.id) || false;
-      const toggle = el("button", `dispatch-plan-evidence-toggle${expanded ? " open" : ""}`, `${expanded ? "▾" : "▸"} ${badge}`);
-      toggle.type = "button";
-      toggle.addEventListener("click", () => {
-        if (!entry.expandedSteps) entry.expandedSteps = new Set();
-        if (entry.expandedSteps.has(step.id)) entry.expandedSteps.delete(step.id);
-        else entry.expandedSteps.add(step.id);
-        renderDispatchPlan(entry);
-      });
-      body.append(toggle);
-      if (expanded) {
-        const evidenceList = el("div", "dispatch-plan-evidence-list");
-        for (const tool of evidence.toolCallIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "tool", tool));
-        for (const approval of evidence.approvalIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "approval", approval));
-        for (const txn of evidence.transactionIds || []) evidenceList.append(renderPlanEvidenceItem(entry, "txn", txn));
-        body.append(evidenceList);
-      }
-    }
-    item.append(body);
-    list.append(item);
-  }
-  entry.plan.append(list);
-}
-
-const COMPARISON_LABELS = {
-  identical: "一致",
-  conflicting: "冲突",
-  semantic_equivalent: "仅空白差异",
-  overlapping: "不同区域",
-  unique: "独有",
-};
-
-function hunkHeaderOf(line) {
-  const m = /^(@@ [^@]*@@)/.exec(line);
-  return m ? m[1] : line;
-}
-
-function renderDelegateDiff(diffText, conflictHeaders) {
-  if (!conflictHeaders || !conflictHeaders.size) {
-    return el("pre", "dispatch-compare-diff", diffText);
-  }
-  // 冲突 hunk 高亮需要行级 DOM；非冲突保持 <pre> 紧凑展示。
-  const box = el("div", "dispatch-compare-diff line-mode");
-  let inConflict = false;
-  for (const line of diffText.split("\n")) {
-    if (line.startsWith("@@ ")) inConflict = conflictHeaders.has(hunkHeaderOf(line));
-    const row = el("div", "diff-line" + (inConflict ? " conflict" : ""));
-    row.textContent = line;
-    box.append(row);
-  }
-  return box;
-}
-
-function appendDelegateComparisonReport(panel, comparison) {
-  const report = el("div", "dispatch-compare-report");
-  if (comparison.strategy) {
-    report.append(el("div", "dispatch-compare-strategy", comparison.strategy));
-  }
-  const chips = el("div", "dispatch-compare-files");
-  for (const file of comparison.files || []) {
-    const label = `${file.path} · ${COMPARISON_LABELS[file.classification] || file.classification}`
-      + ((file.providers || []).length > 1 ? `（${file.providers.join("/")}）` : "");
-    chips.append(el("span", `dispatch-compare-class ${file.classification}`, label));
-  }
-  report.append(chips);
-  panel.append(report);
-}
-
-function updateDelegateComparison(entry, part, result) {
-  const args = part.arguments || {};
-  const payload = part.result || {};
-  const provider = payload.provider || args.provider || "delegate";
-  const id = part.id || "";
-  let panel = entry.compareGrid?.querySelector(`[data-compare-id="${CSS.escape(id)}"]`);
-  if (!entry.compareGrid) {
-    entry.compare = el("section", "dispatch-compare");
-    const title = el("div", "dispatch-compare-title", "多 Harness 结果对比");
-    entry.compareGrid = el("div", "dispatch-compare-grid");
-    entry.compare.append(title, entry.compareGrid);
-    entry.root.insertBefore(entry.compare, entry.output);
-  }
-  if (!panel) {
-    panel = el("article", "dispatch-compare-panel running");
-    panel.dataset.compareId = id;
-    entry.compareGrid.append(panel);
-  }
-  panel.className = `dispatch-compare-panel ${result ? (part.ok ? "ok" : "err") : "running"}`;
-  panel.replaceChildren();
-  const head = el("div", "dispatch-compare-head");
-  head.append(el("span", "dispatch-compare-provider", provider));
-  head.append(el("span", "dispatch-compare-state", result
-    ? (part.ok ? `exit ${payload.exitCode ?? "-"}` : "失败")
-    : "运行中"));
-  panel.append(head);
-
-  const comparison = payload.comparison || null;
-  if (comparison) appendDelegateComparisonReport(panel, comparison);
-
-  const conflictHeaders = new Set();
-  for (const conflict of (comparison && comparison.conflicts) || []) {
-    const header = conflict.hunks && conflict.hunks[provider];
-    if (header) conflictHeaders.add(header);
-  }
-  const diff = String(payload.diff || "").trim();
-  panel.append(diff
-    ? renderDelegateDiff(diff, conflictHeaders)
-    : el("pre", "dispatch-compare-diff", result
-      ? "（该子代理没有产生 diff）"
-      : "（等待 sandbox 结果…）"));
-  if (result) {
-    const output = el("pre", "dispatch-compare-output", String(payload.stdout || payload.stderr || "").slice(0, 8000));
-    panel.append(output);
-    const snapshot = payload.snapshot || {};
-    if (snapshot.untrackedCopied || snapshot.untrackedSkipped) {
-      panel.append(el("div", "dispatch-compare-meta",
-        `untracked: ${snapshot.untrackedCopied?.length || 0} copied / ${snapshot.untrackedSkipped?.length || 0} skipped`));
-    }
-  }
-}
-
-function updateDispatchToolEvent(entry, part, result) {
-  let node = entry.events.querySelector(`[data-call-id="${CSS.escape(part.id || "")}"]`);
-  if (!node) {
-    node = el("div", "dispatch-event running");
-    node.dataset.callId = part.id || "";
-    entry.events.append(node);
-  }
-  node.className = `dispatch-event ${result ? (part.ok ? "ok" : "err") : "running"}`;
-  node.replaceChildren();
-  const title = el("div", "dispatch-event-title");
-  const badge = el("span", `dispatch-event-dot ${result ? (part.ok ? "ok" : "err") : "run"}`, result ? (part.ok ? "✓" : "×") : "…");
-  const name = el("span", "dispatch-event-name", part.name || "-");
-  title.append(badge, name);
-  node.append(title);
-  const detail = el("pre", "dispatch-event-detail");
-  detail.textContent = result
-    ? JSON.stringify(part.result || {}, null, 2).slice(0, 12000)
-    : JSON.stringify(part.arguments || {}, null, 2);
-  node.append(detail);
-  if (result && (part.name === "run_tests" || part.name === "run_tests_workspace")) {
-    const real = part.result && part.result.scope === "workspace";
-    node.append(el("div", `dispatch-event-scope ${real ? "ws" : "sb"}`,
-      real ? "执行环境:真实 workspace(二次审批后)" : "执行环境:一次性 sandbox 克隆"));
-  }
-  if (part.name === "delegate_harness") {
-    updateDelegateComparison(entry, part, result);
-  }
-  if (result && part.name === "apply_patch" && part.ok && part.result && part.result.transactionId) {
-    const transactionId = part.result.transactionId;
-    const rollback = el("button", "btn danger dispatch-event-rollback", "回滚此变更");
-    rollback.type = "button";
-    rollback.dataset.transactionId = transactionId;
-    rollback.addEventListener("click", () => {
-      rollback.disabled = true;
-      rollback.textContent = "回滚中…";
-      ahpNotify(null, "dispatchAction", {
-        channel: entry.channel,
-        clientSeq: Date.now(),
-        action: { type: "halter/rollbackRequest", transactionId },
-      }).catch((err) => {
-        rollback.disabled = false;
-        rollback.textContent = "重试回滚";
-        detail.textContent += `\n[rollback failed] ${err && err.message ? err.message : String(err)}`;
-      });
-    });
-    node.append(rollback);
-  }
-  entry.events.scrollTop = entry.events.scrollHeight;
-}
-
-function ahpApplyAction(st, params) {
-  const entry = st.cards.get(params.channel);
-  if (!entry) return;
-  const a = params.action || {};
-  if (a.type === "chat/delta") {
-    entry.output.textContent += a.content || "";
-    entry.output.classList.add("streaming");
-    entry.output.scrollTop = entry.output.scrollHeight;
-  } else if (a.type === "chat/turnComplete") {
-    ahpFinishCard(entry, "done");
-  } else if (a.type === "halter/planChanged") {
-    renderDispatchPlan(entry, a.plan || {});
-  } else if (a.type === "halter/planEvidence") {
-    entry.planEvidence = a.evidence || {};
-    renderDispatchPlan(entry);
-  } else if (a.type === "halter/approvalRequest") {
-    const approval = a.approval || {};
-    updateApprovalHistory(entry, {
-      id: approval.id,
-      tool: approval.tool,
-      summary: approval.summary,
-      status: "pending",
-    });
-    const box = el("div", "dispatch-approval");
-    const title = el("div", "dispatch-approval-title",
-      `等待写入审批：${approval.summary || approval.tool || "apply_patch"}`);
-    const rawInput = approval.input || {};
-    const inputText = rawInput.patch !== undefined
-      ? String(rawInput.patch)
-      : JSON.stringify(rawInput, null, 2);
-    const patch = el("pre", "dispatch-approval-patch", inputText);
-    const actions = el("div", "dispatch-approval-actions");
-    const approve = el("button", "btn", "批准应用");
-    const deny = el("button", "btn danger", "拒绝");
-    const respond = (approved) => {
-      [approve, deny].forEach((btn) => { btn.disabled = true; });
-      approve.textContent = approved ? "已批准" : "已拒绝";
-      deny.textContent = approved ? "已批准" : "已拒绝";
-      ahpNotify(null, "dispatchAction", {
-        channel: params.channel,
-        clientSeq: Date.now(),
-        action: {
-          type: "halter/approvalResponse",
-          approvalId: approval.id,
-          approved,
-        },
-      }).catch((err) => {
-        [approve, deny].forEach((btn) => { btn.disabled = false; });
-        approve.textContent = "重试批准";
-        deny.textContent = "重试拒绝";
-        entry.output.textContent += `\n[approval failed] ${err && err.message ? err.message : String(err)}\n`;
-      });
-    };
-    approve.addEventListener("click", () => respond(true));
-    deny.addEventListener("click", () => respond(false));
-    actions.append(approve, deny);
-    box.dataset.approvalId = approval.id || "";
-    box.append(title, patch, actions);
-    entry.root.append(box);
-    box.scrollIntoView({ block: "nearest" });
-  } else if (a.type === "halter/approvalResult") {
-    updateApprovalHistory(entry, {
-      id: a.approvalId,
-      status: a.approved ? "approved" : "denied",
-      decidedAt: new Date().toISOString(),
-    });
-    entry.root.querySelectorAll(".dispatch-approval").forEach((box) => {
-      if (box.dataset.approvalId !== a.approvalId) return;
-      const buttons = box.querySelectorAll("button");
-      buttons.forEach((btn) => { btn.disabled = true; });
-      if (buttons[0]) buttons[0].textContent = a.approved ? "已批准" : "已拒绝";
-      if (buttons[1]) buttons[1].textContent = a.approved ? "已批准" : "已拒绝";
-      box.classList.add(a.approved ? "approved" : "denied");
-    });
-  } else if (a.type === "halter/rollbackResult") {
-    entry.events.querySelectorAll(".dispatch-event-rollback").forEach((btn) => {
-      if (btn.dataset.transactionId !== a.transactionId) return;
-      btn.disabled = true;
-      btn.textContent = a.ok ? "已回滚" : "回滚失败";
-      btn.classList.add(a.ok ? "ok" : "err");
-    });
-  } else if (a.type === "halter/toolCall") {
-    updateDispatchToolEvent(entry, a.part || {}, false);
-  } else if (a.type === "halter/toolResult") {
-    updateDispatchToolEvent(entry, a.part || {}, true);
-  } else if (a.type === "chat/error") {
-    const err = a.part && a.part.error ? `${a.part.error.errorType}: ${a.part.error.message}\n` : "unknown error\n";
-    entry.output.textContent += err;
-    ahpFinishCard(entry, "failed");
-  }
-}
-
-function ahpFinishCard(entry, status) {
-  if (state.ahp) state.ahp.cards.delete(entry.channel);
-  entry.status.replaceWith(dispatchStatusBadge(status));
-  entry.output.classList.remove("streaming");
-  entry.root.classList.add("finished");
-  entry.root.querySelectorAll(".dispatch-cancel-btn").forEach((btn) => {
-    btn.disabled = true;
-    btn.textContent = status === "done" ? "已完成" : "已结束";
-  });
-}
-
-function addAhpCancelButton(entry, chatUri) {
-  const button = el("button", "btn danger dispatch-cancel-btn", "取消");
-  button.type = "button";
-  button.addEventListener("click", () => {
-    button.disabled = true;
-    button.textContent = "取消中…";
-    ahpNotify(null, "dispatchAction", {
-      channel: chatUri,
-      clientSeq: Date.now(),
-      action: { type: "chat/turnCancelled" },
-    }).catch((err) => {
-      button.disabled = false;
-      button.textContent = "重试取消";
-      entry.output.textContent += `\n[cancel failed] ${err && err.message ? err.message : String(err)}\n`;
-    });
-  });
-  entry.root.querySelector(".dispatch-card-head")?.append(button);
-}
-
-function uuidAhp(kind) {
-  const id = (window.crypto && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `ahp-${kind}:/${id}`;
-}
-
-async function restoreNativeChat(st, project) {
-  const projectUri = project.startsWith("/") ? "file://" + project : project;
-  const session = (st.sessions || []).find((s) =>
-    s.provider === "halter" &&
-    (s.workingDirectories || []).some((dir) => dir === projectUri)
-  );
-  if (!session) return undefined;
-  try {
-    const subscribed = await ahpRequest(st, "subscribe", { channel: session.resource });
-    const state = ((subscribed.snapshot || {}).state || {});
-    const chatUri = state.defaultChat ||
-      (state.chats && state.chats[0] && state.chats[0].resource);
-    if (!chatUri) return undefined;
-    const chatSubscription = await ahpRequest(st, "subscribe", { channel: chatUri });
-    const chatState = ((chatSubscription.snapshot || {}).state || {});
-    return {
-      sessionUri: session.resource,
-      chatUri,
-      restored: true,
-      currentPlan: chatState.currentPlan || null,
-      approvalHistory: chatState.approvalHistory || [],
-      planEvidence: chatState.planEvidence || {},
-      auditSessionId: chatState.auditSessionId || null,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-async function dispatchViaAhp(targets, prompt, project, mode) {
-  const st = await ensureAhp();
-  // 先建好聚合容器再启动并发任务：map 回调里的 results.push 发生在
-  // await 让出之后，若 const 声明在 allSettled 之后会命中 TDZ。
-  const results = [];
-  const failures = [];
-  const outcomes = await Promise.allSettled(targets.map(async (t) => {
-    const provider = t.tool;
-    const model = t.model || state.dispatchModels[provider] || undefined;
-    const writeEnabled = !!($("dispatch-write") && $("dispatch-write").checked);
-    const effectiveMode = provider === "halter" && writeEnabled ? "workspace-write" : mode;
-    const chatKey = `${provider}:${project}`;
-    // Native conversations keep model/tool history in the AHP host, so reuse
-    // the chat for follow-up turns. External CLIs are still one-shot processes.
-    let channels = provider === "halter" ? st.nativeChats.get(chatKey) : undefined;
-    if (!channels && provider === "halter") {
-      channels = await restoreNativeChat(st, project);
-    }
-    if (!channels) {
-      const sessionUri = uuidAhp("session");
-      const chatUri = uuidAhp("chat");
-      await ahpRequest(st, "createSession", {
-        channel: sessionUri,
-        provider,
-        workingDirectories: [project.startsWith("/") ? "file://" + project : project],
-      });
-      await ahpRequest(st, "createChat", { channel: sessionUri, chat: chatUri });
-      const subscribed = await ahpRequest(st, "subscribe", { channel: chatUri });
-      channels = {
-        sessionUri, chatUri,
-        auditSessionId: ((subscribed.snapshot || {}).state || {}).auditSessionId || null,
-      };
-      if (provider === "halter") st.nativeChats.set(chatKey, channels);
-    }
-    const { chatUri } = channels;
-
-    const card = makeDispatchCard({
-      tool: provider, model, prompt, project, mode: effectiveMode,
-    });
-    card.channel = chatUri;
-    card.auditSessionId = channels.auditSessionId || null;
-    card.planEvidence = channels.planEvidence || {};
-    if (channels.currentPlan) renderDispatchPlan(card, channels.currentPlan);
-    for (const record of channels.approvalHistory || []) updateApprovalHistory(card, record);
-    st.cards.set(chatUri, card);
-    addAhpCancelButton(card, chatUri);
-    results.push(card);
-
-    await ahpNotify(st, "dispatchAction", {
-      channel: chatUri, clientSeq: 1,
-      action: {
-        type: "chat/turnStarted",
-        turnId: `t-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`,
-        startedAt: new Date().toISOString(),
-        message: {
-          text: prompt,
-          origin: { kind: "user" },
-          ...(model && model !== "default" ? { model: { id: model } } : {}),
-          halter: { mode: effectiveMode },
-        },
-      },
-    });
-    return card;
-  }));
-  outcomes.forEach((outcome, index) => {
-    if (outcome.status === "fulfilled") results.push(outcome.value);
-    else failures.push(`@${targets[index].tool}: ${errorDetail(outcome.reason)}`);
-  });
-  if (failures.length) {
-    const error = new Error(`AHP 派发部分失败（不会自动重发已成功的目标）：\n${failures.join("\n")}`);
-    error.anySucceeded = results.length > 0;
-    throw error;
-  }
-  return results;
-}
-
-function makeDispatchCard({ tool, model, prompt, project, mode }) {
-  const list = $("dispatch-tasks");
-  const root = el("div", "dispatch-card");
-  const head = el("div", "dispatch-card-head");
-  const badge = el("span", "dispatch-tool-badge");
-  badge.style.setProperty("--c", toolColor(tool));
-  badge.textContent = "@" + tool;
-  const title = el("span", "dispatch-prompt", prompt);
-  const status = dispatchStatusBadge("running");
-  head.append(badge, title, status);
-  if (model) head.append(el("span", "dispatch-model-tag", model));
-  if (mode === "yolo") head.append(el("span", "dispatch-yolo-tag", "yolo"));
-  if (mode === "workspace-write") head.append(el("span", "dispatch-yolo-tag", "write"));
-  const meta = el("div", "dispatch-card-meta");
-  meta.append(el("span", "", shortenPath(project)));
-  meta.append(el("span", "", new Date().toISOString()));
-  const plan = el("div", "dispatch-plan empty");
-  const output = el("pre", "dispatch-output", "");
-  const events = el("div", "dispatch-events");
-  root.append(head, meta, plan, output, events);
-  list.prepend(root);
-  return { root, output, events, plan, status };
 }
 
 let dispatchBusy = false;
@@ -2121,29 +1335,6 @@ async function sendDispatch() {
   btn.textContent = "派发中…";
 
   try {
-    let dispatched = false;
-    try {
-      await dispatchViaAhp(targets, prompt, project, mode);
-      dispatched = true;
-    } catch (ahpErr) {
-      if (targets.some((t) => t.tool === "halter") || dispatched || ahpErr?.anySucceeded) {
-        showError(errBox, ahpErr);
-        return;
-      }
-      const dbg = document.createElement("div");
-      dbg.className = "dispatch-mention-hint none";
-      dbg.textContent = "AHP 直连失败已回退: " + errorDetail(ahpErr);
-      $("dispatch-tasks").prepend(dbg);
-    }
-
-    if (dispatched) {
-      $("dispatch-input").value = "";
-      $("dispatch-harness-select").value = "";
-      renderDispatchSelectors();
-      updateDispatchHint();
-      return;
-    }
-
     const data = await invoke("halter_dispatch_run", { message, project, mode });
     $("dispatch-input").value = "";
     $("dispatch-harness-select").value = "";

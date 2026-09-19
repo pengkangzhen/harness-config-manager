@@ -19,22 +19,20 @@ def _config_path() -> Path:
 
 @dataclass
 class HalterConfig:
-    library: str | None = None            # skills 事实源，None 走三层回退
+    library: str | None = None            # skills 事实源，None 默认 ~/.agents/skills
     exclude_skills: list[str] = field(default_factory=list)
     exclude_mcp: list[str] = field(default_factory=list)
     exclude_hooks: list[str] = field(default_factory=list)   # hooks 清单按 id 排除
-    agents_library: str | None = None     # subagents 事实源，None 走三层回退
+    agents_library: str | None = None     # subagents 事实源，None 默认 ~/.agents/agents
     exclude_agents: list[str] = field(default_factory=list)
     # 每个 harness 的默认模型（@harness/model 内联指定优先于此）
     models: dict[str, str] = field(default_factory=dict)
     # 每个 harness 的可选模型列表（下拉选择用；缺省用内置 GLM 系列表）
     model_catalog: dict[str, list[str]] = field(default_factory=dict)
     # OpenAI-compatible 模型端点；真实 key 仍只存环境变量 / secrets，不入 config
-    model_providers: dict[str, dict[str, str]] = field(default_factory=dict)
     # 原生 Agent 的 MCP 桥接 allowlist（键 read/write -> mcp_<server>_<tool> 名）。
     # read 缺省 = 允许全部 declared read-only 工具；write 缺省/空 = 禁止全部
     # state-changing 工具（必须逐工具显式开启）。
-    native_mcp: dict[str, list[str]] = field(default_factory=dict)
 
 
 def load_config(path: Path | None = None) -> HalterConfig:
@@ -55,17 +53,6 @@ def load_config(path: Path | None = None) -> HalterConfig:
         model_catalog={
             str(k): [str(x) for x in list(v)]
             for k, v in dict(doc.get("model_catalog", {})).items()
-        },
-        model_providers={
-            str(k): {
-                str(field): str(value)
-                for field, value in dict(v).items()
-            }
-            for k, v in dict(doc.get("model_providers", {})).items()
-        },
-        native_mcp={
-            str(scope): [str(x) for x in list(v)]
-            for scope, v in dict(dict(doc.get("native_agent", {})).get("mcp", {})).items()
         },
     )
 
@@ -101,7 +88,6 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
     table_fields = {
         "models": cfg.models,
         "model_catalog": cfg.model_catalog,
-        "model_providers": cfg.model_providers,
     }
     for key, values in table_fields.items():
         if not values:
@@ -112,14 +98,5 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
             table[name] = values[name]
         doc[key] = table
 
-    if cfg.native_mcp:
-        agent_table = tomlkit.table()
-        mcp_table = tomlkit.table()
-        for scope in sorted(cfg.native_mcp):
-            mcp_table[scope] = list(cfg.native_mcp[scope])
-        agent_table["mcp"] = mcp_table
-        doc["native_agent"] = agent_table
-    else:
-        doc.pop("native_agent", None)
 
     atomic_write_text(path, tomlkit.dumps(doc))

@@ -1,5 +1,5 @@
 // Playwright 静态 UI 测试：不起 Tauri，直接加载 desktop/ui/index.html，
-// 以 window.__TAURI__ mock 驱动全部桥命令与 ahp-message 事件。
+// 以 window.__TAURI__ mock 驱动桥命令。
 const { defineConfig } = require("@playwright/test");
 
 module.exports = defineConfig({

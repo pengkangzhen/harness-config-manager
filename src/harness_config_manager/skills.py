@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import filecmp
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,17 +15,53 @@ from .model import SkillInfo, ToolReport
 from .registry import BY_KEY, expand
 
 # ---------------------------------------------------------------------------
-# 事实源解析（三层回退：显式配置 > ~/.agents/skills > halter 自管库）
+# 事实源解析：显式配置 > ~/.agents/skills（统一默认；发现旧自管库时一次性迁移）
+
+
+def _retarget_library_symlinks(old: Path, new: Path, dirs_attr: str) -> None:
+    """库迁移后，把各工具目录里指向旧库的 symlink 重新指向新库等价路径。"""
+    for spec in BY_KEY.values():
+        for pattern in getattr(spec, dirs_attr) or ():
+            root = expand(pattern)
+            if not root.is_dir():
+                continue
+            for child in root.iterdir():
+                if not child.is_symlink():
+                    continue
+                try:
+                    dest = Path(os.readlink(child))
+                    resolved = Path(os.path.normpath(dest if dest.is_absolute() else child.parent / dest))
+                    inside = resolved == old or old in resolved.parents
+                except (OSError, ValueError):
+                    continue
+                if inside:
+                    child.unlink()
+                    child.symlink_to(new / resolved.relative_to(old))
+
+
+def migrate_legacy_library(legacy: Path, target: Path, dirs_attr: str = "skills_dirs") -> bool:
+    """把历史自管库 ~/.config/halter/library/* 迁到 ~/.agents/*（best-effort）。
+
+    仅当 target 不存在且 legacy 存在时执行 rename；随后重定向各工具目录里
+    指向旧库的 symlink。任何 OSError 均静默放弃迁移，由调用方继续用新路径。
+    """
+    try:
+        if not legacy.is_dir() or target.exists():
+            return False
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
+        _retarget_library_symlinks(legacy, target, dirs_attr)
+        return True
+    except OSError:
+        return False
 
 
 def resolve_library(cfg: HalterConfig, create: bool = False) -> Path:
     if cfg.library:
         lib = Path(cfg.library).expanduser()
     else:
-        candidate = expand(".agents/skills")
-        if candidate.is_dir():
-            return candidate
-        lib = expand(".config/halter/library/skills")
+        lib = expand(".agents/skills")
+        migrate_legacy_library(expand(".config/halter/library/skills"), lib, "skills_dirs")
     if create:
         lib.mkdir(parents=True, exist_ok=True)
     return lib
@@ -32,6 +69,38 @@ def resolve_library(cfg: HalterConfig, create: bool = False) -> Path:
 
 # ---------------------------------------------------------------------------
 # 扫描
+
+
+def _skill_description(skill_md: Path) -> str | None:
+    """从 SKILL.md frontmatter 提取 description（支持单行与 > / | 块标量，仅展示用）。"""
+    try:
+        lines = skill_md.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            return None
+        if not line.startswith("description:") and line.split(":", 1)[0].strip() != "description":
+            continue
+        inline = line.split(":", 1)[1].strip() if ":" in line else ""
+        if inline and inline not in (">", "|", ">-", "|-", ">+", "|+"):
+            return inline.strip("\"'") or None
+        # 块标量：收集后续缩进行
+        block: list[str] = []
+        for cont in lines[i + 1:]:
+            if cont.strip() == "---":
+                break
+            if cont.strip() == "":
+                block.append("")
+                continue
+            if not cont.startswith((" ", "\t")):
+                break
+            block.append(cont.strip())
+        text = " ".join(part for part in block if part)
+        return text.strip() or None
+    return None
 
 
 def scan_skills(spec) -> tuple[list[SkillInfo], list[str]]:
@@ -60,7 +129,8 @@ def scan_skills(spec) -> tuple[list[SkillInfo], list[str]]:
                 )
                 continue
             seen[child.name] = len(skills)
-            skills.append(SkillInfo(name=child.name, path=child, linked=child.is_symlink()))
+            skills.append(SkillInfo(name=child.name, path=child, linked=child.is_symlink(),
+                                    description=_skill_description(child / "SKILL.md")))
     return skills, notes
 
 

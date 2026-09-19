@@ -57,7 +57,6 @@ uv run pyinstaller \
     --distpath "$WORK/dist" \
     --workpath "$WORK/build" \
     --specpath "$WORK" \
-    --hidden-import websockets --hidden-import aiohttp \
     --copy-metadata harness-config-manager \
     desktop/pyinstaller_entry.py
 

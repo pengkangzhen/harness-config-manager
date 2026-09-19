@@ -74,17 +74,33 @@ def test_resolve_agents_library_fallbacks(fake_home: Path) -> None:
     # 1. 显式配置优先
     cfg = HalterConfig(agents_library="/tmp/explicit-agents")
     assert resolve_agents_library(cfg) == Path("/tmp/explicit-agents").expanduser()
-    # 2. ~/.agents/agents 存在则直接用（不 mkdir 自管库）
+    # 2. 缺省统一为 ~/.agents/agents（只解析不创建）
     shared = _mklib(fake_home, ["session-scribe"])
     assert resolve_agents_library(HalterConfig()) == shared
-    # 3. 均无 → halter 自管库；create=True 时创建（移除共享目录还原场景）
+
     import shutil as _shutil
 
     _shutil.rmtree(shared)
     empty_cfg = HalterConfig()
-    assert not resolve_agents_library(empty_cfg).exists()
-    created = resolve_agents_library(empty_cfg, create=True)
-    assert created.is_dir() and "library/agents" in str(created)
+    resolved = resolve_agents_library(empty_cfg)
+    assert resolved == fake_home / ".agents/agents" and not resolved.exists()
+    assert resolve_agents_library(empty_cfg, create=True).is_dir()
+
+
+def test_resolve_agents_library_migrates_legacy(fake_home: Path) -> None:
+    from harness_config_manager.config import HalterConfig
+
+    legacy = make_agent(fake_home / ".config/halter/library/agents", "scribe")
+    tool_dir = fake_home / ".claude/agents"
+    tool_dir.mkdir(parents=True)
+    link = tool_dir / "scribe.md"
+    link.symlink_to(legacy)
+
+    lib = resolve_agents_library(HalterConfig())
+    assert lib == fake_home / ".agents/agents"
+    assert (lib / "scribe.md").is_file()
+    assert not legacy.exists()
+    assert link.is_symlink() and link.resolve() == lib / "scribe.md"
 
 
 def test_scan_json_serialization(claude_agent_dir: Path) -> None:
