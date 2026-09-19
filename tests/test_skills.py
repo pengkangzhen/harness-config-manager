@@ -182,3 +182,19 @@ def test_sync_exclude(fake_home: Path) -> None:
     assert ("skip-excluded", "secret") in kinds
     assert ("link", "alpha") in kinds or ("replace", "alpha") in kinds
     assert not any(s == "secret" and k == "link" for k, s in kinds)
+
+
+def test_sync_never_targets_library_itself(fake_home: Path) -> None:
+    """库目录可能同时是某工具的发现路径（claude 的 .agents/skills）。
+
+    回归：分发目标等于库时必须跳过——否则库里真实目录会被替换成
+    指向自身的 symlink（find-skills/handoff 自循环事故）。
+    """
+    lib = _mklib(fake_home, ["alpha", "beta"])
+    # 模拟 claude 扫描 .agents/skills（即库本身）发现的非链接条目
+    reports = [ToolReport(tool="claude", display="Claude Code", installed=True, skills=[
+        SkillInfo(name="alpha", path=lib / "alpha"),
+    ])]
+    actions = plan_sync(lib, reports, [])
+    offending = [a for a in actions if a.path.parent.resolve() == lib.resolve()]
+    assert not offending, f"不得把库自身作为分发目标: {offending}"

@@ -253,7 +253,10 @@ def plan_sync(library: Path, reports: list[ToolReport], exclude: list[str]) -> l
                                           "仅此工具有，建议先 halter adopt（sync 自动收集）"))
         # 库 → 工具
         tool_entries = {s.name: s for s in r.skills}
+        lib_resolved = library.resolve()
         for skill_dir in sorted(seen):
+            if skill_dir.resolve() == lib_resolved:
+                continue  # 库目录本身不是分发目标（claude 的 .agents/skills 共享发现路径）
             for name, lib_path in lib_skills.items():
                 if name in exclude:
                     actions.append(SyncAction("skip-excluded", r.tool, name, skill_dir / name))
