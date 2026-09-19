@@ -158,6 +158,16 @@ exclude_agents = []              # 不分发的 subagent 名单
 uv run pytest               # 63 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
 
+## 在 DeepSeek Harness（dsh）中使用
+
+社区插件 **`dsh-halter`** 把本 CLI 接入 [DeepSeek Harness](https://www.deepseek.com/harness/en)：
+
+```bash
+dsh plugin --profile web add dsh-halter
+```
+
+插件注册 `halter_cli` 只读 agent 工具（scan / assess / sessions list·show·context·search），以及面向人类的 `/halter` 斜杠命令（完整 CLI）——写操作（`sync --apply`、`sessions install`、`run`）永远不会开放给模型。源码在 [`dsh-plugin/`](dsh-plugin/)；halter 本体需单独安装（`uv tool install harness-config-manager`）。
+
 ## 桌面 App（Tauri + halter sidecar）
 
 `desktop/` 内置一个 Tauri v2 桌面应用：

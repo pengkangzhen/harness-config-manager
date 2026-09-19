@@ -195,6 +195,16 @@ uv run pytest               # 63 tests, all against a fake $HOME — never touch
 
 MIT
 
+## Use inside DeepSeek Harness (dsh)
+
+A community plugin **`dsh-halter`** wraps this CLI for [DeepSeek Harness](https://www.deepseek.com/harness/en):
+
+```bash
+dsh plugin --profile web add dsh-halter
+```
+
+It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list·show·context·search), plus a `/halter` slash command exposing the full CLI to the human — mutating commands (`sync --apply`, `sessions install`, `run`) are never model-callable. Source lives in [`dsh-plugin/`](dsh-plugin/); halter itself must be installed separately (`uv tool install harness-config-manager`).
+
 ## Desktop App (Tauri + halter sidecar)
 
 `desktop/` ships a Tauri v2 desktop app:
