@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -45,9 +45,9 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: tauri build (bundle NSIS + MSI)
+      - name: tauri build (NSIS bundle)
         working-directory: desktop
-        run: npx tauri build
+        run: npx tauri build --bundles nsis
 
       - name: Collect portable build
         shell: bash
@@ -64,5 +64,25 @@ jobs:
           retention-days: 14
           path: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/msi/*.msi
             windows-portable/*
+
+      # WSL 侧 api.github.com 被墙而 SSH 通：把产物发布到 windows-build 分支，
+      # 本机用 git fetch --depth=1 origin windows-build 拉取。
+      - name: Publish dist branch (windows-build)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DIST="$(mktemp -d)"
+          cp desktop/src-tauri/target/release/bundle/nsis/*.exe "$DIST/"
+          cp -r windows-portable "$DIST/"
+          (
+            cd "$DIST"
+            git init -q -b windows-build
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -q -m "windows app build ${GITHUB_SHA}"
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push -q --force origin windows-build
+          )
