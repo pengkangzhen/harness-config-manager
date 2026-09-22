@@ -41,7 +41,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install harness-config-manager
+uv tool install git+https://github.com/pengkangzhen/harness-config-manager.git
 ```
 
 Or from source:
