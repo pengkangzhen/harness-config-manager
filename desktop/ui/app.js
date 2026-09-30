@@ -571,7 +571,8 @@ $("btn-refresh-matrix").addEventListener("click", () => loadMatrix(true));
 
 /* ---------------- 单元格点击同步：点一下圆点 = 该条目 → 该工具 ---------------- */
 
-let cellSyncBusy = false;
+// 单元格同步与全量同步共用一把锁，避免并发写
+let syncBusy = false;
 
 function attachCellSync(cell, tool, names, st) {
   if (st === "synced") return; // 已同步格无事可做
@@ -581,8 +582,8 @@ function attachCellSync(cell, tool, names, st) {
 }
 
 async function syncMatrixCell(cell, tool, names) {
-  if (cellSyncBusy) return;
-  cellSyncBusy = true;
+  if (syncBusy) return;
+  syncBusy = true;
   cell.classList.add("syncing");
   let result = null;
   let invokeErr = null;
@@ -596,7 +597,7 @@ async function syncMatrixCell(cell, tool, names) {
   } catch (err) {
     invokeErr = err;
   }
-  cellSyncBusy = false;
+  syncBusy = false;
   cell.classList.remove("syncing");
   if (invokeErr) {
     showMatrixToast(t("mx.syncFailed", { tool }), errorDetail(invokeErr), true);
@@ -1347,36 +1348,38 @@ $("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
 });
 
-/* ---------------- sync ---------------- */
+/* ---------------- 全量同步（原 Sync 面板并入矩阵工具栏） ---------------- */
 
-function selectedLayers() {
-  return Array.from(document.querySelectorAll(".layer-chip input:checked")).map((i) => i.value);
+function fullSyncLayers() {
+  // 六个矩阵层 + 可选 sessions（不在矩阵中，用工具栏开关控制）
+  const layers = MATRIX_LAYERS.map((l) => l.key);
+  if ($("matrix-include-sessions").checked) layers.push("sessions");
+  return layers;
 }
 
-let syncBusy = false;
-
-async function runSync(apply) {
+async function runFullSync(apply) {
   if (syncBusy) return;
   syncBusy = true;
-  const out = $("sync-output");
+  const out = $("matrix-sync-output");
   out.classList.remove("hidden");
-  out.textContent = apply ? t("sy.applying") : t("sy.planning");
-  $("btn-sync-preview").disabled = true;
-  $("btn-sync-apply").disabled = true;
+  out.textContent = apply ? t("mx.syncApplying") : t("mx.syncPlanning");
+  $("btn-matrix-preview").disabled = true;
+  $("btn-matrix-apply").disabled = true;
   try {
-    const result = await invoke("halter_sync", { apply, layers: selectedLayers() });
+    const result = await invoke("halter_sync", { apply, layers: fullSyncLayers() });
     const parts = [];
     parts.push(`exit code: ${result.code} (${result.ok ? "ok" : "failed"})`);
     if (result.stdout.trim()) parts.push("--- stdout ---\n" + result.stdout.trim());
     if (result.stderr.trim()) parts.push("--- stderr ---\n" + result.stderr.trim());
     out.textContent = parts.join("\n\n");
   } catch (err) {
-    out.textContent = t("sy.invokeFailed") + (typeof err === "string" ? err : JSON.stringify(err, null, 2));
+    out.textContent = t("mx.syncInvokeFailed") + (typeof err === "string" ? err : JSON.stringify(err, null, 2));
   } finally {
     syncBusy = false;
-    $("btn-sync-preview").disabled = false;
-    $("btn-sync-apply").disabled = false;
+    $("btn-matrix-preview").disabled = false;
+    $("btn-matrix-apply").disabled = false;
     disarmApply();
+    if (apply) await loadMatrix(true); // 全量写入后强制重扫，圆点状态更新
   }
 }
 
@@ -1386,26 +1389,26 @@ let applyTimer = null;
 function disarmApply() {
   applyArmed = false;
   clearTimeout(applyTimer);
-  const btn = $("btn-sync-apply");
+  const btn = $("btn-matrix-apply");
   btn.classList.remove("armed");
-  btn.textContent = t("sy.apply");
+  btn.textContent = t("mx.syncApply");
 }
 
-$("btn-sync-preview").addEventListener("click", () => {
+$("btn-matrix-preview").addEventListener("click", () => {
   disarmApply();
-  runSync(false);
+  runFullSync(false);
 });
 
-$("btn-sync-apply").addEventListener("click", () => {
-  const btn = $("btn-sync-apply");
+$("btn-matrix-apply").addEventListener("click", () => {
+  const btn = $("btn-matrix-apply");
   if (!applyArmed) {
     applyArmed = true;
     btn.classList.add("armed");
-    btn.textContent = t("sy.applyArmed");
+    btn.textContent = t("mx.applyArmed");
     applyTimer = setTimeout(disarmApply, 5000);
     return;
   }
-  runSync(true);
+  runFullSync(true);
 });
 
 /* ---------------- memory: 全局指令事实源（路径 + 打开 + 差异，只读） ---------------- */
@@ -1497,7 +1500,7 @@ $("lang-en").addEventListener("click", () => setLang("en"));
 // 静态文案由 i18n.js 的 applyI18n() 刷新；这里重渲染各视图的动态文案。
 // armed 的 Apply 按钮文案会被 applyI18n 覆盖，需按当前状态重设。
 document.addEventListener("halter:langchange", () => {
-  if (applyArmed) $("btn-sync-apply").textContent = t("sy.applyArmed");
+  if (applyArmed) $("btn-matrix-apply").textContent = t("mx.applyArmed");
   if (state.scanCache) {
     renderOverview(state.scanCache);
     renderMatrixLayerTabs();

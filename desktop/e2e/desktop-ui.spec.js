@@ -176,3 +176,36 @@ test("matrix 点击圆点单元格触发定向同步并刷新矩阵", async ({ p
   await expect(page.locator(".mx-cell.synced")).toHaveCount(2);
   await expect(page.locator(".mx-cell.missing")).toHaveCount(0);
 });
+
+test("matrix 工具栏全量同步：预览、sessions 开关与两步确认", async ({ page }) => {
+  await openApp(page, bootData());
+  await setHandler(page, "halter_sync", () => async (args) => {
+    (window.__fullSyncArgs = window.__fullSyncArgs || []).push(args);
+    return { ok: true, code: 0, stdout: "计划: link×1", stderr: "" };
+  });
+  await page.locator('.nav-item[data-view="matrix"]').click();
+
+  // 预览：dry-run，六个矩阵层 + sessions 全开
+  await page.locator("#btn-matrix-preview").click();
+  await expect(page.locator("#matrix-sync-output")).toContainText("计划: link×1");
+  let args = await page.evaluate(() => window.__fullSyncArgs[0]);
+  expect(args.apply).toBe(false);
+  expect(args.layers).toEqual(
+    ["skills", "agents", "memory", "mcp", "plugins", "hooks", "sessions"]);
+
+  // 关掉 sessions 开关后不再包含
+  await page.locator("#matrix-include-sessions").uncheck();
+  await page.locator("#btn-matrix-preview").click();
+  args = await page.evaluate(() => window.__fullSyncArgs[1]);
+  expect(args.layers).not.toContain("sessions");
+  await page.locator("#matrix-include-sessions").check();
+
+  // 全量同步：两步确认，第一次点击只武装不调用
+  await page.locator("#btn-matrix-apply").click();
+  await expect(page.locator("#btn-matrix-apply")).toContainText("再点一次");
+  expect(await page.evaluate(() => window.__fullSyncArgs.length)).toBe(2);
+  await page.locator("#btn-matrix-apply").click();
+  await expect(page.locator("#matrix-sync-output")).toContainText("exit code: 0");
+  args = await page.evaluate(() => window.__fullSyncArgs[2]);
+  expect(args.apply).toBe(true);
+});

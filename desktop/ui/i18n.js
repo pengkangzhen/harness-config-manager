@@ -11,7 +11,6 @@ const I18N = {
     "nav.overview": "总览",
     "nav.matrix": "矩阵",
     "nav.sessions": "会话",
-    "nav.sync": "同步",
     "nav.memory": "记忆",
 
     "mem.heading": "用户级记忆",
@@ -78,6 +77,13 @@ const I18N = {
     "mx.syncDone": "已同步 → {tool}",
     "mx.syncFailed": "同步失败（{tool}）",
     "mx.syncNoop": "无变更（内容与事实源一致，或冲突被跳过 — 详见输出）",
+    "mx.syncIncludeSessions": "含 sessions skill",
+    "mx.syncPreview": "预览全量计划",
+    "mx.syncApply": "全量同步",
+    "mx.applyArmed": "⚠ 再点一次确认写入",
+    "mx.syncPlanning": "正在生成 dry-run 计划…\n",
+    "mx.syncApplying": "正在执行 sync --apply（写入变更）…\n",
+    "mx.syncInvokeFailed": "调用失败：",
 
     "hv.noDesc": "（SKILL.md 未提供 description）",
     "hv.linked": "库链接",
@@ -151,15 +157,6 @@ const I18N = {
     "date.yesterday": "昨天",
     "date.weekday": "{date} · 周{w}",
 
-    "sy.heading": "同步",
-    "sy.note": "默认 dry-run：只生成计划、不写任何文件。Apply 才会实际执行（skills 覆盖前自动备份）。",
-    "sy.preview": "预览 dry-run",
-    "sy.apply": "Apply 实际执行",
-    "sy.applyArmed": "⚠ 再点一次确认写入",
-    "sy.applying": "正在执行 sync --apply（写入变更）…\n",
-    "sy.planning": "正在生成 dry-run 计划…\n",
-    "sy.invokeFailed": "调用失败：",
-
     "bt.unavailable": "halter 不可用",
     "bt.mismatch": "运行时版本 {version} 与桌面打包期望 {desktop} 不一致；release 不应携带旧 sidecar，请重新构建",
 
@@ -182,7 +179,6 @@ const I18N = {
     "nav.overview": "Overview",
     "nav.matrix": "Matrix",
     "nav.sessions": "Sessions",
-    "nav.sync": "Sync",
     "nav.memory": "Memory",
 
     "mem.heading": "Global memory",
@@ -249,6 +245,13 @@ const I18N = {
     "mx.syncDone": "Synced → {tool}",
     "mx.syncFailed": "Sync failed ({tool})",
     "mx.syncNoop": "No changes (identical to the library, or a conflict was skipped — see output)",
+    "mx.syncIncludeSessions": "incl. sessions skill",
+    "mx.syncPreview": "Preview full plan",
+    "mx.syncApply": "Sync all",
+    "mx.applyArmed": "⚠ Click again to confirm write",
+    "mx.syncPlanning": "Generating dry-run plan…\n",
+    "mx.syncApplying": "Running sync --apply (writing changes)…\n",
+    "mx.syncInvokeFailed": "Invoke failed: ",
 
     "hv.noDesc": "(no description in SKILL.md)",
     "hv.linked": "Library link",
@@ -321,15 +324,6 @@ const I18N = {
     "date.today": "Today",
     "date.yesterday": "Yesterday",
     "date.weekday": "{date} · {w}",
-
-    "sy.heading": "Sync",
-    "sy.note": "Dry-run by default: only a plan is generated, nothing is written. Apply executes for real (skills are backed up before overwrite).",
-    "sy.preview": "Preview dry-run",
-    "sy.apply": "Apply for real",
-    "sy.applyArmed": "⚠ Click again to confirm write",
-    "sy.applying": "Running sync --apply (writing changes)…\n",
-    "sy.planning": "Generating dry-run plan…\n",
-    "sy.invokeFailed": "Invoke failed: ",
 
     "bt.unavailable": "halter unavailable",
     "bt.mismatch": "Runtime version {version} differs from the packaged desktop expectation {desktop}; the release must not ship a stale sidecar — rebuild it.",

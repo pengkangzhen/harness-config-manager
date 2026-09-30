@@ -10,17 +10,13 @@
 
 ![总览](docs/images/app-overview.png)
 
-**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）。点一下任意未同步的圆点，即定向同步该条目到该工具（CLI 等价 `halter sync --tool <tool> --item <name> --apply`；家族聚合格一点同步整个家族）：
+**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）。点一下任意未同步的圆点，即定向同步该条目到该工具（CLI 等价 `halter sync --tool <tool> --item <name> --apply`；家族聚合格一点同步整个家族）。工具栏同时承载全量同步：预览 dry-run 计划，或两步确认后全量执行（sessions skill 层可开关）：
 
 ![配置矩阵](docs/images/app-matrix.png)
 
 **跨助手会话** —— 项目 / 助手 / 时间线三个维度统一筛选，支持内容搜索、脱敏 transcript 与一键生成交接上下文：
 
 ![会话浏览器](docs/images/app-sessions.png)
-
-**同步** —— 分层勾选、dry-run 预览计划，确认 Apply 才会实际写入：
-
-![同步预览](docs/images/app-sync.png)
 
 ## 安装
 

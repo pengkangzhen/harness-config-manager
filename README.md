@@ -32,17 +32,13 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 
 ![Overview](docs/images/app-overview-en.png)
 
-**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable). Click any not-yet-synced dot to sync just that entry to that tool (CLI equivalent: `halter sync --tool <tool> --item <name> --apply`; clicking a family row's dot syncs the whole family):
+**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable). Click any not-yet-synced dot to sync just that entry to that tool (CLI equivalent: `halter sync --tool <tool> --item <name> --apply`; clicking a family row's dot syncs the whole family). The toolbar also carries the full sync: preview the dry-run plan or apply everything (sessions-skill layer toggleable) with a two-step confirm:
 
 ![Config matrix](docs/images/app-matrix-en.png)
 
 **Cross-assistant sessions** — unified project / harness / timeline facets, full-text search, redacted transcripts, and one-click handoff generation:
 
 ![Session browser](docs/images/app-sessions-en.png)
-
-**Sync** — per-layer toggles with a dry-run plan preview; nothing is written until Apply:
-
-![Sync preview](docs/images/app-sync-en.png)
 
 ## Install
 

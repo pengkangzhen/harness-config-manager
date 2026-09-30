@@ -6,6 +6,8 @@ import { chromium } from "@playwright/test";
 const OUT_ZH = new URL("../../docs/images/app-sessions.png", import.meta.url).pathname;
 const OUT_EN = new URL("../../docs/images/app-sessions-en.png", import.meta.url).pathname;
 
+const PORT = process.env.SHOT_PORT || 4761;
+
 const browser = await chromium.launch({ headless: true, channel: "chromium-headless-shell" });
 // 1352×932 @2x：与仓库既有 README 截图规格一致
 const page = await browser.newPage({ viewport: { width: 1352, height: 932 }, deviceScaleFactor: 2 });
@@ -13,7 +15,7 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 
-await page.goto("http://127.0.0.1:4761/", { waitUntil: "domcontentloaded" });
+await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "domcontentloaded" });
 await page.waitForTimeout(500);
 await page.click('.nav-item[data-view="sessions"]');
 await page.waitForSelector("#sessions-list .session-item", { timeout: 20000 });

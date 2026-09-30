@@ -46,9 +46,6 @@
         <button class="nav-item" data-view="sessions">
           <span class="nav-icon">⌘</span> <span data-i18n="nav.sessions">会话</span>
         </button>
-        <button class="nav-item" data-view="sync">
-          <span class="nav-icon">⇄</span> <span data-i18n="nav.sync">同步</span>
-        </button>
         <button class="nav-item" data-view="memory">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2.5px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/></svg></span> <span data-i18n="nav.memory">记忆</span>
         </button>
@@ -90,9 +87,13 @@
           <div class="header-actions">
             <label class="gap-toggle"><input type="checkbox" id="matrix-harness-only" checked /> <span data-i18n="mx.harnessOnly">仅 AI Harness</span></label>
             <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> <span data-i18n="mx.gapsOnly">仅显示缺口</span></label>
+            <label class="gap-toggle"><input type="checkbox" id="matrix-include-sessions" checked /> <span data-i18n="mx.syncIncludeSessions">含 sessions skill</span></label>
+            <button id="btn-matrix-preview" class="btn" data-i18n="mx.syncPreview">预览全量计划</button>
+            <button id="btn-matrix-apply" class="btn danger" data-i18n="mx.syncApply">全量同步</button>
             <button id="btn-refresh-matrix" class="btn" data-i18n="mx.refresh">↻ 刷新</button>
           </div>
         </header>
+        <pre id="matrix-sync-output" class="sync-output hidden"></pre>
         <div id="matrix-error" class="error-box hidden"></div>
         <div id="matrix-loading" class="loading" data-i18n="mx.building">正在构建 Harness × 配置矩阵…</div>
         <div id="matrix-content" class="hidden">
@@ -163,32 +164,6 @@
               </div>
             </div>
           </div>
-        </div>
-      </section>
-
-      <!-- ============ Sync ============ -->
-      <section id="view-sync" class="view">
-        <header class="view-header">
-          <h1 data-i18n="sy.heading">同步</h1>
-        </header>
-        <div class="sync-panel">
-          <p class="sync-note" data-i18n="sy.note">
-            默认 dry-run：只生成计划、不写任何文件。Apply 才会实际执行（skills 覆盖前自动备份）。
-          </p>
-          <div class="layer-grid">
-            <label class="layer-chip"><input type="checkbox" value="skills" checked /><span>skills</span></label>
-            <label class="layer-chip"><input type="checkbox" value="mcp" checked /><span>MCP</span></label>
-            <label class="layer-chip"><input type="checkbox" value="plugins" checked /><span data-i18n="layer.plugins">插件</span></label>
-            <label class="layer-chip"><input type="checkbox" value="hooks" checked /><span>hooks</span></label>
-            <label class="layer-chip"><input type="checkbox" value="agents" checked /><span>subagents</span></label>
-            <label class="layer-chip"><input type="checkbox" value="memory" checked /><span data-i18n="layer.memory">记忆</span></label>
-            <label class="layer-chip"><input type="checkbox" value="sessions" checked /><span>sessions skill</span></label>
-          </div>
-          <div class="sync-actions">
-            <button id="btn-sync-preview" class="btn" data-i18n="sy.preview">预览 dry-run</button>
-            <button id="btn-sync-apply" class="btn danger" disabled data-i18n="sy.apply">Apply 实际执行</button>
-          </div>
-          <pre id="sync-output" class="sync-output hidden"></pre>
         </div>
       </section>
 
