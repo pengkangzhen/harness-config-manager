@@ -144,6 +144,7 @@ dsh plugin --profile web add dsh-halter
 `desktop/` 内置一个 Tauri v2 桌面应用：
 
 - **总览仪表盘**：检测到的工具、六层配置（skills / subagents / memory / MCP / 插件 / hooks）计数、健康检查问题
+- **记忆面板**：查看并编辑记忆事实源，逐工具展示副本状态与差异（unified diff），保存自动备份旧文件
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
 - **中英双语界面**：侧边栏一键切换，选择按设备记忆

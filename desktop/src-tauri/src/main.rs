@@ -57,6 +57,36 @@ fn run_halter(args: &[String]) -> Result<SidecarOutput, String> {
     })
 }
 
+/// Same as run_halter but pipes `input` to the child's stdin (memory write).
+fn run_halter_with_stdin(args: &[String], input: &str) -> Result<SidecarOutput, String> {
+    use std::io::Write as _;
+    let program = resolve_halter();
+    let mut child = Command::new(&program)
+        .args(args)
+        .env("HALTER_UI", "1")
+        .env("NO_COLOR", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn halter sidecar `{program}`: {e}"))?;
+    // Drop the handle after writing so the child sees EOF even for empty input.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|e| format!("failed to write sidecar stdin: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for halter sidecar: {e}"))?;
+    Ok(SidecarOutput {
+        ok: output.status.success(),
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
 fn parse_json_output(out: &SidecarOutput) -> Result<Value, String> {
     if !out.ok {
         let detail = if out.stderr.trim().is_empty() {
@@ -119,6 +149,23 @@ async fn halter_version() -> Result<Value, String> {
 #[tauri::command]
 async fn halter_scan() -> Result<Value, String> {
     run_json_args(arg(&["scan", "--json"])).await
+}
+
+/// Full memory snapshot: library content + per-tool content and unified diffs.
+#[tauri::command]
+async fn halter_memory_show() -> Result<Value, String> {
+    run_json_args(arg(&["memory", "show", "--json"])).await
+}
+
+/// Overwrite the memory library file with `content` (the CLI backs up the old
+/// file). Returns the raw sidecar output; the UI must confirm before calling.
+#[tauri::command]
+async fn halter_memory_write(content: String) -> Result<SidecarOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_halter_with_stdin(&arg(&["memory", "write", "--json"]), &content)
+    })
+    .await
+    .map_err(|e| format!("sidecar task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -230,6 +277,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             halter_version,
             halter_scan,
+            halter_memory_show,
+            halter_memory_write,
             halter_sessions_list,
             halter_sessions_projects,
             halter_sessions_show,

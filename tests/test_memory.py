@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 
 from harness_config_manager.config import HalterConfig
@@ -228,3 +229,71 @@ def test_memory_cli_end_to_end(fake_home: Path):
     assert "用户级记忆" in out and "已同步" in out
     out = runner.invoke(app, ["scan", "--json"]).output
     assert '"memory"' in out and '"linked": true' in out
+
+
+# ---------------------------------------------------------------------------
+# memory show / memory write（desktop 记忆面板数据源契约）
+
+
+def test_memory_show_json_contract(fake_home: Path):
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    make_library(fake_home, "LIB v1\n")
+    make_tool_dir(fake_home, "claude", "TOOL v1\n")   # 分歧 → 带 diff
+    make_tool_dir(fake_home, "zcode", "LIB v1\n")     # 内容一致 → diff 为空
+    runner = CliRunner()
+    payload = _json.loads(runner.invoke(app, ["memory", "show", "--json"]).output)
+    assert payload["library"]["exists"] and payload["library"]["content"] == "LIB v1\n"
+    by_tool = {t["tool"]: t for t in payload["tools"]}
+    assert by_tool["claude"]["present"] and not by_tool["claude"]["linked"]
+    assert by_tool["claude"]["content"] == "TOOL v1\n"
+    assert "-LIB v1" in by_tool["claude"]["diff"] and "+TOOL v1" in by_tool["claude"]["diff"]
+    assert by_tool["zcode"]["diff"] is None
+    # 无记忆层的工具不出现在快照里
+    assert "cursor" not in by_tool
+
+
+def test_memory_show_library_missing(fake_home: Path):
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    make_tool_dir(fake_home, "claude", "TOOL only\n")
+    runner = CliRunner()
+    payload = _json.loads(runner.invoke(app, ["memory", "show", "--json"]).output)
+    assert payload["library"]["exists"] is False
+    by_tool = {t["tool"]: t for t in payload["tools"]}
+    assert by_tool["claude"]["content"] == "TOOL only\n"
+    assert by_tool["claude"]["diff"] is None  # 库缺失无从 diff
+
+
+def test_memory_write_stdin_backs_up(fake_home: Path):
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    lib = make_library(fake_home, "OLD\n")
+    runner = CliRunner()
+    result = runner.invoke(app, ["memory", "write", "--json"], input="NEW content\n")
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    assert lib.read_text(encoding="utf-8") == "NEW content\n"
+    assert payload["path"] == str(lib) and payload["size"] == len("NEW content\n")
+    backups = list((fake_home / ".config/halter/backups").glob("*/memory/MEMORY.md"))
+    assert any(Path(p).read_text(encoding="utf-8") == "OLD\n" for p in backups)
+
+
+def test_memory_write_creates_missing_library(fake_home: Path):
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    lib = fake_home / DEFAULT_MEMORY_FILE
+    runner = CliRunner()
+    payload = _json.loads(runner.invoke(app, ["memory", "write", "--json", "--content", "fresh"]).output)
+    assert lib.read_text(encoding="utf-8") == "fresh"
+    assert payload["backup"] is None          # 库原本不存在，无旧文件可备份
+    payload = _json.loads(runner.invoke(app, ["memory", "write", "--json", "--content", "x"]).output)
+    assert payload["backup"] is not None      # 第二次写入备份了 "fresh"

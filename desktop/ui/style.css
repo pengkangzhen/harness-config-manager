@@ -1036,3 +1036,34 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   color: var(--text-dim);
   margin-top: 2px;
 }
+
+/* ---------------- memory view ---------------- */
+
+.mem-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mem-path { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+.mem-badge { font-size: 11px; border: 1px solid var(--accent-dim); border-radius: 999px; padding: 1px 8px; color: var(--text-dim); }
+.mem-badge.warn { border-color: #7a2d3c; color: var(--red); }
+
+.memory-editor {
+  width: 100%; min-height: 320px; resize: vertical;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+}
+.memory-editor:focus { outline: none; border-color: var(--accent-dim); }
+
+.mem-tools { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mem-tool { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.mem-tool-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mem-tool-name { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+.mem-tool-meta { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.mem-tool-meta.dim { opacity: .7; }
+
+.mem-diff { margin-top: 6px; }
+.mem-diff summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.mem-diff-pre {
+  margin: 6px 0 0; padding: 10px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+  background: rgba(0, 0, 0, .25); border-radius: 6px;
+  overflow: auto; max-height: 320px; white-space: pre;
+}

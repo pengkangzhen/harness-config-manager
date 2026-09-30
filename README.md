@@ -181,6 +181,7 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 `desktop/` ships a Tauri v2 desktop app:
 
 - **Overview dashboard**: detected tools, six-layer counts (skills / subagents / memory / MCP / plugins / hooks), doctor issues
+- **Memory panel**: view and edit the global memory source of truth, inspect each tool-side copy with a unified diff, save with automatic backup
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
 - **Bilingual UI**: zh / EN switch in the sidebar, remembered per device

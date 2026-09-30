@@ -22,7 +22,8 @@ function resolveHalter() {
 }
 
 // main.rs 的 SidecarOutput：原样返回 stdout/stderr，不做 JSON 解析。
-function runHalter(args) {
+// input 非空时写入子进程 stdin（memory write 用）。
+function runHalter(args, input) {
   return new Promise((resolve) => {
     const child = spawn(resolveHalter(), args, {
       env: { ...process.env, HALTER_UI: "1", NO_COLOR: "1" },
@@ -31,6 +32,8 @@ function runHalter(args) {
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
+    if (input !== undefined) child.stdin.write(input);
+    child.stdin.end();
     child.on("error", (err) =>
       resolve({ ok: false, code: -1, stdout, stderr: String(err) }),
     );
@@ -81,6 +84,9 @@ const COMMANDS = {
     return value;
   },
   halter_scan: () => runJson(["scan", "--json"]),
+  halter_memory_show: () => runJson(["memory", "show", "--json"]),
+  halter_memory_write: ({ content }) =>
+    runHalter(["memory", "write", "--json"], String(content ?? "")),
   halter_sessions_list: ({ project, limit, allProjects }) =>
     runJson([
       "sessions",

@@ -118,6 +118,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     if (btn.dataset.view === "overview") loadOverview();
     if (btn.dataset.view === "matrix") loadMatrix();
     if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
+    if (btn.dataset.view === "memory") loadMemory();
   });
 });
 
@@ -1339,6 +1340,121 @@ $("btn-sync-apply").addEventListener("click", () => {
   runSync(true);
 });
 
+/* ---------------- memory: 全局指令事实源 ---------------- */
+
+const memoryState = { snap: null, editing: false };
+let saveArmed = false;
+let saveTimer = null;
+
+function memToolState(t) {
+  if (t.linked) return { cls: "synced", mark: "●", key: "mem.stateLinked" };
+  if (t.present) {
+    return t.diff
+      ? { cls: "present", mark: "◐", key: "mem.stateDrift" }
+      : { cls: "present", mark: "◐", key: "mem.stateLocal" };
+  }
+  return { cls: "missing", mark: "·", key: "mem.stateMissing" };
+}
+
+function renderMemory() {
+  const snap = memoryState.snap;
+  if (!snap) return;
+  const lib = snap.library;
+  $("mem-library-path").textContent = lib.path;
+  const badge = $("mem-library-badge");
+  badge.textContent = lib.exists ? t("mem.badgeOk") : t("mem.badgeMissing");
+  badge.classList.toggle("warn", !lib.exists);
+  const editor = $("memory-editor");
+  if (!memoryState.editing) editor.value = lib.content ?? "";
+  const tools = $("mem-tools");
+  tools.replaceChildren();
+  for (const item of snap.tools) {
+    const card = el("div", "mem-tool");
+    const head = el("div", "mem-tool-head");
+    const st = memToolState(item);
+    const name = el("span", "mem-tool-name", item.display);
+    name.append(el("span", `legend-dot ${st.cls}`, st.mark));
+    head.append(name);
+    head.append(el("span", "mem-tool-meta", `${item.path} · ${item.size}B · ${t(st.key)}`));
+    card.append(head);
+    if (item.diff) {
+      const details = el("details", "mem-diff");
+      details.append(el("summary", "", t("mem.diffSummary")));
+      details.append(el("pre", "mem-diff-pre", item.diff));
+      card.append(details);
+    } else if (item.present && !item.linked) {
+      card.append(el("div", "mem-tool-meta dim", t("mem.identical")));
+    }
+    tools.append(card);
+  }
+}
+
+async function loadMemory() {
+  $("memory-error").classList.add("hidden");
+  $("memory-loading").classList.remove("hidden");
+  $("memory-content").classList.add("hidden");
+  try {
+    memoryState.snap = await invoke("halter_memory_show");
+  } catch (err) {
+    $("memory-loading").classList.add("hidden");
+    showError($("memory-error"), err);
+    return;
+  }
+  $("memory-loading").classList.add("hidden");
+  disarmSave();
+  setMemoryEditing(false);
+  renderMemory();
+  $("memory-content").classList.remove("hidden");
+}
+
+function setMemoryEditing(on) {
+  memoryState.editing = on;
+  const editor = $("memory-editor");
+  editor.readOnly = !on;
+  $("btn-memory-edit").classList.toggle("hidden", on);
+  $("btn-memory-save").classList.toggle("hidden", !on);
+  $("btn-memory-cancel").classList.toggle("hidden", !on);
+  if (on) editor.focus();
+}
+
+function disarmSave() {
+  saveArmed = false;
+  clearTimeout(saveTimer);
+  const btn = $("btn-memory-save");
+  btn.classList.remove("armed");
+  btn.textContent = t("mem.save");
+}
+
+$("btn-memory-edit").addEventListener("click", () => setMemoryEditing(true));
+
+$("btn-memory-cancel").addEventListener("click", () => {
+  setMemoryEditing(false);
+  disarmSave();
+  $("memory-editor").value = memoryState.snap?.library.content ?? "";
+});
+
+$("btn-memory-refresh").addEventListener("click", () => loadMemory());
+
+$("btn-memory-save").addEventListener("click", async () => {
+  const btn = $("btn-memory-save");
+  if (!saveArmed) {
+    saveArmed = true;
+    btn.classList.add("armed");
+    btn.textContent = t("mem.saveArmed");
+    saveTimer = setTimeout(disarmSave, 5000);
+    return;
+  }
+  disarmSave();
+  const content = $("memory-editor").value;
+  try {
+    const out = await invoke("halter_memory_write", { content });
+    if (!out.ok) throw new Error(out.stderr || `halter exited with code ${out.code}`);
+    await loadMemory();
+  } catch (err) {
+    showError($("memory-error"), err);
+  }
+});
+
 /* ---------------- language ---------------- */
 
 $("lang-zh").addEventListener("click", () => setLang("zh"));
@@ -1357,6 +1473,10 @@ document.addEventListener("halter:langchange", () => {
     renderProjectInput();
     renderToolFilter();
     renderSessions(state.sessions);
+  }
+  if (memoryState.snap) {
+    if (saveArmed) $("btn-memory-save").textContent = t("mem.saveArmed");
+    renderMemory();
   }
 });
 

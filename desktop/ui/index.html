@@ -49,6 +49,9 @@
         <button class="nav-item" data-view="sync">
           <span class="nav-icon">⇄</span> <span data-i18n="nav.sync">同步</span>
         </button>
+        <button class="nav-item" data-view="memory">
+          <span class="nav-icon">✎</span> <span data-i18n="nav.memory">记忆</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="lang-toggle" role="group" data-i18n-aria-label="lang.label" aria-label="语言">
@@ -186,6 +189,34 @@
             <button id="btn-sync-apply" class="btn danger" disabled data-i18n="sy.apply">Apply 实际执行</button>
           </div>
           <pre id="sync-output" class="sync-output hidden"></pre>
+        </div>
+      </section>
+
+      <!-- ============ Memory ============ -->
+      <section id="view-memory" class="view">
+        <header class="view-header">
+          <h1 data-i18n="mem.heading">用户级记忆</h1>
+          <div class="header-actions">
+            <button id="btn-memory-refresh" class="btn" data-i18n="mem.refresh">↻ 刷新</button>
+          </div>
+        </header>
+        <p class="sync-note" data-i18n="mem.note">
+          所有 AI 编码工具共享的全局指令（CLAUDE.md / AGENTS.md / GEMINI.md…）。编辑保存的是事实源文件；工具侧已链接的副本即时生效，未链接的副本需到「同步」面板分发。
+        </p>
+        <div id="memory-error" class="error-box hidden"></div>
+        <div id="memory-loading" class="loading" data-i18n="mem.loading">正在读取记忆事实源…</div>
+        <div id="memory-content" class="hidden">
+          <div class="mem-toolbar">
+            <span id="mem-library-path" class="mem-path"></span>
+            <span id="mem-library-badge" class="mem-badge"></span>
+            <span class="toolbar-spacer"></span>
+            <button id="btn-memory-edit" class="btn" data-i18n="mem.edit">编辑</button>
+            <button id="btn-memory-save" class="btn danger hidden" data-i18n="mem.save">保存</button>
+            <button id="btn-memory-cancel" class="btn hidden" data-i18n="mem.cancel">取消</button>
+          </div>
+          <textarea id="memory-editor" class="memory-editor" spellcheck="false" readonly></textarea>
+          <h2 data-i18n="mem.toolsHeading">各工具侧副本</h2>
+          <div id="mem-tools" class="mem-tools"></div>
         </div>
       </section>
     </main>

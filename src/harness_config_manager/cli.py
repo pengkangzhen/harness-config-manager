@@ -38,6 +38,9 @@ def _short_ref(ref: str, keep: int = 8) -> str:
 sessions_app = typer.Typer(help="查看并按需复用当前项目在多个 AI 编码工具中的历史会话。")
 app.add_typer(sessions_app, name="sessions")
 
+memory_app = typer.Typer(help="查看并写入用户级记忆事实源（desktop 记忆面板的数据源）。")
+app.add_typer(memory_app, name="memory")
+
 @app.callback()
 def _root() -> None:
     """agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点、分发，并支持项目级跨助手历史会话。"""
@@ -727,3 +730,65 @@ def sync(
         for a in actions:
             if a.kind == "adopt-hint":
                 console.print(f"  [blue]提示[/blue] {a.tool}:{a.skill} 仅该工具有")
+
+
+# ---------------------------------------------------------------------------
+# memory：事实源内容的查看与写入（desktop 记忆面板 + 脚本两用）
+
+
+@memory_app.command("show")
+def memory_show(json_out: bool = typer.Option(False, "--json", help="以 JSON 输出")) -> None:
+    """查看记忆事实源与各工具侧的内容、状态与差异。"""
+    from .config import load_config
+    from .memory import memory_snapshot
+
+    snap = memory_snapshot(load_config())
+    if json_out:
+        console.print_json(_json.dumps(snap, ensure_ascii=False))
+        return
+    lib = snap["library"]
+    state = "" if lib["exists"] else " [yellow](不存在)[/yellow]"
+    console.print(f"memory 事实源: {lib['path']}{state}")
+    for t in snap["tools"]:
+        if t["linked"]:
+            state = "[green]● 已链接[/green]"
+        elif t["present"]:
+            state = "[yellow]◐ 本地文件[/yellow]"
+            if t["diff"]:
+                state += " [red](与库分歧)[/red]"
+        else:
+            state = "[dim]· 缺失[/dim]"
+        console.print(f"  {t['display']:<18} {state}  {t['path']}")
+
+
+@memory_app.command("write")
+def memory_write(
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+    content: str | None = typer.Option(None, "--content", help="新内容；缺省从 stdin 读取"),
+) -> None:
+    """把新内容写入记忆事实源（旧文件先备份到 backups/<时间戳>/memory/）。"""
+    import shutil
+    import sys
+
+    from .config import load_config
+    from .io_utils import atomic_write_text
+    from .memory import backup_dir, resolve_memory_file
+
+    text = content if content is not None else sys.stdin.read()
+    lib = resolve_memory_file(load_config())
+    backup: str | None = None
+    if lib.is_file():
+        dest = backup_dir() / lib.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(lib), str(dest))
+        backup = str(dest)
+    lib.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(lib, text)
+    if json_out:
+        console.print_json(_json.dumps(
+            {"path": str(lib), "backup": backup, "size": len(text)}, ensure_ascii=False))
+    else:
+        line = f"已写入 {lib}（{len(text)}B）"
+        if backup:
+            line += f"，旧文件备份于 {backup}"
+        console.print(line)

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import difflib
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from .config import HalterConfig
 from .model import MemoryInfo, ToolReport
-from .registry import BY_KEY, expand
+from .registry import BY_KEY, TOOLS, expand
 
 DEFAULT_MEMORY_FILE = ".agents/memory/MEMORY.md"
 
@@ -64,6 +65,59 @@ def scan_memory(spec) -> tuple[MemoryInfo | None, list[str]]:
         info.size = st.st_size
         info.mtime = st.st_mtime
     return info, []
+
+
+# ---------------------------------------------------------------------------
+# 快照：desktop Memory 面板数据源（库 + 各工具内容与 diff）
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def memory_snapshot(cfg: HalterConfig) -> dict:
+    """库与各工具记忆文件的完整快照；非链接且内容分叉的工具附 unified diff。"""
+    lib = resolve_memory_file(cfg)
+    lib_content = _read_text(lib) if lib.is_file() else None
+    lib_lines = lib_content.splitlines() if lib_content is not None else None
+    tools: list[dict] = []
+    for spec in TOOLS:
+        if not spec.memory_files:
+            continue
+        target = memory_target(spec)
+        if target is None:  # 工具未安装 / 无此层
+            continue
+        present = target.exists()
+        linked = target.is_symlink()
+        content: str | None = None
+        size = 0
+        mtime: float | None = None
+        diff: str | None = None
+        if present:
+            st = target.stat()
+            size, mtime = st.st_size, st.st_mtime
+            content = _read_text(target)
+            if not linked and lib_lines is not None:
+                tool_lines = content.splitlines()
+                if tool_lines != lib_lines:
+                    diff = "\n".join(difflib.unified_diff(
+                        lib_lines, tool_lines,
+                        fromfile=f"library {lib}", tofile=f"{spec.key} {target}",
+                        lineterm=""))
+        tools.append({
+            "tool": spec.key, "display": spec.display, "path": str(target),
+            "present": present, "linked": linked,
+            "size": size, "mtime": mtime,
+            "content": content, "diff": diff,
+        })
+    return {
+        "library": {
+            "path": str(lib), "exists": lib.is_file(),
+            "size": lib.stat().st_size if lib_content is not None else 0,
+            "content": lib_content,
+        },
+        "tools": tools,
+    }
 
 
 # ---------------------------------------------------------------------------
