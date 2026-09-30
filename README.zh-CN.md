@@ -6,6 +6,10 @@
 
 ## 界面预览
 
+**总览** —— 一屏看清检测到的每个 AI 编码工具、五层配置计数与健康检查结果：
+
+![总览](docs/images/app-overview.png)
+
 **配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）：
 
 ![配置矩阵](docs/images/app-matrix.png)
@@ -13,6 +17,10 @@
 **跨助手会话** —— 项目 / 助手 / 时间线三个维度统一筛选，支持内容搜索、脱敏 transcript 与一键生成交接上下文：
 
 ![会话浏览器](docs/images/app-sessions.png)
+
+**同步** —— 分层勾选、dry-run 预览计划，确认 Apply 才会实际写入：
+
+![同步预览](docs/images/app-sync.png)
 
 ## 安装
 
@@ -135,6 +143,7 @@ dsh plugin --profile web add dsh-halter
 - **总览仪表盘**：检测到的工具、五层配置（skills / subagents / MCP / 插件 / hooks）计数、健康检查问题
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
+- **中英双语界面**：侧边栏一键切换，选择按设备记忆
 
 前端为纯静态文件（无构建步骤），通过 Tauri IPC 调用 Rust 命令；Rust 侧以 sidecar 方式执行 `halter --json`。sidecar 解析顺序：`HALTER_BINARY` 环境变量 → 应用旁打包的 `halter` 可执行文件 → PATH 上的 `halter`。
 

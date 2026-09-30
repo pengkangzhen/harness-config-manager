@@ -28,13 +28,21 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 
 ## Screenshots
 
+**Overview** — every detected harness with its five-layer counts, plus doctor health checks:
+
+![Overview](docs/images/app-overview-en.png)
+
 **Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable):
 
-![Config matrix](docs/images/app-matrix.png)
+![Config matrix](docs/images/app-matrix-en.png)
 
 **Cross-assistant sessions** — unified project / harness / timeline facets, full-text search, redacted transcripts, and one-click handoff generation:
 
-![Session browser](docs/images/app-sessions.png)
+![Session browser](docs/images/app-sessions-en.png)
+
+**Sync** — per-layer toggles with a dry-run plan preview; nothing is written until Apply:
+
+![Sync preview](docs/images/app-sync-en.png)
 
 ## Install
 
@@ -172,6 +180,7 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 - **Overview dashboard**: detected tools, five-layer counts (skills / subagents / MCP / plugins / hooks), doctor issues
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
+- **Bilingual UI**: zh / EN switch in the sidebar, remembered per device
 
 The frontend is plain static files (no build step) talking to Rust commands over Tauri IPC; the Rust side executes `halter --json` as a sidecar. Sidecar resolution order: `HALTER_BINARY` env var → bundled `halter` executable next to the app → `halter` on PATH.
 
