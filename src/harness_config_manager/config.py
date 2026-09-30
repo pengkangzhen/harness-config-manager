@@ -25,10 +25,6 @@ class HalterConfig:
     exclude_hooks: list[str] = field(default_factory=list)   # hooks 清单按 id 排除
     agents_library: str | None = None     # subagents 事实源，None 默认 ~/.agents/agents
     exclude_agents: list[str] = field(default_factory=list)
-    # 每个 harness 的默认模型（@harness/model 内联指定优先于此）
-    models: dict[str, str] = field(default_factory=dict)
-    # 每个 harness 的可选模型列表（下拉选择用；缺省用内置 GLM 系列表）
-    model_catalog: dict[str, list[str]] = field(default_factory=dict)
     # OpenAI-compatible 模型端点；真实 key 仍只存环境变量 / secrets，不入 config
     # 原生 Agent 的 MCP 桥接 allowlist（键 read/write -> mcp_<server>_<tool> 名）。
     # read 缺省 = 允许全部 declared read-only 工具；write 缺省/空 = 禁止全部
@@ -49,11 +45,6 @@ def load_config(path: Path | None = None) -> HalterConfig:
         exclude_hooks=list(doc.get("exclude_hooks", [])),
         agents_library=doc.get("agents_library"),
         exclude_agents=list(doc.get("exclude_agents", [])),
-        models={str(k): str(v) for k, v in dict(doc.get("models", {})).items()},
-        model_catalog={
-            str(k): [str(x) for x in list(v)]
-            for k, v in dict(doc.get("model_catalog", {})).items()
-        },
     )
 
 
@@ -84,19 +75,5 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
             doc[key] = values
         else:
             doc.pop(key, None)
-
-    table_fields = {
-        "models": cfg.models,
-        "model_catalog": cfg.model_catalog,
-    }
-    for key, values in table_fields.items():
-        if not values:
-            doc.pop(key, None)
-            continue
-        table = tomlkit.table()
-        for name in sorted(values):
-            table[name] = values[name]
-        doc[key] = table
-
 
     atomic_write_text(path, tomlkit.dumps(doc))

@@ -35,40 +35,6 @@ test("runtime 版本与桌面期望不一致时给出 mismatch 告警", async ({
   await expect(badge).toHaveText(/0\.0\.1-old/);
 });
 
-test("dispatch 经 halter run 派发并轮询任务状态", async ({ page }) => {
-  await openApp(page, bootData({
-    halter_models: { models: {}, catalog: {} },
-    halter_sessions_projects: { projects: [] },
-    halter_dispatch_run: {
-      tasks: [{
-        task_id: "task-1", tool: "claude", model: null, mode: "safe",
-        project: "/tmp/p", prompt: "修一下 README", status: "running",
-      }],
-    },
-  }));
-  await page.addInitScript(() => { window.__taskStatus = "running"; });
-  await setHandler(page, "halter_task_show", () => () => {
-    const status = window.__taskStatus || "running";
-    return {
-      task_id: "task-1", tool: "claude", status,
-      output_tail: status === "running" ? "（等待输出…）" : "done output",
-    };
-  });
-
-  await page.click('.nav-item[data-view="dispatch"]');
-  await page.fill("#dispatch-input", "@claude 修一下 README");
-  await page.click("#btn-dispatch-send");
-  await expect(page.locator(".dispatch-card")).toHaveCount(1);
-  await expect(page.locator(".dispatch-prompt")).toContainText("修一下 README");
-
-  const dispatched = await callsWithArgs(page);
-  const run = dispatched.find(([command]) => command === "halter_dispatch_run");
-  expect(run[1]).toMatchObject({ message: "@claude 修一下 README", project: ".", mode: "safe" });
-
-  await page.evaluate(() => { window.__taskStatus = "done"; });
-  await expect(page.locator(".dispatch-status.ok")).toHaveText("完成");
-});
-
 test("matrix 悬停 skill 显示功能与描述预览卡", async ({ page }) => {
   const scan = {
     doctor: [],

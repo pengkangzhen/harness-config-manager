@@ -74,46 +74,6 @@ halter sessions install --apply
 
 The `sessions` layer only installs a lookup skill. It never copies, rewrites, or "adopts" session transcripts. When a manifest is empty, `sync` auto-collects from your best-equipped tool (the one with the most MCP servers / most enabled plugins / most hooks; override with `--from`). Third-party-injected hook entries are adopted too — keep specific ones out via `exclude_hooks`. Skills that exist nowhere in the library are adopted automatically; same-name divergent copies are reported for you to adjudicate.
 
-## Task dispatch: @ different harnesses from one interface
-
-Beyond reading history, `halter run` dispatches work. It invokes each harness in headless mode, runs them concurrently in one terminal with `[claude]` / `[codex]` prefixes, and archives every task:
-
-```bash
-halter run "@claude fix the failing tests/test_auth.py cases"
-halter run "@codex @zcode propose database migration plans and compare"  # fan-out
-halter run "@claude/sonnet quick fix / @claude/opus deep refactor"       # same harness, different LLMs
-halter run "@opencode/zhipu/glm-4.7 give a second opinion"               # provider/model routing
-halter run "@claude @codex review the current diff" --mode yolo          # skip confirmations (careful)
-halter run "@claude long task" --detached                                 # background, returns task id
-
-halter tasks list
-halter tasks show <task-id>
-```
-
-Routing targets and headless invocation:
-
-| Mention | Headless call |
-|---|---|
-| `@claude` (alias `@cc`) | `claude -p` |
-| `@codex` (alias `@cx`) | `codex exec` |
-| `@zcode` (alias `@z`) | `zcode --prompt --cwd` (resolved via PATH / `ZCODE_CLI` / macOS app-bundle CLI) |
-| `@opencode` (alias `@oc`) | `opencode run` |
-
-**Configurable LLMs**: specify inline via `@harness/model` (e.g. `@claude/opus`, `@codex/o3`, `@opencode/zhipu/glm-4.7` — everything after the first `/` is the model name), or set per-harness defaults in `~/.config/halter/config.toml` (inline wins):
-
-```toml
-[models]
-claude = "sonnet"
-codex = "o3"
-opencode = "zhipu/glm-4.7"
-```
-
-`halter models` shows the current mapping. Flags: claude `--model`, codex `-m`, opencode `-m`; ZCode has no public headless model switch in v1 (recorded, not injected).
-
-Safety: `--mode safe` is the default (each harness keeps its own permission gates); `--mode yolo` maps to each tool's bypass flags. Prompts are passed as single argv elements — never through a shell. Task records live under `~/.config/halter/tasks/` (0700/0600) and output is redacted when displayed. Ctrl-C or `--timeout` kills the whole process group in foreground mode.
-
-The desktop app's **Dispatch** view wraps the same capability: mention chips, project picker, and live task cards.
-
 ## Session continuity
 
 Switching from Claude Code to Codex (or any other assistant) should not erase the project's working history.
@@ -188,7 +148,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 63 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 99 tests, all against a fake $HOME — never touches your real config
 ```
 
 ## License
@@ -203,7 +163,7 @@ A community plugin **`dsh-halter`** wraps this CLI for [DeepSeek Harness](https:
 dsh plugin --profile web add dsh-halter
 ```
 
-It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list·show·context·search), plus a `/halter` slash command exposing the full CLI to the human — mutating commands (`sync --apply`, `sessions install`, `run`) are never model-callable. Source lives in [`dsh-plugin/`](dsh-plugin/); halter itself must be installed separately (`uv tool install harness-config-manager`).
+It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list·show·context·search), plus a `/halter` slash command exposing the full CLI to the human — mutating commands (`sync --apply`, `sessions install`) are never model-callable. Source lives in [`dsh-plugin/`](dsh-plugin/); halter itself must be installed separately (`uv tool install harness-config-manager`).
 
 ## Desktop App (Tauri + halter sidecar)
 

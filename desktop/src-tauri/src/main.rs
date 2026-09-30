@@ -205,44 +205,6 @@ async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> R
     .await
 }
 
-/// Configured default models per harness (`[models]` in halter config.toml).
-#[tauri::command]
-async fn halter_models() -> Result<Value, String> {
-    run_json_args(arg(&["models", "--json"])).await
-}
-
-/// Dispatch a task message to @mentioned harnesses via `halter run --detached`.
-/// Returns task metadata (ids) immediately; the UI polls `halter_task_show`.
-#[tauri::command]
-async fn halter_dispatch_run(message: String, project: String, mode: String) -> Result<Value, String> {
-    let mode = if mode == "yolo" { "yolo" } else { "safe" };
-    run_json_args(arg(&[
-        "run",
-        "--detached",
-        "--json",
-        "--mode", mode,
-        "--project", &project,
-        "--",
-        &message,
-    ]))
-    .await
-}
-
-/// Fetch one dispatched task (status + output tail) for polling.
-#[tauri::command]
-async fn halter_task_show(task_id: String, tail: u32) -> Result<Value, String> {
-    run_json_args(arg(&[
-        "tasks",
-        "show",
-        "--json",
-        "--tail",
-        &tail.to_string(),
-        "--",
-        &task_id,
-    ]))
-    .await
-}
-
 /// Run `halter sync`. `apply == false` is the CLI's default dry-run and performs
 /// no writes; the UI must collect explicit confirmation before passing
 /// `apply == true`.
@@ -270,9 +232,6 @@ fn main() {
             halter_scan,
             halter_sessions_list,
             halter_sessions_projects,
-            halter_dispatch_run,
-            halter_models,
-            halter_task_show,
             halter_sessions_show,
             halter_sessions_search,
             halter_sessions_context,

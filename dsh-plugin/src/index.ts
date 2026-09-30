@@ -56,7 +56,7 @@ function runHalter(binary: string, args: string[], signal: AbortSignal | undefin
 }
 
 // The model-facing tool is read-only by design: scan / assess and the read side of
-// sessions. Mutating commands (sync --apply, sessions install, run, tasks) belong to
+// sessions. Mutating commands (sync --apply, sessions install) belong to
 // the human-invoked /halter slash command, which is as if the user typed them in a shell.
 const READ_ONLY_HEADS = new Set(['scan', 'assess'])
 const READ_ONLY_SESSIONS_SUBS = new Set(['list', 'show', 'context', 'search'])
@@ -130,7 +130,7 @@ export function apply(ctx: Context, config: Partial<Config> = {}) {
             stdout: '',
             stderr:
               `"${argv[0]}" is not on the read-only allowlist (scan, assess, sessions list|show|context|search). ` +
-              'Mutating halter commands (sync, sessions install, run, tasks) are reserved for the user via the /halter slash command.',
+              'Mutating halter commands (sync, sessions install) are reserved for the user via the /halter slash command.',
           }
         }
         return runHalter(cfg.binary, argv, exec.signal, cfg.timeoutMs)
@@ -140,7 +140,7 @@ export function apply(ctx: Context, config: Partial<Config> = {}) {
 
   const dispose = ctx.commands.register({
     name: 'halter',
-    description: 'Run any halter CLI subcommand and show its output (scan / assess / sync / sessions / tasks …)',
+    description: 'Run any halter CLI subcommand and show its output (scan / assess / sync / sessions …)',
     input: { hint: 'e.g. scan --json', attachments: false },
     handler: async ({ rawInput, signal }): Promise<CommandResult> => {
       const argv = splitArgv(rawInput ?? '')

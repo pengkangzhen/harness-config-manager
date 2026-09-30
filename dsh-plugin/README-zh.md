@@ -9,7 +9,7 @@ harness 的 skills / MCP servers / plugins / hooks / subagents 的唯一事实�
 
 - **`halter_cli` 工具**（模型可调，只读）：让 agent 执行 `halter scan`、`halter assess`、
   `halter sessions list|show|context|search`（例如在继续工作前查看 harness 配置清单、翻历史
-  会话）。**写操作（`sync --apply`、`sessions install`、`run`、`tasks`）不对模型开放。**
+  会话）。**写操作（`sync --apply`、`sessions install`）不对模型开放。**
 - **`/halter <子命令>` 斜杠命令**（人类调用，完整 CLI）：等同在 shell 里直接敲——
   包括 `sync` 的 dry-run 预览与 `--apply`。
 

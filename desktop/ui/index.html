@@ -27,9 +27,6 @@
         <button class="nav-item" data-view="sessions">
           <span class="nav-icon">⌘</span> 会话
         </button>
-        <button class="nav-item" data-view="dispatch">
-          <span class="nav-icon">⏵</span> 调度
-        </button>
         <button class="nav-item" data-view="sync">
           <span class="nav-icon">⇄</span> 同步
         </button>
@@ -134,43 +131,6 @@
             <div id="session-detail" class="session-detail empty">
               <div class="empty-state">← 选择一个会话查看详情</div>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ============ Dispatch ============ -->
-      <section id="view-dispatch" class="view">
-        <header class="view-header">
-          <h1>任务调度</h1>
-          <div class="header-actions">
-            <label class="gap-toggle"><input type="checkbox" id="dispatch-yolo" /> yolo（外部 Harness 放行）</label>
-            <select id="dispatch-project" class="dispatch-project" title="任务运行的项目目录"></select>
-          </div>
-        </header>
-
-        <div class="dispatch-layout">
-          <div class="dispatch-main">
-            <div class="dispatch-picker-row">
-              <select id="dispatch-harness-select" class="dispatch-select" title="选择 Harness（自动插入 @提及）"></select>
-              <select id="dispatch-model-select" class="dispatch-select" title="选择模型（写入 @harness/model）"></select>
-            </div>
-
-            <div class="dispatch-composer">
-              <textarea
-                id="dispatch-input"
-                class="dispatch-input"
-                rows="3"
-                placeholder="在同一个界面 @ 不同 Harness 完成任务…&#10;例如：@claude 修复测试　@codex @zcode 并发审查　@opencode/zhipu/glm-4.7 第二意见"
-                spellcheck="false"
-              ></textarea>
-              <div class="dispatch-composer-foot">
-                <span id="dispatch-mention-hint" class="dispatch-mention-hint">用 @claude / @codex / @zcode / @opencode 选择执行者；指定模型如 @claude/opus</span>
-                <button id="btn-dispatch-send" type="button" class="btn">⏵ 派发 ⌘↵</button>
-              </div>
-            </div>
-
-            <div id="dispatch-error" class="error-box hidden"></div>
-            <div id="dispatch-tasks" class="dispatch-tasks"></div>
           </div>
         </div>
       </section>

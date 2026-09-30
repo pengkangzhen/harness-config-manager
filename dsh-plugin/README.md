@@ -10,7 +10,7 @@ for skills, MCP servers, plugins, hooks and subagents across all your AI coding 
 - **`halter_cli` tool** (model-callable, read-only): lets the agent run
   `halter scan`, `halter assess`, and `halter sessions list|show|context|search`
   (e.g. to check your harness inventory or dig up a past session before continuing work).
-  Mutating commands (`sync --apply`, `sessions install`, `run`, `tasks`) are **not**
+  Mutating commands (`sync --apply`, `sessions install`) are **not**
   available to the model.
 - **`/halter <subcommand>` slash command** (human-invoked, full CLI): exactly as if you
   typed it in a shell — including `sync` dry-run previews and `--apply`.

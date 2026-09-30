@@ -45,46 +45,6 @@ halter sessions install --apply
 
 sessions 层只安装查询 skill，不复制、不改写、不“收编”任何原生 session 文件。清单为空时 `sync` 会自动从最全的工具收集（MCP 选 server 最多的，插件选启用最多的 claude 系工具，hooks 选条目最多的目标工具；第三方注入的 hook 条目也一并收编，排除名单走 `exclude_hooks`；`--from` 可覆盖）；skills 与 subagents 库外独有的会自动入库，同名分叉会列出让你裁决。
 
-## 任务调度：在同一界面 @ 不同 Harness
-
-不止“看历史”，还能直接派活。`halter run` 用无头模式调起对应助手，在同一终端并发执行、输出带 `[claude]` / `[codex]` 前缀流式回传，任务自动留档：
-
-```bash
-halter run "@claude 修复 tests/test_auth.py 里失败的用例"
-halter run "@codex @zcode 分别给出数据库迁移方案，对比优劣"   # 多助手并发
-halter run "@claude/sonnet 快速修 / @claude/opus 深度重构"      # 同一助手，不同 LLM
-halter run "@opencode/zhipu/glm-4.7 给出第二意见"               # opencode 按 provider/model 路由
-halter run "@claude @codex 审查当前 diff" --mode yolo          # 跳过权限确认（慎用）
-halter run "@claude 长任务" --detached                          # 后台运行，立即返回 task id
-
-halter tasks list                    # 查看已派发任务
-halter tasks show <task-id>          # 查看输出末尾（已脱敏）
-```
-
-支持的路由目标与无头方式：
-
-| @目标 | 无头调用 |
-|---|---|
-| `@claude`（别名 `@cc`） | `claude -p` |
-| `@codex`（别名 `@cx`） | `codex exec` |
-| `@zcode`（别名 `@z`） | `zcode --prompt --cwd`（PATH / `ZCODE_CLI` / macOS App 内置 CLI 自动发现） |
-| `@opencode`（别名 `@oc`） | `opencode run` |
-
-**可配置不同 LLM**：`@harness/model` 内联指定（如 `@claude/opus`、`@codex/o3`、`@opencode/zhipu/glm-4.7`——第一个 `/` 前是 harness，其余全是模型名）；也可在 `~/.config/halter/config.toml` 配置每个 harness 的默认模型，内联优先：
-
-```toml
-[models]
-claude = "sonnet"
-codex = "o3"
-opencode = "zhipu/glm-4.7"
-```
-
-`halter models` 查看当前配置。模型映射：claude `--model`、codex `-m`、opencode `-m`；ZCode 无公开无头模型开关，v1 仅记录不注入（用其自身默认模型）。
-
-安全语义：默认 `--mode safe`（各助手权限受控，能改动的范围由各自沙箱决定）；`--mode yolo` 才映射到各家的“跳过确认”开关。提示词作为独立 argv 元素传递，不经过 shell。任务记录写入 `~/.config/halter/tasks/`（0700/0600 私有权限），输出查看时自动脱敏。前台模式 Ctrl-C 或 `--timeout` 会终止整个进程组。
-
-桌面 App 的「调度」视图提供同一能力的图形界面：@提及、项目选择、任务卡片实时轮询输出。
-
 ## Session 连续性
 
 从 Claude Code 切到 Codex，或从任意一个助手切到另一个助手时，不需要丢失当前项目的工作历史：
@@ -155,7 +115,7 @@ exclude_agents = []              # 不分发的 subagent 名单
 ## 测试
 
 ```bash
-uv run pytest               # 63 项单测，全部使用假 HOME，绝不触碰真实配置
+uv run pytest               # 99 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
 
 ## 在 DeepSeek Harness（dsh）中使用
@@ -166,14 +126,13 @@ uv run pytest               # 63 项单测，全部使用假 HOME，绝不触碰
 dsh plugin --profile web add dsh-halter
 ```
 
-插件注册 `halter_cli` 只读 agent 工具（scan / assess / sessions list·show·context·search），以及面向人类的 `/halter` 斜杠命令（完整 CLI）——写操作（`sync --apply`、`sessions install`、`run`）永远不会开放给模型。源码在 [`dsh-plugin/`](dsh-plugin/)；halter 本体需单独安装（`uv tool install harness-config-manager`）。
+插件注册 `halter_cli` 只读 agent 工具（scan / assess / sessions list·show·context·search），以及面向人类的 `/halter` 斜杠命令（完整 CLI）——写操作（`sync --apply`、`sessions install`）永远不会开放给模型。源码在 [`dsh-plugin/`](dsh-plugin/)；halter 本体需单独安装（`uv tool install harness-config-manager`）。
 
 ## 桌面 App（Tauri + halter sidecar）
 
 `desktop/` 内置一个 Tauri v2 桌面应用：
 
 - **总览仪表盘**：检测到的工具、五层配置（skills / subagents / MCP / 插件 / hooks）计数、健康检查问题
-- **任务调度**：同一输入框 `@claude` / `@codex` / `@zcode` / `@opencode` 派发任务，卡片式实时输出
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
 
