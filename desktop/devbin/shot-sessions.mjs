@@ -28,6 +28,32 @@ await page.click(".session-item");
 await page.waitForTimeout(3000);
 await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-detail.png" });
 
+// —— 事件流细节验证：展开一个 TOOL 块 ——
+const toolHead = page.locator("#session-detail .msg-head.collapsible").first();
+if (await toolHead.count()) {
+  await toolHead.click();
+  await page.waitForTimeout(200);
+}
+await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-detail-tool.png" });
+
+// —— 原始（raw）视图 ——
+await page.click('#session-detail .view-toggle .toggle-btn:nth-child(2)');
+await page.waitForTimeout(300);
+await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-detail-raw.png" });
+await page.click('#session-detail .view-toggle .toggle-btn:nth-child(1)'); // 切回对话视图
+
+// —— 搜索命中词在 transcript 内高亮（容忍零命中）——
+await page.fill("#search-input", "的");
+await page.press("#search-input", "Enter");
+await page.waitForTimeout(4000);
+if (await page.locator("#sessions-list .session-item").count()) {
+  await page.click("#sessions-list .session-item >> nth=0");
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-search-highlight.png" });
+} else {
+  console.log("search '的': no hits, skip highlight shot");
+}
+
 // ---- README 图对：时间线视图 + 选中第二个会话（时间线上下文更完整）----
 const pickSession = async () => {
   const items = page.locator("#sessions-list .session-item");

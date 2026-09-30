@@ -92,6 +92,9 @@ const state = {
   projectFilter: null,    // null = 全部项目；string = 项目路径
   toolFilters: new Set(), // 空集 = 全部助手
   viewMode: "timeline",   // "timeline" | "list"
+  detailMode: "chat",     // "chat"（事件流卡片）| "raw"（原始 transcript 文本）
+  lastDetail: null,       // 最近一次渲染的会话详情，视图切换时原地重渲染
+  searchQuery: null,      // 搜索命中的关键词，进入详情时用于高亮同一条流
   matrixLayer: "skills",
   matrixGapsOnly: false,
   matrixHarnessOnly: true,
@@ -838,6 +841,7 @@ function renderSessions(items) {
   const filtered = applyToolFilter(items);
   updateSessionCount(filtered.length, items.length);
   $("session-sort").textContent = t("ss.sortRecent");
+  state.searchQuery = null; // 高亮只跟随搜索结果，回到普通列表即失效
   if (state.viewMode === "timeline") renderTimeline(filtered);
   else renderFlatList(filtered);
 }
@@ -1016,8 +1020,125 @@ function metaCell(label, value) {
   return cell;
 }
 
+/* ---------- transcript 事件流渲染（借鉴 dsh Trajectory 的形态） ---------- */
+
+const MSG_HEADER_RE = /^## (\S+) (USER|ASSISTANT|TOOL)(?:\s+\((.+)\))?$/;
+
+function parseTranscript(text) {
+  const messages = [];
+  let cur = null;
+  for (const line of String(text).split("\n")) {
+    const m = line.match(MSG_HEADER_RE);
+    if (m) {
+      if (cur) messages.push(cur);
+      cur = { stamp: m[1], role: m[2], tool: m[3] || null, text: "" };
+    } else if (cur) {
+      cur.text += (cur.text ? "\n" : "") + line;
+    }
+  }
+  if (cur) messages.push(cur);
+  return messages;
+}
+
+function appendMarkedText(parent, text, query) {
+  // 命中词高亮：搜索作用于同一条事件流
+  const needle = (query || "").trim();
+  if (!needle) {
+    parent.append(document.createTextNode(text));
+    return;
+  }
+  const lower = text.toLowerCase();
+  const hit = needle.toLowerCase();
+  let i = 0;
+  for (;;) {
+    const at = lower.indexOf(hit, i);
+    if (at < 0) break;
+    if (at > i) parent.append(document.createTextNode(text.slice(i, at)));
+    parent.append(el("mark", "", text.slice(at, at + needle.length)));
+    i = at + needle.length;
+  }
+  if (i < text.length) parent.append(document.createTextNode(text.slice(i)));
+}
+
+function msgBlock(msg, query) {
+  const block = el("div", `msg-block role-${msg.role}`);
+  const head = el("div", "msg-head");
+  const collapsible = msg.role === "TOOL";
+  if (collapsible) {
+    head.classList.add("collapsible");
+    head.title = t("ss.traceToggleHint");
+    const caret = el("span", "msg-caret", "▸");
+    head.append(caret);
+  }
+  head.append(el("span", `msg-role ${msg.role}`, msg.role));
+  if (msg.tool) head.append(el("span", "msg-tool", msg.tool));
+  const stamp = el("span", "msg-time", msg.stamp && msg.stamp !== "-" ? fmtTime(msg.stamp) : "");
+  if (msg.stamp && msg.stamp !== "-") stamp.title = fmtDate(msg.stamp);
+  head.append(stamp);
+  block.append(head);
+
+  const body = el("div", "msg-body");
+  appendMarkedText(body, msg.text.replace(/^\n+|\n+$/g, ""), query);
+  block.append(body);
+
+  if (collapsible) {
+    const hasHit = query && msg.text.toLowerCase().includes(query.trim().toLowerCase());
+    if (!hasHit) block.classList.add("collapsed"); // 命中的工具块自动展开，保证高亮可见
+    const preview = el("div", "msg-preview", msg.text.replace(/\s+/g, " ").trim().slice(0, 160) || t("ss.traceEmptyTool"));
+    block.append(preview);
+    head.addEventListener("click", () => {
+      block.classList.toggle("collapsed");
+      const caret = head.querySelector(".msg-caret");
+      if (caret) caret.textContent = block.classList.contains("collapsed") ? "▸" : "▾";
+    });
+  }
+  return block;
+}
+
+function renderTraceStream(detail, messages) {
+  const counts = { USER: 0, ASSISTANT: 0, TOOL: 0 };
+  for (const m of messages) counts[m.role] = (counts[m.role] || 0) + 1;
+
+  const metrics = el("div", "trace-metrics");
+  metrics.append(el("span", "tm-item total", t("ss.traceTotal", { n: state.lastDetail.session.message_count })));
+  if (state.lastDetail.session.message_count > messages.length) {
+    metrics.append(el("span", "tm-item", t("ss.traceTail", { n: messages.length })));
+  }
+  for (const role of ["USER", "ASSISTANT", "TOOL"]) {
+    if (counts[role]) metrics.append(el("span", `tm-item role-${role}`, `${role} ${counts[role]}`));
+  }
+  detail.append(metrics);
+
+  const stream = el("div", "msg-stream");
+  for (const m of messages) stream.append(msgBlock(m, state.searchQuery));
+  detail.append(stream);
+}
+
+function setDetailMode(mode) {
+  state.detailMode = mode;
+  if (state.lastDetail) renderSessionDetail(state.lastDetail);
+}
+
+async function copyToClipboard(text, btn, restoreKey) {
+  let ok = true;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const ta = el("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0;";
+    document.body.append(ta);
+    ta.select();
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    ta.remove();
+  }
+  btn.textContent = ok ? t("ss.traceCopied") : t("ss.traceCopyFailed");
+  setTimeout(() => { btn.textContent = t(restoreKey); }, 1200);
+}
+
 function renderSessionDetail(data) {
   const s = data.session || {};
+  state.lastDetail = data;
   const detail = $("session-detail");
   detail.className = "session-detail";
   detail.replaceChildren();
@@ -1074,33 +1195,36 @@ function renderSessionDetail(data) {
     }
   });
   actions.append(handoffBtn);
+
+  const copyBtn = el("button", "btn", t("ss.traceCopy"));
+  copyBtn.addEventListener("click", () => copyToClipboard(data.transcript || "", copyBtn, "ss.traceCopy"));
+  actions.append(copyBtn);
+
+  const spacer = el("span", "actions-spacer");
+  actions.append(spacer);
+  const modeToggle = el("div", "view-toggle");
+  for (const [mode, key] of [["chat", "ss.traceViewChat"], ["raw", "ss.traceViewRaw"]]) {
+    const btn = el("button", `toggle-btn${state.detailMode === mode ? " active" : ""}`, t(key));
+    btn.addEventListener("click", () => setDetailMode(mode));
+    modeToggle.append(btn);
+  }
+  actions.append(modeToggle);
   detail.append(actions);
 
   detail.append(el("h2", "", t("ss.recentTranscript")));
-  const transcript = el("div", "transcript");
-  const text = data.transcript || t("ss.noTranscript");
-  const lines = text.split("\n");
-  let buf = [];
-  const flush = () => {
-    if (buf.length) {
-      transcript.append(el("span", "", buf.join("\n")));
-      buf = [];
-    }
-  };
-  for (const line of lines) {
-    const m = line.match(/^## (\S+) (USER|ASSISTANT|TOOL)(?:\s+\((.+)\))?$/);
-    if (m) {
-      flush();
-      const head = el("div", "msg-header");
-      head.append(el("span", `msg-role-${m[2]}`, `${m[1]} ${m[2]}`));
-      if (m[3]) head.append(el("span", "", ` (${m[3]})`));
-      transcript.append(head);
-    } else {
-      buf.push(line);
-    }
+  const text = data.transcript || "";
+  if (state.detailMode === "raw") {
+    const pre = el("pre", "transcript");
+    pre.textContent = text || t("ss.noTranscript");
+    detail.append(pre);
+    return;
   }
-  flush();
-  detail.append(transcript);
+  const messages = parseTranscript(text);
+  if (!messages.length) {
+    detail.append(el("div", "loading", t("ss.noTranscript")));
+    return;
+  }
+  renderTraceStream(detail, messages);
 }
 
 $("btn-refresh-sessions").addEventListener("click", loadSessionsView);
@@ -1111,6 +1235,7 @@ async function runSearch() {
   const requestId = ++searchRequestId;
   const query = $("search-input").value.trim();
   if (!query) return;
+  state.searchQuery = query;
   const list = $("sessions-list");
   list.replaceChildren(el("div", "loading", t("ss.searching")));
   const allProjects = state.projectFilter === null;
