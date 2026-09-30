@@ -503,6 +503,7 @@ function renderMatrix(scan) {
       const st = row.statuses.get(tool.tool) || "missing";
       const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
       cell.title = t("mx.cellTitle", { tool: tool.tool, status: cellStatusText(st) });
+      attachCellSync(cell, tool.tool, [row.name], st);
       grid.append(cell);
     }
   };
@@ -540,6 +541,8 @@ function renderMatrix(scan) {
         present,
         total: group.members.length,
       });
+      // 家族聚合格：点击 = 整个家族同步到该工具
+      attachCellSync(cell, tool.tool, group.members.map((m) => m.name), st);
       grid.append(cell);
     }
 
@@ -565,6 +568,71 @@ $("matrix-harness-only").addEventListener("change", (e) => {
 });
 
 $("btn-refresh-matrix").addEventListener("click", () => loadMatrix(true));
+
+/* ---------------- 单元格点击同步：点一下圆点 = 该条目 → 该工具 ---------------- */
+
+let cellSyncBusy = false;
+
+function attachCellSync(cell, tool, names, st) {
+  if (st === "synced") return; // 已同步格无事可做
+  cell.classList.add("clickable");
+  cell.title += " · " + t("mx.cellClickHint");
+  cell.addEventListener("click", () => syncMatrixCell(cell, tool, names));
+}
+
+async function syncMatrixCell(cell, tool, names) {
+  if (cellSyncBusy) return;
+  cellSyncBusy = true;
+  cell.classList.add("syncing");
+  let result = null;
+  let invokeErr = null;
+  try {
+    result = await invoke("halter_sync", {
+      apply: true,
+      layers: [state.matrixLayer],
+      tool,
+      items: names,
+    });
+  } catch (err) {
+    invokeErr = err;
+  }
+  cellSyncBusy = false;
+  cell.classList.remove("syncing");
+  if (invokeErr) {
+    showMatrixToast(t("mx.syncFailed", { tool }), errorDetail(invokeErr), true);
+    return;
+  }
+  const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
+  showMatrixToast(
+    t(result.ok ? "mx.syncDone" : "mx.syncFailed", { tool }),
+    body || t("mx.syncNoop"),
+    !result.ok,
+  );
+  await loadMatrix(true); // 强制重扫，圆点状态即时更新
+}
+
+let matrixToastTimer = null;
+
+function showMatrixToast(title, body, isError) {
+  let toast = document.getElementById("matrix-toast");
+  if (!toast) {
+    toast = el("div", "matrix-toast");
+    toast.id = "matrix-toast";
+    toast.addEventListener("click", hideMatrixToast);
+    document.body.append(toast);
+  }
+  toast.classList.toggle("error", !!isError);
+  toast.replaceChildren(el("div", "mx-toast-title", title), el("pre", "mx-toast-body", body));
+  toast.classList.remove("hidden");
+  clearTimeout(matrixToastTimer);
+  matrixToastTimer = setTimeout(hideMatrixToast, isError ? 12000 : 7000);
+}
+
+function hideMatrixToast() {
+  clearTimeout(matrixToastTimer);
+  const toast = document.getElementById("matrix-toast");
+  if (toast) toast.classList.add("hidden");
+}
 
 /* ---------------- sessions ---------------- */
 

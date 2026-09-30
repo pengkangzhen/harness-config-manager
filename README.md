@@ -32,7 +32,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 
 ![Overview](docs/images/app-overview-en.png)
 
-**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable):
+**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable). Click any not-yet-synced dot to sync just that entry to that tool (CLI equivalent: `halter sync --tool <tool> --item <name> --apply`; clicking a family row's dot syncs the whole family):
 
 ![Config matrix](docs/images/app-matrix-en.png)
 
@@ -74,6 +74,7 @@ halter sync                   # sync: manifest/library -> all tools (dry-run by 
 halter sync --apply           # actually write (conflicts skipped by default)
 halter sync --no-skills --no-plugins --no-mcp   # only hooks + sessions (all layers on by default)
 halter sync --prefer library  # on conflict, override the tool-side copy from the manifest
+halter sync --tool zcode --item paper-polishing --apply   # narrow to one matrix cell (what a dot click does)
 
 halter sessions list          # current project's sessions across local AI coding assistants
 halter sessions install       # distribute the halter-sessions lookup skill (dry-run)

@@ -74,6 +74,10 @@ const I18N = {
     "mx.familyTitle": "{root} 家族（{n} 个成员）",
     "mx.cellTitle": "{tool}：{status}",
     "mx.cellTitleFamily": "{tool}：{status}（{present}/{total}）",
+    "mx.cellClickHint": "点击同步",
+    "mx.syncDone": "已同步 → {tool}",
+    "mx.syncFailed": "同步失败（{tool}）",
+    "mx.syncNoop": "无变更（内容与事实源一致，或冲突被跳过 — 详见输出）",
 
     "hv.noDesc": "（SKILL.md 未提供 description）",
     "hv.linked": "库链接",
@@ -241,6 +245,10 @@ const I18N = {
     "mx.familyTitle": "{root} family ({n} members)",
     "mx.cellTitle": "{tool}: {status}",
     "mx.cellTitleFamily": "{tool}: {status} ({present}/{total})",
+    "mx.cellClickHint": "Click to sync",
+    "mx.syncDone": "Synced → {tool}",
+    "mx.syncFailed": "Sync failed ({tool})",
+    "mx.syncNoop": "No changes (identical to the library, or a conflict was skipped — see output)",
 
     "hv.noDesc": "(no description in SKILL.md)",
     "hv.linked": "Library link",

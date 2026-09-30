@@ -284,14 +284,30 @@ async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> R
 
 /// Run `halter sync`. `apply == false` is the CLI's default dry-run and performs
 /// no writes; the UI must collect explicit confirmation before passing
-/// `apply == true`.
+/// `apply == true`. `tool` / `items` narrow the run to a single matrix cell
+/// (the layer is already narrowed via `layers`).
 #[tauri::command]
-async fn halter_sync(apply: bool, layers: Vec<String>) -> Result<SidecarOutput, String> {
+async fn halter_sync(
+    apply: bool,
+    layers: Vec<String>,
+    tool: Option<String>,
+    items: Option<Vec<String>>,
+) -> Result<SidecarOutput, String> {
     let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     let mut args: Vec<String> = vec!["sync".into()];
     for layer in allowed {
         if !layers.iter().any(|l| l == layer) {
             args.push(format!("--no-{layer}"));
+        }
+    }
+    if let Some(t) = tool.as_deref().filter(|t| !t.trim().is_empty()) {
+        args.push("--tool".into());
+        args.push(t.into());
+    }
+    if let Some(list) = items.as_ref() {
+        for item in list.iter().filter(|i| !i.trim().is_empty()) {
+            args.push("--item".into());
+            args.push(item.clone());
         }
     }
     if apply {

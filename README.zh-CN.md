@@ -10,7 +10,7 @@
 
 ![总览](docs/images/app-overview.png)
 
-**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）：
+**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）。点一下任意未同步的圆点，即定向同步该条目到该工具（CLI 等价 `halter sync --tool <tool> --item <name> --apply`；家族聚合格一点同步整个家族）：
 
 ![配置矩阵](docs/images/app-matrix.png)
 
@@ -45,6 +45,7 @@ halter sync                   # 同步一下：清单/库 -> 所有工具（默�
 halter sync --apply           # 实际执行（冲突默认跳过保护）
 halter sync --no-skills --no-plugins --no-mcp   # 只保留 hooks + sessions（各层默认全开，按需关闭）
 halter sync --prefer library  # 冲突时以清单覆盖（默认 skip）
+halter sync --tool zcode --item paper-polishing --apply   # 收窄到一个矩阵单元格（矩阵面板点圆点的等价操作）
 
 halter sessions list          # 列出当前项目在所有本地 AI 编码助手中的历史会话
 halter sessions install       # 分发 halter-sessions 查询 skill（默认 dry-run）

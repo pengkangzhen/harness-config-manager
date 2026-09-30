@@ -744,6 +744,19 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 .mx-cell.present { color: var(--amber); }
 .mx-cell.missing { color: var(--text-faint); opacity: .55; }
 
+/* 可点击单元格：点一下圆点 = 同步该条目到该工具 */
+.mx-cell.clickable { cursor: pointer; transition: background .12s, opacity .12s; }
+.mx-cell.clickable:hover { background: var(--bg-hover); opacity: 1; }
+.mx-cell.syncing {
+  cursor: wait;
+  pointer-events: none;
+  animation: mx-cell-pulse .9s ease-in-out infinite;
+}
+@keyframes mx-cell-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+
 /* ---------- project picker dropdown ---------- */
 
 .project-item {
@@ -945,6 +958,38 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   flex-shrink: 0;
 }
 
+
+/* ---------- 矩阵单元格同步结果 toast ---------- */
+
+.matrix-toast {
+  position: fixed;
+  right: 18px; bottom: 18px;
+  z-index: 1100;
+  max-width: 460px; max-height: 40vh;
+  overflow: auto;
+  padding: 10px 14px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  cursor: pointer;
+}
+.matrix-toast.error { border-left-color: var(--red); }
+.matrix-toast.hidden { display: none; }
+.matrix-toast .mx-toast-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.matrix-toast .mx-toast-body {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 /* ---------- hover 预览卡片（matrix skill 悬停） ---------- */
 

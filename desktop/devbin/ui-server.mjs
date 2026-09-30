@@ -205,12 +205,15 @@ const COMMANDS = {
       String(ref),
     ]),
   // 与 main.rs 一致：sync 返回 SidecarOutput 原始结构，不解析。
-  halter_sync: async ({ apply, layers }) => {
+  // tool / items 把同步收窄到矩阵的一个单元格（层由 layers 收窄）。
+  halter_sync: async ({ apply, layers, tool, items }) => {
     const allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     const args = ["sync"];
     for (const layer of allowed) {
       if (!layers.includes(layer)) args.push(`--no-${layer}`);
     }
+    if (tool) args.push("--tool", tool);
+    for (const item of items || []) args.push("--item", item);
     if (apply) args.push("--apply");
     return runHalter(args);
   },

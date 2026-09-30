@@ -541,8 +541,10 @@ def sync(
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认跳过）/ library（备份工具侧后以清单覆盖）"),
     source: str = typer.Option("auto", "--from", help="清单为空时的收集源（默认自动选最全的工具）"),
+    tool: str = typer.Option(None, "--tool", help="只分发到该工具（desktop 矩阵单元格点击）"),
+    item: list[str] = typer.Option([], "--item", help="只分发指定条目，可多选（desktop 矩阵单元格点击）"),
 ) -> None:
-    """同步一下：清单/库 -> 所有工具。清单为空会自动从最全的工具收集；默认 dry-run。"""
+    """同步一下：清单/库 -> 所有工具。清单为空会自动从最全的工具收集；--tool/--item 可收窄到单个矩阵单元格；默认 dry-run。"""
     from .agents import (
         plan_adopt as plan_agent_adopt,
         plan_sync as plan_agent_sync,
@@ -582,10 +584,24 @@ def sync(
     reports = scan_all(detections)
     cfg = load_config()
 
+    # --- 单元格范围（--tool/--item）：desktop 矩阵点一下圆点时的同步语义 ---
+    if tool is not None and tool not in installed:
+        console.print(f"[red]--tool {tool} 未安装或未知（本机可用：{', '.join(installed) or '无'}）[/red]")
+        raise typer.Exit(2)
+    cell_items = [i for i in item if i]
+
+    def wanted(name: str) -> bool:
+        """--item 过滤：未指定 = 全部条目。"""
+        return not cell_items or name in cell_items
+
+    def hit_tool(name: str) -> bool:
+        """--tool 过滤：未指定 = 全部工具。"""
+        return tool is None or name == tool
+
     # --- sessions 层：只分发查询 skill；绝不迁移 / 写入任何工具原生 session 文件 ---
     if layer_sessions:
         console.print("\nsession continuity: 项目级历史会话查询 skill")
-        for line in install_session_skill(cfg, installed, apply):
+        for line in install_session_skill(cfg, [tool] if tool else installed, apply):
             console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
                           if not line.startswith("conflict ") else f"  [yellow]{line}[/yellow]")
 
@@ -596,18 +612,18 @@ def sync(
             plan = plan_adopt_memory(reports)
             pick = pick_adopt_source(plan, None if source == "auto" else source)
             if pick is not None:
-                tool, src = pick
-                console.print(f"\nmemory: 事实源为空，从 {tool} 收养")
-                for line in run_adopt_memory(src, memory_lib, apply):
+                adopt_tool, adopt_src = pick
+                console.print(f"\nmemory: 事实源为空，从 {adopt_tool} 收养")
+                for line in run_adopt_memory(adopt_src, memory_lib, apply):
                     console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
             elif plan.sources:
                 if source != "auto":
                     console.print(f"[yellow]--from {source} 侧没有可收养的记忆文件[/yellow]")
                 console.print("  [yellow]各工具记忆内容不一致，需 --from <tool> 指定收养源：[/yellow]")
-                for tool, path in plan.sources:
-                    console.print(f"    {tool}: {path}")
+                for src_tool, path in plan.sources:
+                    console.print(f"    {src_tool}: {path}")
         if memory_lib.exists():
-            memory_actions = plan_sync_memory(memory_lib, reports)
+            memory_actions = [a for a in plan_sync_memory(memory_lib, reports) if hit_tool(a.tool)]
             memory_counts: dict[str, int] = {}
             for a in memory_actions:
                 memory_counts[a.kind] = memory_counts.get(a.kind, 0) + 1
@@ -633,9 +649,10 @@ def sync(
             for line in adopt_mcp(src, apply):
                 console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
             specs = load_manifest() if apply else []
+        specs = [s for s in specs if wanted(s.name)]
         if specs:
             console.print(f"MCP 清单: {len(specs)} 个 server")
-            for line in sync_mcp(specs, _load_secrets(), installed, apply, prefer):
+            for line in sync_mcp(specs, _load_secrets(), [tool] if tool else installed, apply, prefer):
                 console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
                               if not line.startswith(("[red]", "[yellow]")) else f"  {line}")
         elif apply:
@@ -651,9 +668,10 @@ def sync(
             for line in adopt_plugins(src, apply):
                 console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
             specs = load_plugin_manifest() if apply else []
+        specs = [s for s in specs if wanted(s.plugin_id)]
         if specs:
             console.print(f"插件清单: {len(specs)} 个")
-            for line in sync_plugins(specs, installed, apply):
+            for line in sync_plugins(specs, [tool] if tool else installed, apply):
                 console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
                               if not line.startswith(("[red]", "[yellow]")) else f"  {line}")
         elif apply:
@@ -669,9 +687,15 @@ def sync(
                 console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
             specs = ([s for s in load_hook_manifest() if s.id not in cfg.exclude_hooks]
                      if apply else [])
+        # 矩阵行名是 label（= gen_hook_id 基名，同工具重名带 #N 序号）；按剥离
+        # 序号后的基名匹配 manifest id（收集时重名会追加 -2/-3 序号后缀）
+        hook_bases = {i.split("#", 1)[0] for i in cell_items}
+        if hook_bases:
+            specs = [s for s in specs
+                     if any(s.id == b or s.id.startswith(b + "-") for b in hook_bases)]
         if specs:
             console.print(f"hooks 清单: {len(specs)} 条")
-            for line in sync_hooks(specs, installed, apply, prefer):
+            for line in sync_hooks(specs, [tool] if tool else installed, apply, prefer):
                 console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
                               if not line.startswith(("[red]", "[yellow]")) else f"  {line}")
         elif apply:
@@ -681,14 +705,17 @@ def sync(
     if layer_agents:
         agents_lib = resolve_agents_library(cfg, create=apply)
         agent_plan = plan_agent_adopt(agents_lib, reports)
+        agent_plan.to_adopt = [(t, p) for t, p in agent_plan.to_adopt if wanted(p.stem)]
+        agent_plan.conflicts = [c for c in agent_plan.conflicts if wanted(c[1])]
         if agent_plan.to_adopt:
             console.print(f"[blue]库外独有 subagents {len(agent_plan.to_adopt)} 个，自动收集[/blue]")
             for line in run_agent_adopt(agent_plan, agents_lib, apply):
                 console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
-        for tool, name, path, other in agent_plan.conflicts:
-            console.print(f"  [yellow]同名冲突[/yellow] {name} @ {tool}（多工具内容不一致，需人工裁决）")
+        for src_tool, name, path, other in agent_plan.conflicts:
+            console.print(f"  [yellow]同名冲突[/yellow] {name} @ {src_tool}（多工具内容不一致，需人工裁决）")
 
-        agent_actions = plan_agent_sync(agents_lib, reports, cfg.exclude_agents)
+        agent_actions = [a for a in plan_agent_sync(agents_lib, reports, cfg.exclude_agents)
+                         if hit_tool(a.tool) and wanted(a.agent)]
         agent_counts: dict[str, int] = {}
         for a in agent_actions:
             agent_counts[a.kind] = agent_counts.get(a.kind, 0) + 1
@@ -708,14 +735,17 @@ def sync(
     if layer_skills:
         library = resolve_library(cfg, create=apply)
         adopt_plan = plan_adopt(library, reports)
+        adopt_plan.to_adopt = [(t, p) for t, p in adopt_plan.to_adopt if wanted(p.name)]
+        adopt_plan.conflicts = [c for c in adopt_plan.conflicts if wanted(c[1])]
         if adopt_plan.to_adopt:
             console.print(f"[blue]库外独有 skills {len(adopt_plan.to_adopt)} 个，自动收集[/blue]")
             for line in run_adopt(adopt_plan, library, apply):
                 console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
-        for tool, name, path, other in adopt_plan.conflicts:
-            console.print(f"  [yellow]同名冲突[/yellow] {name} @ {tool}（多工具内容不一致，需人工裁决）")
+        for src_tool, name, path, other in adopt_plan.conflicts:
+            console.print(f"  [yellow]同名冲突[/yellow] {name} @ {src_tool}（多工具内容不一致，需人工裁决）")
 
-        actions = plan_sync(library, reports, cfg.exclude_skills)
+        actions = [a for a in plan_sync(library, reports, cfg.exclude_skills)
+                   if hit_tool(a.tool) and wanted(a.skill)]
         counts: dict[str, int] = {}
         for a in actions:
             counts[a.kind] = counts.get(a.kind, 0) + 1

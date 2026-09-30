@@ -119,3 +119,60 @@ test("切换语言中英文：文案、html lang、矩阵摘要与持久化", as
   await expect(page.locator("#tools-heading")).toHaveText("Harness（1）");
   await expect(page.locator(".nav-item.active")).toContainText("总览");
 });
+
+test("matrix 点击圆点单元格触发定向同步并刷新矩阵", async ({ page }) => {
+  // gemini 侧缺 paper-polish（○）；点击该格应定向 sync 并在重扫后变 ●
+  const initialScan = {
+    doctor: [],
+    inventory: [
+      {
+        tool: "claude", display: "Claude Code", installed: true, category: "harness",
+        skills: [{ name: "paper-polish", path: "/s/pp", linked: true }],
+      },
+      { tool: "gemini", display: "Gemini CLI", installed: true, category: "harness", skills: [] },
+    ],
+  };
+  await openApp(page, bootData({ halter_scan: initialScan }));
+
+  // 同步后 gemini 也有该 skill；两个 handler 经 window 共享翻转状态
+  await setHandler(page, "halter_scan", () => () => ({
+    doctor: [],
+    inventory: [
+      {
+        tool: "claude", display: "Claude Code", installed: true, category: "harness",
+        skills: [{ name: "paper-polish", path: "/s/pp", linked: true }],
+      },
+      {
+        tool: "gemini", display: "Gemini CLI", installed: true, category: "harness",
+        skills: window.__geminiLinked
+          ? [{ name: "paper-polish", path: "/g/pp", linked: true }]
+          : [],
+      },
+    ],
+  }));
+  await setHandler(page, "halter_sync", () => async (args) => {
+    window.__syncArgs = args;
+    window.__geminiLinked = true;
+    return { ok: true, code: 0, stdout: "link   gemini:paper-polish -> /g/pp", stderr: "" };
+  });
+
+  await page.locator('.nav-item[data-view="matrix"]').click();
+  const gapCell = page.locator(".mx-cell.missing").first();
+  await expect(gapCell).toHaveClass(/clickable/);
+  await gapCell.click();
+
+  // 调用参数：定向到 gemini 的单个单元格（apply + 单层 + tool + items）
+  const syncArgs = await page.evaluate(() => window.__syncArgs);
+  expect(syncArgs).toEqual({
+    apply: true,
+    layers: ["skills"],
+    tool: "gemini",
+    items: ["paper-polish"],
+  });
+
+  // toast 展示 CLI 输出；重扫后 gemini 格变 ●（synced，不再可点击）
+  await expect(page.locator("#matrix-toast")).toBeVisible();
+  await expect(page.locator("#matrix-toast")).toContainText("link   gemini:paper-polish");
+  await expect(page.locator(".mx-cell.synced")).toHaveCount(2);
+  await expect(page.locator(".mx-cell.missing")).toHaveCount(0);
+});
