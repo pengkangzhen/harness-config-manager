@@ -4,6 +4,8 @@
 // 用法：node desktop/devbin/ui-server.mjs [port]
 import http from "node:http";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -77,6 +79,70 @@ async function desktopVersion() {
 }
 
 // 键名与 app.js 实际传参一致（Tauri 会把 snake_case 转 camelCase）。
+// 用系统默认程序打开文件（Memory 面板的「打开」按钮）。
+// 安全约束：只允许打开家目录内、真实存在的文件。打开器逐个回退：
+// linux 先试 xdg-open / wslview（GUI 环境）；WSL 无显示会话时用
+// `wslpath -w` 转成 \\wsl.localhost\… 路径交给 Windows explorer.exe
+// （explorer 成功时也常返回 1，因此该候选以 0/1 均算成功）。
+const OPENERS = {
+  darwin: [["open"]],
+  win32: [["cmd", "/c", "start", ""]],
+  linux: [["xdg-open"], ["wslview"], ["explorer.exe"]],
+};
+
+function openWith(entries, target) {
+  return new Promise((resolve, reject) => {
+    const tryNext = (i) => {
+      if (i >= entries.length) {
+        reject(new Error(`no opener succeeded for ${target}`));
+        return;
+      }
+      const { argv, target: t, okCodes } = entries[i];
+      const child = spawn(argv[0], [...argv.slice(1), t], { stdio: "ignore" });
+      child.on("error", () => tryNext(i + 1)); // ENOENT：没装，试下一个
+      child.on("close", (code) => {
+        if (okCodes.includes(code)) resolve();
+        else tryNext(i + 1);
+      });
+    };
+    tryNext(0);
+  });
+}
+
+function winPathOf(p) {
+  return new Promise((resolve) => {
+    const child = spawn("wslpath", ["-w", p]);
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => resolve(code === 0 ? out.trim() : null));
+  });
+}
+
+async function openInSystem(rawPath) {
+  const home = os.homedir();
+  const resolved = path.resolve(String(rawPath));
+  if (resolved !== home && !resolved.startsWith(home + path.sep)) {
+    throw new Error(`refusing to open outside home: ${resolved}`);
+  }
+  if (!existsSync(resolved)) throw new Error(`file not found: ${resolved}`);
+  const target = resolved;
+  const entries = (OPENERS[process.platform] ?? OPENERS.linux).map((argv) => ({
+    argv, target, okCodes: [0],
+  }));
+  if (process.platform === "linux") {
+    const winPath = await winPathOf(resolved);
+    if (winPath) {
+      const exe = existsSync("/mnt/c/Windows/explorer.exe")
+        ? "/mnt/c/Windows/explorer.exe"
+        : "explorer.exe";
+      entries.push({ argv: [exe], target: winPath, okCodes: [0, 1] });
+    }
+  }
+  await openWith(entries, resolved);
+  return { opened: resolved };
+}
+
 const COMMANDS = {
   halter_version: async () => {
     const value = await runJson(["version", "--json"]);
@@ -87,6 +153,7 @@ const COMMANDS = {
   halter_memory_show: () => runJson(["memory", "show", "--json"]),
   halter_memory_write: ({ content }) =>
     runHalter(["memory", "write", "--json"], String(content ?? "")),
+  open_path: ({ path: target }) => openInSystem(target),
   halter_sessions_list: ({ project, limit, allProjects }) =>
     runJson([
       "sessions",

@@ -168,6 +168,66 @@ async fn halter_memory_write(content: String) -> Result<SidecarOutput, String> {
     .map_err(|e| format!("sidecar task failed: {e}"))?
 }
 
+/// Open a file with the system default program (Memory panel's open button).
+/// Safety constraint: only files inside the user's home directory, and only
+/// if they exist. Openers are tried in order (WSL: xdg-open via WSLg, then
+/// wslview / explorer.exe).
+fn open_path_sync(raw: &str) -> Result<(), String> {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").map_err(|_| "cannot resolve home dir".to_string())?
+    } else {
+        std::env::var("HOME").map_err(|_| "cannot resolve home dir".to_string())?
+    };
+    let resolved = std::path::PathBuf::from(raw)
+        .canonicalize()
+        .map_err(|e| format!("file not found: {raw} ({e})"))?;
+    // Windows canonicalize yields \\?\-prefixed paths; strip for the prefix check.
+    let resolved_str = resolved.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+    if resolved_str != home && !resolved_str.starts_with(&format!("{home}{}", std::path::MAIN_SEPARATOR)) {
+        return Err(format!("refusing to open outside home: {resolved_str}"));
+    }
+    let candidates: Vec<Vec<&str>> = if cfg!(target_os = "macos") {
+        vec![vec!["open"]]
+    } else if cfg!(windows) {
+        vec![vec!["cmd", "/c", "start", ""]]
+    } else {
+        vec![vec!["xdg-open"], vec!["wslview"], vec!["explorer.exe"]]
+    };
+    for argv in candidates {
+        let status = Command::new(argv[0]).args(&argv[1..]).arg(&resolved_str).status();
+        if matches!(status, Ok(s) if s.success()) {
+            return Ok(());
+        }
+    }
+    // WSL 无显示会话时：wslpath -w 转成 \\wsl.localhost\… 交给 Windows explorer。
+    // explorer.exe 成功时也常返回 1，因此 0/1 均算成功。
+    if cfg!(target_os = "linux") {
+        if let Ok(out) = Command::new("wslpath").arg("-w").arg(&resolved_str).output() {
+            if out.status.success() {
+                let win = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let exe = if std::path::Path::new("/mnt/c/Windows/explorer.exe").exists() {
+                    "/mnt/c/Windows/explorer.exe"
+                } else {
+                    "explorer.exe"
+                };
+                if let Ok(s) = Command::new(exe).arg(&win).status() {
+                    if s.success() || s.code() == Some(1) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    Err(format!("no opener succeeded for {resolved_str}"))
+}
+
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_path_sync(&path))
+        .await
+        .map_err(|e| format!("sidecar task failed: {e}"))?
+}
+
 #[tauri::command]
 async fn halter_sessions_list(
     project: String,
@@ -279,6 +339,7 @@ fn main() {
             halter_scan,
             halter_memory_show,
             halter_memory_write,
+            open_path,
             halter_sessions_list,
             halter_sessions_projects,
             halter_sessions_show,

@@ -1364,6 +1364,7 @@ function renderMemory() {
   const badge = $("mem-library-badge");
   badge.textContent = lib.exists ? t("mem.badgeOk") : t("mem.badgeMissing");
   badge.classList.toggle("warn", !lib.exists);
+  $("btn-memory-open").classList.toggle("hidden", !lib.exists);
   const editor = $("memory-editor");
   if (!memoryState.editing) editor.value = lib.content ?? "";
   const tools = $("mem-tools");
@@ -1372,11 +1373,23 @@ function renderMemory() {
     const card = el("div", "mem-tool");
     const head = el("div", "mem-tool-head");
     const st = memToolState(item);
-    const name = el("span", "mem-tool-name", item.display);
-    name.append(el("span", `legend-dot ${st.cls}`, st.mark));
-    head.append(name);
-    head.append(el("span", "mem-tool-meta", `${item.path} · ${item.size}B · ${t(st.key)}`));
+    head.append(el("span", `legend-dot ${st.cls}`, st.mark));
+    // 标题 = 对应的记忆文件名（CLAUDE.md / AGENTS.md…），副注 = 工具名
+    head.append(el("span", "mem-tool-file", item.path.split("/").pop()));
+    head.append(el("span", "mem-tool-display", item.display));
+    head.append(el("span", "mem-tool-meta", `${t(st.key)} · ${item.size}B`));
+    const spacer = el("span", "toolbar-spacer");
+    head.append(spacer);
+    if (item.present) {
+      const openBtn = el("button", "btn btn-sm", t("mem.open"));
+      openBtn.addEventListener("click", () => {
+        invoke("open_path", { path: item.path })
+          .catch((err) => showError($("memory-error"), err));
+      });
+      head.append(openBtn);
+    }
     card.append(head);
+    card.append(el("div", "mem-tool-meta dim", item.path));
     if (item.diff) {
       const details = el("details", "mem-diff");
       details.append(el("summary", "", t("mem.diffSummary")));
@@ -1426,6 +1439,11 @@ function disarmSave() {
 }
 
 $("btn-memory-edit").addEventListener("click", () => setMemoryEditing(true));
+
+$("btn-memory-open").addEventListener("click", () => {
+  const p = memoryState.snap?.library.path;
+  if (p) invoke("open_path", { path: p }).catch((err) => showError($("memory-error"), err));
+});
 
 $("btn-memory-cancel").addEventListener("click", () => {
   setMemoryEditing(false);
