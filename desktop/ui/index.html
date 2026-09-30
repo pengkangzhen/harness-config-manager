@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Harness Config Manager</title>
+  <title>Halter — Harness 配置管理器</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,7 +11,26 @@
   <div id="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">H</div>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="hm-bg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#121b33" />
+                <stop offset="1" stop-color="#090e1e" />
+              </linearGradient>
+              <linearGradient id="hm-ring" x1="1" y1="1" x2="0" y2="0">
+                <stop offset="0" stop-color="#4cc2ff" />
+                <stop offset="1" stop-color="#a78bfa" />
+              </linearGradient>
+            </defs>
+            <rect width="64" height="64" rx="14.4" fill="url(#hm-bg)" />
+            <g fill="none" stroke="url(#hm-ring)">
+              <circle cx="27.5" cy="28.2" r="12.2" stroke-width="6.4" />
+              <circle cx="41.3" cy="39.7" r="7.7" stroke-width="6.4" />
+              <circle cx="27.5" cy="43.3" r="4.8" stroke-width="5.4" />
+            </g>
+          </svg>
+        </div>
         <div>
           <div class="brand-name">halter</div>
           <div class="brand-sub">harness config manager</div>
@@ -19,19 +38,23 @@
       </div>
       <nav class="nav">
         <button class="nav-item active" data-view="overview" aria-current="page">
-          <span class="nav-icon">◎</span> 总览
+          <span class="nav-icon">◎</span> <span data-i18n="nav.overview">总览</span>
         </button>
         <button class="nav-item" data-view="matrix">
-          <span class="nav-icon">▦</span> 矩阵
+          <span class="nav-icon">▦</span> <span data-i18n="nav.matrix">矩阵</span>
         </button>
         <button class="nav-item" data-view="sessions">
-          <span class="nav-icon">⌘</span> 会话
+          <span class="nav-icon">⌘</span> <span data-i18n="nav.sessions">会话</span>
         </button>
         <button class="nav-item" data-view="sync">
-          <span class="nav-icon">⇄</span> 同步
+          <span class="nav-icon">⇄</span> <span data-i18n="nav.sync">同步</span>
         </button>
       </nav>
       <div class="sidebar-footer">
+        <div class="lang-toggle" role="group" data-i18n-aria-label="lang.label" aria-label="语言">
+          <button id="lang-zh" type="button" class="lang-btn active">中</button>
+          <button id="lang-en" type="button" class="lang-btn">EN</button>
+        </div>
         <div id="halter-version" class="version-pill">halter …</div>
       </div>
     </aside>
@@ -40,42 +63,42 @@
       <!-- ============ Overview ============ -->
       <section id="view-overview" class="view active">
         <header class="view-header">
-          <h1>总览</h1>
+          <h1 data-i18n="ov.heading">总览</h1>
           <div class="header-actions">
-            <button id="btn-refresh-scan" class="btn">↻ 刷新</button>
+            <button id="btn-refresh-scan" class="btn" data-i18n="ov.refresh">↻ 刷新</button>
           </div>
         </header>
         <div id="scan-error" class="error-box hidden"></div>
-        <div id="scan-loading" class="loading">正在扫描本机 AI 编码工具…</div>
+        <div id="scan-loading" class="loading" data-i18n="ov.scanning">正在扫描本机 AI 编码工具…</div>
         <div id="overview-content" class="hidden">
+          <h2 id="tools-heading" data-i18n="ov.tools">Harness</h2>
+          <div id="tools-grid" class="tools-grid"></div>
           <div id="doctor-section" class="doctor-section hidden">
-            <h2>健康检查</h2>
+            <h2 data-i18n="ov.doctor">健康检查</h2>
             <div id="doctor-list"></div>
           </div>
-          <h2 id="tools-heading">工具</h2>
-          <div id="tools-grid" class="tools-grid"></div>
         </div>
       </section>
 
       <!-- ============ Matrix ============ -->
       <section id="view-matrix" class="view">
         <header class="view-header">
-          <h1>配置矩阵</h1>
+          <h1 data-i18n="mx.heading">配置矩阵</h1>
           <div class="header-actions">
-            <label class="gap-toggle"><input type="checkbox" id="matrix-harness-only" checked /> 仅 AI Harness</label>
-            <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> 仅显示缺口</label>
-            <button id="btn-refresh-matrix" class="btn">↻ 刷新</button>
+            <label class="gap-toggle"><input type="checkbox" id="matrix-harness-only" checked /> <span data-i18n="mx.harnessOnly">仅 AI Harness</span></label>
+            <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> <span data-i18n="mx.gapsOnly">仅显示缺口</span></label>
+            <button id="btn-refresh-matrix" class="btn" data-i18n="mx.refresh">↻ 刷新</button>
           </div>
         </header>
         <div id="matrix-error" class="error-box hidden"></div>
-        <div id="matrix-loading" class="loading">正在构建 Harness × 配置矩阵…</div>
+        <div id="matrix-loading" class="loading" data-i18n="mx.building">正在构建 Harness × 配置矩阵…</div>
         <div id="matrix-content" class="hidden">
           <div id="matrix-layer-tabs" class="layer-tabs"></div>
           <div class="matrix-legend">
-            <span class="legend-item"><span class="legend-dot synced">●</span> 已同步（symlink）</span>
-            <span class="legend-item"><span class="legend-dot present">◐</span> 已存在（非 halter 管理）</span>
-            <span class="legend-item"><span class="legend-dot partial">◔</span> 家族部分成员存在</span>
-            <span class="legend-item"><span class="legend-dot missing">○</span> 缺少</span>
+            <span class="legend-item"><span class="legend-dot synced">●</span> <span data-i18n="mx.legendSynced">已同步（symlink）</span></span>
+            <span class="legend-item"><span class="legend-dot present">◐</span> <span data-i18n="mx.legendPresent">已存在（非 halter 管理）</span></span>
+            <span class="legend-item"><span class="legend-dot partial">◔</span> <span data-i18n="mx.legendPartial">家族部分成员存在</span></span>
+            <span class="legend-item"><span class="legend-dot missing">○</span> <span data-i18n="mx.legendMissing">缺少</span></span>
           </div>
           <div id="matrix-summary" class="matrix-summary"></div>
           <div id="matrix-wrap" class="matrix-wrap"></div>
@@ -85,24 +108,30 @@
       <!-- ============ Sessions ============ -->
       <section id="view-sessions" class="view">
         <header class="view-header">
-          <h1>跨助手会话</h1>
+          <h1 data-i18n="ss.heading">跨助手会话</h1>
           <div class="header-actions">
-            <button id="btn-refresh-sessions" class="btn">↻ 刷新</button>
+            <button id="btn-refresh-sessions" class="btn" data-i18n="ss.refresh">↻ 刷新</button>
           </div>
         </header>
         <div class="sessions-layout">
           <div class="sessions-left">
-            <div class="search-row">
-              <input id="search-input" class="text-input" placeholder="搜索会话内容…" spellcheck="false" />
-              <button id="btn-search" class="btn">搜索</button>
+            <div class="search-box">
+              <span class="search-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="7" cy="7" r="5" />
+                  <line x1="11" y1="11" x2="14.5" y2="14.5" />
+                </svg>
+              </span>
+              <input id="search-input" class="search-input" placeholder="搜索会话内容，回车执行…" spellcheck="false" data-i18n-placeholder="ss.searchPlaceholder" />
+              <span class="search-kbd" aria-hidden="true">↵</span>
             </div>
             <div class="facet-panel">
-              <div class="facet-row">
-                <div class="facet-label">项目</div>
-                <div class="facet-value facet-dropdown-wrap">
+              <div class="facet-block">
+                <div class="facet-label" data-i18n="ss.project">项目</div>
+                <div class="facet-dropdown-wrap">
                   <div class="facet-combobox">
-                    <input id="project-input" class="facet-input" placeholder="输入项目名/路径筛选，回车选中…" spellcheck="false" autocomplete="off" />
-                    <button id="project-clear" type="button" class="facet-clear hidden" title="清除，回到全部项目" aria-label="清除项目筛选">✕</button>
+                    <input id="project-input" class="facet-input" placeholder="输入项目名/路径筛选，回车选中…" spellcheck="false" autocomplete="off" data-i18n-placeholder="ss.projectInputPlaceholder" />
+                    <button id="project-clear" type="button" class="facet-clear hidden" title="清除，回到全部项目" aria-label="清除项目筛选" data-i18n-title="ss.projectClearTitle" data-i18n-aria-label="ss.projectClearAria">✕</button>
                     <span class="facet-caret">▾</span>
                   </div>
                   <div id="project-dropdown" class="project-dropdown hidden">
@@ -110,26 +139,29 @@
                   </div>
                 </div>
               </div>
-              <div class="facet-row">
-                <div class="facet-label">助手</div>
-                <div id="tool-filter" class="facet-value tool-filter hidden"></div>
-              </div>
-              <div class="facet-row">
-                <div class="facet-label">视图</div>
-                <div class="facet-value">
-                  <div class="view-toggle">
-                    <button id="btn-view-list" type="button" class="toggle-btn" aria-pressed="false">列表</button>
-                    <button id="btn-view-timeline" type="button" class="toggle-btn active" aria-pressed="true">时间线</button>
-                  </div>
-                </div>
-                <div id="session-count" class="session-count"></div>
+              <div id="tool-filter-row" class="facet-block hidden">
+                <div class="facet-label" data-i18n="ss.assistant">助手</div>
+                <div id="tool-filter" class="tool-filter"></div>
               </div>
             </div>
-            <div id="sessions-list" class="sessions-list"></div>
+            <div class="list-toolbar">
+              <span id="session-sort" class="session-sort" data-i18n="ss.sortRecent">↓ 按最近更新排序</span>
+              <span class="toolbar-spacer"></span>
+              <span id="session-count" class="session-count"></span>
+              <div class="view-toggle">
+                <button id="btn-view-list" type="button" class="toggle-btn" aria-pressed="false" data-i18n="ss.list">列表</button>
+                <button id="btn-view-timeline" type="button" class="toggle-btn active" aria-pressed="true" data-i18n="ss.timeline">时间线</button>
+              </div>
+            </div>
+            <div id="sessions-list" class="sessions-list timeline"></div>
           </div>
           <div class="sessions-right">
             <div id="session-detail" class="session-detail empty">
-              <div class="empty-state">← 选择一个会话查看详情</div>
+              <div class="empty-state">
+                <div class="empty-icon" aria-hidden="true">⌘</div>
+                <div class="empty-title" data-i18n="ss.emptyDetailTitle">选择一个会话</div>
+                <div class="empty-sub" data-i18n="ss.emptyDetailSub">查看元信息与最近对话，可生成交接上下文</div>
+              </div>
             </div>
           </div>
         </div>
@@ -138,29 +170,30 @@
       <!-- ============ Sync ============ -->
       <section id="view-sync" class="view">
         <header class="view-header">
-          <h1>同步</h1>
+          <h1 data-i18n="sy.heading">同步</h1>
         </header>
         <div class="sync-panel">
-          <p class="sync-note">
+          <p class="sync-note" data-i18n="sy.note">
             默认 dry-run：只生成计划、不写任何文件。Apply 才会实际执行（skills 覆盖前自动备份）。
           </p>
           <div class="layer-grid">
             <label class="layer-chip"><input type="checkbox" value="skills" checked /><span>skills</span></label>
             <label class="layer-chip"><input type="checkbox" value="mcp" checked /><span>MCP</span></label>
-            <label class="layer-chip"><input type="checkbox" value="plugins" checked /><span>插件</span></label>
+            <label class="layer-chip"><input type="checkbox" value="plugins" checked /><span data-i18n="layer.plugins">插件</span></label>
             <label class="layer-chip"><input type="checkbox" value="hooks" checked /><span>hooks</span></label>
             <label class="layer-chip"><input type="checkbox" value="agents" checked /><span>subagents</span></label>
             <label class="layer-chip"><input type="checkbox" value="sessions" checked /><span>sessions skill</span></label>
           </div>
           <div class="sync-actions">
-            <button id="btn-sync-preview" class="btn">预览 dry-run</button>
-            <button id="btn-sync-apply" class="btn danger" disabled>Apply 实际执行</button>
+            <button id="btn-sync-preview" class="btn" data-i18n="sy.preview">预览 dry-run</button>
+            <button id="btn-sync-apply" class="btn danger" disabled data-i18n="sy.apply">Apply 实际执行</button>
           </div>
           <pre id="sync-output" class="sync-output hidden"></pre>
         </div>
       </section>
     </main>
   </div>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,9 @@
-"""doctor：健康检查（配置可解析 / 断链 / 密钥占位完整性）。"""
+"""doctor：健康检查（配置可解析 / 断链 / 密钥占位完整性）。
+
+输出结构化事实：{level, where, code, params}。人读文案由展示层渲染——
+CLI 端用本模块的 ZH_TEXT（中文终端），桌面端前端用 ui/i18n.js 的
+doctor.* 模板（跟随界面语言）。两侧 code 必须保持一致。
+"""
 
 from __future__ import annotations
 
@@ -25,6 +30,25 @@ CHECKABLE_FILES = [
     ("vscode", "Library/Application Support/Code/User/mcp.json"),
 ]
 
+# CLI（中文终端）用的文案模板；桌面端见 desktop/ui/i18n.js 的 doctor.* 条目。
+ZH_TEXT = {
+    "parse_ok": "可解析",
+    "json_parse_error": "JSON 解析失败: {err}",
+    "toml_parse_error": "TOML 解析失败: {err}",
+    "broken_link": "断链（指向 {target} 不存在）",
+    "library_ok": "{n} 个 skill",
+    "library_missing": "不存在（首次 sync --apply 时创建）",
+    "mcp_secret_missing": "密钥变量未定义: {vars}",
+    "dead_command": "command 指向的 {command} 不存在（死配置，建议删除）",
+}
+
+
+def message_zh(item: dict) -> str:
+    s = ZH_TEXT[item["code"]]
+    for k, v in item.get("params", {}).items():
+        s = s.replace("{" + k + "}", str(v))
+    return s
+
 
 def _check_json(path: Path) -> str | None:
     try:
@@ -34,7 +58,7 @@ def _check_json(path: Path) -> str | None:
     except OSError:
         return None  # 不存在不算病
     except json.JSONDecodeError as e:
-        return f"JSON 解析失败: {e}"
+        return str(e)
 
 
 def _check_toml(path: Path) -> str | None:
@@ -45,23 +69,33 @@ def _check_toml(path: Path) -> str | None:
     except OSError:
         return None
     except tomllib.TOMLDecodeError as e:
-        return f"TOML 解析失败: {e}"
+        return str(e)
 
 
-def run_doctor() -> list[tuple[str, str, str]]:
-    """返回 (级别, 位置, 说明) 列表；级别 ok / warn / error。"""
-    results: list[tuple[str, str, str]] = []
+def run_doctor() -> list[dict]:
+    """返回 {level, where, code, params} 列表；level ok / warn / error。"""
+    results: list[dict] = []
+
+    def add(level: str, where: str, code: str, **params: object) -> None:
+        results.append({"level": level, "where": where, "code": code, "params": params})
 
     # 1. 工具配置文件可解析
     for tool, pattern in CHECKABLE_FILES:
         path = expand(pattern)
         if not path.exists():
             continue
-        issue = _check_toml(path) if path.suffix == ".toml" else _check_json(path)
-        if issue:
-            results.append(("error", f"{tool}: ~/{pattern}", issue))
+        if path.suffix == ".toml":
+            err = _check_toml(path)
+            if err:
+                add("error", f"{tool}: ~/{pattern}", "toml_parse_error", err=err)
+            else:
+                add("ok", f"{tool}: ~/{pattern}", "parse_ok")
         else:
-            results.append(("ok", f"{tool}: ~/{pattern}", "可解析"))
+            err = _check_json(path)
+            if err:
+                add("error", f"{tool}: ~/{pattern}", "json_parse_error", err=err)
+            else:
+                add("ok", f"{tool}: ~/{pattern}", "parse_ok")
 
     # 2. skills / subagents 断链
     for spec in TOOLS:
@@ -71,24 +105,24 @@ def run_doctor() -> list[tuple[str, str, str]]:
                 continue
             for child in root.iterdir():
                 if child.is_symlink() and not child.exists():
-                    results.append(("error", f"{spec.key}: {child.name}",
-                                    f"断链（指向 {child.resolve(strict=False)} 不存在）"))
+                    add("error", f"{spec.key}: {child.name}", "broken_link",
+                        target=str(child.resolve(strict=False)))
         for pattern in getattr(spec, "agents_dirs", ()):
             root = expand(pattern)
             if not root.is_dir():
                 continue
             for child in root.iterdir():
                 if child.is_symlink() and not child.exists():
-                    results.append(("error", f"{spec.key}: agent {child.name}",
-                                    f"断链（指向 {child.resolve(strict=False)} 不存在）"))
+                    add("error", f"{spec.key}: agent {child.name}", "broken_link",
+                        target=str(child.resolve(strict=False)))
 
     # 3. 库状态
     library = resolve_library(load_config())
     if library.is_dir():
         n = len([p for p in library.iterdir() if (p / "SKILL.md").exists()])
-        results.append(("ok", f"库: {library}", f"{n} 个 skill"))
+        add("ok", f"库: {library}", "library_ok", n=n)
     else:
-        results.append(("warn", f"库: {library}", "不存在（首次 sync --apply 时创建）"))
+        add("warn", f"库: {library}", "library_missing")
 
     # 4. MCP 清单密钥占位可解析
     import os
@@ -100,8 +134,8 @@ def run_doctor() -> list[tuple[str, str, str]]:
                         if isinstance(v, str) and v.startswith("${") and v.endswith("}")]
         missing = [p for p in placeholders if p[2:-1] not in os.environ and p[2:-1] not in secrets]
         if missing:
-            results.append(("warn", f"MCP 清单: {s.name}",
-                            f"密钥变量未定义: {', '.join(p[2:-1] for p in missing)}"))
+            add("warn", f"MCP 清单: {s.name}", "mcp_secret_missing",
+                vars=", ".join(p[2:-1] for p in missing))
 
     # 5. MCP 死配置检测：command 指向的可执行文件必须存在
     #    规则：enabled=false 的跳过（禁用即不生效）；相对路径跳过（相对哪里不可判定）；
@@ -130,8 +164,7 @@ def run_doctor() -> list[tuple[str, str, str]]:
             else:
                 alive = _shutil.which(m.command) is not None
             if not alive:
-                results.append(("error", f"{tool}: MCP {m.name}",
-                                f"command 指向的 {m.command} 不存在（死配置，建议删除）"))
+                add("error", f"{tool}: MCP {m.name}", "dead_command", command=m.command)
 
     # 6. hooks 死配置检测：仅对「单一脚本路径」形式的 command 判定存在性。
     #    复合 shell 表达式（if/case/管道等）无法可靠判定，一律跳过不误报。
@@ -169,7 +202,6 @@ def run_doctor() -> list[tuple[str, str, str]]:
                 continue
             alive = _hook_alive(h.command, Path.home())
             if alive is False:
-                results.append(("error", f"{tool}: hook {h.label} @ {h.event}",
-                                f"command 指向的 {h.command} 不存在（死配置，建议删除）"))
+                add("error", f"{tool}: hook {h.label} @ {h.event}", "dead_command", command=h.command)
 
     return results

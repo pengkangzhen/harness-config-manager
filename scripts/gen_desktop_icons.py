@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate Halter desktop app icons (PNG / ICNS / ICO) with no third-party deps.
 
-Renders a rounded-square "config distribution" mark — three nodes linked by
-lines — at 4x supersampling, then packages the PNGs into macOS .icns and
-Windows .ico containers (both accept PNG-encoded entries).
+Renders the halter mark — three interlocking rings (a horse halter abstracted:
+nose ring + cheek ring + lead ring) — on a deep navy rounded square, at 4x
+supersampling, then packages the PNGs into macOS .icns and Windows .ico
+containers (both accept PNG-encoded entries).
 """
 
 from __future__ import annotations
@@ -31,13 +32,6 @@ def circle_sdf(px: float, py: float, cx: float, cy: float, r: float) -> float:
     return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 - r
 
 
-def segment_sdf(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
-    abx, aby = bx - ax, by - ay
-    t = clamp(((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby))
-    dx, dy = px - (ax + abx * t), py - (ay + aby * t)
-    return (dx * dx + dy * dy) ** 0.5
-
-
 def lerp(a: float, b: float, t: float) -> tuple[int, int, int]:
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))  # type: ignore[return-value]
 
@@ -46,16 +40,18 @@ def render(size: int) -> bytes:
     """Render the icon at `size` px and return PNG bytes."""
     big = size * SS
     bg_top, bg_bot = (18, 27, 51), (9, 14, 30)
-    border = (76, 194, 255)
-    nodes = [
-        (0.28, 0.30, 0.075, (76, 194, 255)),   # cyan
-        (0.72, 0.38, 0.062, (167, 139, 250)),  # violet
-        (0.46, 0.72, 0.062, (255, 198, 92)),   # amber
-    ]
-    links = [(0, 1), (0, 2), (1, 2)]
-    link_w = size * 0.030
+    ring_a, ring_b = (76, 194, 255), (167, 139, 250)  # cyan → violet
+    border = ring_a
     border_w = size * 0.012
     radius = size * 0.225
+
+    # halter abstracted into three interlocking rings (unit coords):
+    # (cx, cy, centerline radius, half-thickness)
+    rings = [
+        (0.430, 0.440, 0.190, 0.050),  # nose ring
+        (0.645, 0.620, 0.120, 0.050),  # cheek ring
+        (0.430, 0.677, 0.075, 0.042),  # lead ring
+    ]
 
     rows: list[bytearray] = []
     for yy in range(size):
@@ -79,23 +75,16 @@ def render(size: int) -> bytes:
                     rr = rr * (1 - edge * 0.55) + border[0] * edge * 0.55
                     gg = gg * (1 - edge * 0.55) + border[1] * edge * 0.55
                     bb = bb * (1 - edge * 0.55) + border[2] * edge * 0.55
-                    # links
-                    for i, j in links:
-                        ax, ay = nodes[i][0] * big, nodes[i][1] * big
-                        bx, by = nodes[j][0] * big, nodes[j][1] * big
-                        d = segment_sdf(px, py, ax, ay, bx, by)
-                        cov = clamp(0.5 - d / (link_w * SS)) * 0.45
-                        rr = rr * (1 - cov) + 150 * cov
-                        gg = gg * (1 - cov) + 170 * cov
-                        bb = bb * (1 - cov) + 210 * cov
-                    # nodes
-                    for nx, ny, nr, color in nodes:
-                        d = circle_sdf(px, py, nx * big, ny * big, nr * size * SS)
+                    # rings, cyan (lower-right) → violet (upper-left)
+                    for cx, cy, r_mid, half_t in rings:
+                        d = abs(circle_sdf(px, py, cx * big, cy * big, r_mid * big)) - half_t * big
                         cov = clamp(0.5 - d)
                         if cov > 0:
-                            rr = rr * (1 - cov) + color[0] * cov
-                            gg = gg * (1 - cov) + color[1] * cov
-                            bb = bb * (1 - cov) + color[2] * cov
+                            tt = clamp((px + py) / (2 * big))
+                            col = lerp(ring_b, ring_a, tt)
+                            rr = rr * (1 - cov) + col[0] * cov
+                            gg = gg * (1 - cov) + col[1] * cov
+                            bb = bb * (1 - cov) + col[2] * cov
                     r += rr * alpha
                     g += gg * alpha
                     b += bb * alpha

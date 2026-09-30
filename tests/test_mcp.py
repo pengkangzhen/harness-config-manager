@@ -237,7 +237,7 @@ def test_doctor_dead_mcp_detection(fake_home: Path) -> None:
         "relative": {"type": "stdio", "command": "./local/server"},
     })
     (fake_home / ".claude").mkdir()
-    issues = [(lvl, where) for lvl, where, _ in run_doctor() if lvl == "error"]
+    issues = [(i["level"], i["where"]) for i in run_doctor() if i["level"] == "error"]
     dead = [w for _, w in issues if "dead" in w]
     assert dead and all("disabled" not in w and "relative" not in w for w in dead)
 

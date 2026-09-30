@@ -333,4 +333,4 @@ def test_doctor_does_not_report_unexpanded_hook_paths_as_dead(fake_home: Path) -
         "beforeSubmitPrompt": [{"command": "$CLAUDE_PROJECT_DIR/hook.sh"}],
     }}), encoding="utf-8")
     results = run_doctor()
-    assert not any("死配置" in message for _, _, message in results)
+    assert not any(i["code"] == "dead_command" for i in results)

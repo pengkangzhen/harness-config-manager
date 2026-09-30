@@ -37,7 +37,8 @@ def test_scan_json_includes_doctor(fake_home) -> None:
     for item in payload["doctor"]:
         assert item["level"] in ("ok", "warn", "error")
         assert "where" in item
-        assert "message" in item
+        assert "code" in item
+        assert "params" in item
 
 
 def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> None:

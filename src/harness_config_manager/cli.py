@@ -374,7 +374,7 @@ def scan(
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
     from . import report as rp
-    from .doctor import run_doctor
+    from .doctor import message_zh, run_doctor
     from .scan import scan_all
 
     detections = detect_tools()
@@ -382,14 +382,10 @@ def scan(
 
     reports = scan_all(detections)
     if json_out:
-        doctor = [
-            {"level": level, "where": where, "message": msg}
-            for level, where, msg in run_doctor()
-        ]
         console.print_json(_json.dumps({
             "tools_detected": [d.__dict__ for d in detections if d.installed],
             "inventory": _json.loads(rp.to_json(reports)),
-            "doctor": doctor,
+            "doctor": run_doctor(),
         }, ensure_ascii=False))
         return
 
@@ -425,11 +421,12 @@ def scan(
         for tool, note in notes:
             console.print(f"  [dim]{tool}: {note}[/dim]")
 
-    issues = [(level, where, msg) for level, where, msg in run_doctor() if level != "ok"]
+    issues = [i for i in run_doctor() if i["level"] != "ok"]
     if issues:
         console.print("\n[red]⚠ 健康问题：[/red]")
-        for level, where, msg in issues:
-            console.print(f"  [{'red' if level == 'error' else 'yellow'}]{where}[/] {msg}")
+        for i in issues:
+            color = "red" if i["level"] == "error" else "yellow"
+            console.print(f"  [{color}]{i['where']}[/] {message_zh(i)}")
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Harness Config Manager",
+        "title": "Halter",
         "width": 1240,
         "height": 820,
         "minWidth": 940,

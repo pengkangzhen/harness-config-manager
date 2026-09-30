@@ -35,17 +35,18 @@ function relTime(iso) {
   if (Number.isNaN(d.getTime())) return iso;
   const diffMs = Date.now() - d.getTime();
   const min = Math.floor(diffMs / 60000);
-  if (min < 1) return "刚刚";
-  if (min < 60) return `${min} 分钟前`;
+  if (min < 1) return t("rt.justNow");
+  if (min < 60) return t("rt.minAgo", { n: min });
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) return `今天 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (sameDay) return t("rt.today", { time: hm });
   const yest = new Date(now);
   yest.setDate(yest.getDate() - 1);
-  if (d.toDateString() === yest.toDateString()) return `昨天 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  if (diffMs < 7 * 86400000) return `${Math.floor(diffMs / 86400000)} 天前`;
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
+  if (d.toDateString() === yest.toDateString()) return t("rt.yesterday", { time: hm });
+  if (diffMs < 7 * 86400000) return t("rt.daysAgo", { n: Math.floor(diffMs / 86400000) });
+  return t("rt.monthDay", { m: d.getMonth() + 1, d: d.getDate() });
 }
 
 function errorDetail(err) {
@@ -120,12 +121,12 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
 /* ---------------- overview ---------------- */
 
 const LAYERS = [
-  ["skills", "skills"],
-  ["agents", "agents"],
-  ["mcp_servers", "MCP"],
-  ["plugins", "插件"],
-  ["hooks", "hooks"],
-  ["sessions", "sessions"],
+  ["skills", "layer.skills"],
+  ["agents", "layer.agents"],
+  ["mcp_servers", "layer.mcp"],
+  ["plugins", "layer.plugins"],
+  ["hooks", "layer.hooks"],
+  ["sessions", "layer.sessions"],
 ];
 
 async function fetchScan(force = false) {
@@ -163,15 +164,15 @@ function renderOverview(data) {
     for (const item of issues) {
       const row = el("div", `doctor-item ${item.level === "error" ? "error" : "warn"}`);
       row.append(el("span", "where", item.where || "-"));
-      row.append(el("span", "", item.message || ""));
+      row.append(el("span", "", t(`doctor.${item.code}`, item.params)));
       doctorList.append(row);
     }
   } else {
     doctorSection.classList.add("hidden");
   }
 
-  const tools = (data.inventory || []).filter((t) => t.installed);
-  $("tools-heading").textContent = `工具（${tools.length}）`;
+  const tools = (data.inventory || []).filter((t2) => t2.installed);
+  $("tools-heading").textContent = t("ov.toolsCount", { n: tools.length });
   const grid = $("tools-grid");
   grid.replaceChildren();
   for (const tool of tools) {
@@ -179,16 +180,16 @@ function renderOverview(data) {
     const header = el("div", "tool-card-header");
     const name = el("div", "tool-name", tool.display || tool.tool);
     if ((tool.category || "harness") === "editor") {
-      name.append(el("span", "cat-badge editor", "编辑器"));
+      name.append(el("span", "cat-badge editor", t("ov.badgeEditor")));
     }
     header.append(name);
     header.append(el("div", "tool-key", tool.tool));
     card.append(header);
 
     const chips = el("div", "layer-chips");
-    for (const [key, label] of LAYERS) {
+    for (const [key, labelKey] of LAYERS) {
       const n = Array.isArray(tool[key]) ? tool[key].length : 0;
-      chips.append(el("span", `count-chip${n > 0 ? " on" : ""}`, `${label} ${n}`));
+      chips.append(el("span", `count-chip${n > 0 ? " on" : ""}`, `${t(labelKey)} ${n}`));
     }
     card.append(chips);
     grid.append(card);
@@ -203,11 +204,11 @@ $("btn-refresh-scan").addEventListener("click", () => {
 /* ---------------- matrix: harness × layer ---------------- */
 
 const MATRIX_LAYERS = [
-  { key: "skills", field: "skills", label: "Skills" },
-  { key: "agents", field: "agents", label: "Subagents" },
-  { key: "mcp", field: "mcp_servers", label: "MCP" },
-  { key: "plugins", field: "plugins", label: "插件" },
-  { key: "hooks", field: "hooks", label: "Hooks" },
+  { key: "skills", field: "skills", labelKey: "mlayer.skills" },
+  { key: "agents", field: "agents", labelKey: "mlayer.agents" },
+  { key: "mcp", field: "mcp_servers", labelKey: "mlayer.mcp" },
+  { key: "plugins", field: "plugins", labelKey: "mlayer.plugins" },
+  { key: "hooks", field: "hooks", labelKey: "mlayer.hooks" },
 ];
 
 function matrixItemName(layer, item) {
@@ -218,10 +219,10 @@ function matrixItemName(layer, item) {
 
 function buildMatrix(scan, layerKey) {
   const layer = MATRIX_LAYERS.find((l) => l.key === layerKey);
-  let tools = (scan.inventory || []).filter((t) => t.installed);
+  let tools = (scan.inventory || []).filter((x) => x.installed);
   if (state.matrixHarnessOnly) {
     // harness = 独立 AI 编码代理；editor（vscode/continue/cline 等）默认不进矩阵列
-    tools = tools.filter((t) => (t.category || "harness") !== "editor");
+    tools = tools.filter((x) => (x.category || "harness") !== "editor");
   }
   const rows = new Map();
   for (const tool of tools) {
@@ -244,7 +245,7 @@ function buildMatrix(scan, layerKey) {
     items: r.items,
     // 预览用代表条目：优先取带 description 的（各工具同名条目内容一致）
     item: r.items.find((x) => x.description) || r.items[0],
-    missing: tools.filter((t) => !r.statuses.has(t.tool)).length,
+    missing: tools.filter((x) => !r.statuses.has(x.tool)).length,
   }));
   list.sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
   return { tools, rows: list };
@@ -322,7 +323,7 @@ function renderMatrixLayerTabs() {
   const tabs = $("matrix-layer-tabs");
   tabs.replaceChildren();
   for (const layer of MATRIX_LAYERS) {
-    const btn = el("button", `layer-tab${state.matrixLayer === layer.key ? " active" : ""}`, layer.label);
+    const btn = el("button", `layer-tab${state.matrixLayer === layer.key ? " active" : ""}`, t(layer.labelKey));
     btn.addEventListener("click", () => {
       state.matrixLayer = layer.key;
       renderMatrixLayerTabs();
@@ -383,28 +384,28 @@ function attachHoverPreview(cell, buildBody) {
 function skillHoverBody(row) {
   const nodes = [el("div", "hc-name", row.name)];
   const desc = row.item && row.item.description;
-  nodes.push(el("div", `hc-desc${desc ? "" : " empty"}`, desc || "（SKILL.md 未提供 description）"));
+  nodes.push(el("div", `hc-desc${desc ? "" : " empty"}`, desc || t("hv.noDesc")));
   const meta = el("div", "hc-meta");
   if (row.item && row.item.path) {
     meta.append(el("span", "hc-path", shortenPath(row.item.path)));
   }
   if (row.statuses.size && [...row.statuses.values()].includes("synced")) {
-    meta.append(el("span", "hc-linked", "库链接"));
+    meta.append(el("span", "hc-linked", t("hv.linked")));
   }
   nodes.push(meta);
   return nodes;
 }
 
 function familyHoverBody(group) {
-  const nodes = [el("div", "hc-name", `${group.root} 家族`)];
-  nodes.push(el("div", "hc-sub", `${group.members.length} 个成员`));
+  const nodes = [el("div", "hc-name", t("hv.familyName", { root: group.root }))];
+  nodes.push(el("div", "hc-sub", t("hv.familyCount", { n: group.members.length })));
   const list = el("div", "hc-member-list");
   for (const m of group.members) {
     const item = el("div", "hc-member");
     item.append(el("div", "hc-member-name", m.name));
     item.append(el("div", "hc-member-desc", m.item && m.item.description
       ? firstLine(m.item.description)
-      : "（无描述）"));
+      : t("hv.memberNoDesc")));
     list.append(item);
   }
   nodes.push(list);
@@ -428,15 +429,17 @@ function renderMatrix(scan) {
     ? shownGroups.reduce((a, g) => a + (g.type === "family" ? g.members.filter((m) => m.missing > 0).length : 1), 0)
     : 0;
 
-  const scopeLabel = state.matrixHarnessOnly ? `${tools.length} 个 AI Harness` : `${tools.length} 个工具（含编辑器）`;
+  const scopeLabel = state.matrixHarnessOnly
+    ? t("mx.scopeHarness", { n: tools.length })
+    : t("mx.scopeAll", { n: tools.length });
   $("matrix-summary").textContent =
-    `${layer.label}：${rows.length} 个条目 × ${scopeLabel} · 缺口 ${totalGaps} 处` +
-    (state.matrixGapsOnly ? ` · 仅显示缺口的 ${gapShown} 条` : "");
+    t("mx.summary", { label: t(layer.labelKey), rows: rows.length, scope: scopeLabel, gaps: totalGaps }) +
+    (state.matrixGapsOnly ? t("mx.summaryGapsOnly", { n: gapShown }) : "");
 
   const wrap = $("matrix-wrap");
   wrap.replaceChildren();
   if (!shownGroups.length) {
-    wrap.append(el("div", "loading", state.matrixGapsOnly ? "没有缺口 — 所有工具均覆盖" : "没有数据"));
+    wrap.append(el("div", "loading", state.matrixGapsOnly ? t("mx.noGaps") : t("mx.noData")));
     return;
   }
 
@@ -444,7 +447,7 @@ function renderMatrix(scan) {
   const familyCount = groups.filter((g) => g.type === "family").length;
   if (familyCount) {
     const base = $("matrix-summary").textContent;
-    $("matrix-summary").textContent = base + ` · 已聚合 ${familyCount} 个家族`;
+    $("matrix-summary").textContent = base + t("mx.summaryFamilies", { n: familyCount });
   }
 
   const grid = el("div", "matrix");
@@ -461,12 +464,12 @@ function renderMatrix(scan) {
   }
 
   const CELL_GLYPH = { synced: "●", present: "◐", partial: "◔", missing: "○" };
-  const CELL_TEXT = {
-    synced: "已同步（symlink）",
-    present: "已存在（非 halter 管理）",
-    partial: "部分成员存在",
-    missing: "缺少",
-  };
+  const cellStatusText = (st) => ({
+    synced: t("mx.legendSynced"),
+    present: t("mx.legendPresent"),
+    partial: t("mx.cellPartial"),
+    missing: t("mx.legendMissing"),
+  })[st] || st;
 
   const renderRow = (row, cls) => {
     const nameCell = el("div", `mx-name ${cls || ""}`);
@@ -480,7 +483,7 @@ function renderMatrix(scan) {
     for (const tool of tools) {
       const st = row.statuses.get(tool.tool) || "missing";
       const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
-      cell.title = `${tool.tool}：${CELL_TEXT[st] || st}`;
+      cell.title = t("mx.cellTitle", { tool: tool.tool, status: cellStatusText(st) });
       grid.append(cell);
     }
   };
@@ -494,7 +497,7 @@ function renderMatrix(scan) {
     // family row (aggregated)
     const expanded = state.expandedFamilies.has(group.root);
     const nameCell = el("div", "mx-name family");
-    nameCell.title = `${group.root} 家族（${group.members.length} 个成员）`;
+    nameCell.title = t("mx.familyTitle", { root: group.root, n: group.members.length });
     if (layer.key === "skills") {
       nameCell.removeAttribute("title");
       attachHoverPreview(nameCell, () => familyHoverBody(group));
@@ -512,7 +515,12 @@ function renderMatrix(scan) {
       const st = aggregateFamilyStatus(group.members, tool);
       const present = group.members.filter((m) => m.statuses.has(tool.tool)).length;
       const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
-      cell.title = `${tool.tool}：${CELL_TEXT[st] || st}（${present}/${group.members.length}）`;
+      cell.title = t("mx.cellTitleFamily", {
+        tool: tool.tool,
+        status: cellStatusText(st),
+        present,
+        total: group.members.length,
+      });
       grid.append(cell);
     }
 
@@ -604,7 +612,7 @@ function renderProjectInput() {
   const clear = $("project-clear");
   if (state.projectsError) {
     input.value = "";
-    input.placeholder = "项目加载失败 — 点击重试";
+    input.placeholder = t("ss.projectLoadFailed");
     clear.classList.add("hidden");
     return;
   }
@@ -613,13 +621,13 @@ function renderProjectInput() {
     const real = state.projects.filter((p) => (p.kind || "project") === "project").length;
     const others = state.projects.length - real;
     input.placeholder = others
-      ? `全部项目（${real} 个 + ${others} 个历史/临时目录）— 输入即筛选`
-      : `全部项目（${real} 个）— 输入即筛选`;
+      ? t("ss.allProjectsInputAll", { n: real, m: others })
+      : t("ss.allProjectsInput", { n: real });
     clear.classList.add("hidden");
   } else {
     const p = state.projects.find((x) => x.path === state.projectFilter);
     input.value = p ? (p.name || basename(p.path)) : basename(state.projectFilter);
-    input.placeholder = "输入项目名/路径筛选…";
+    input.placeholder = t("ss.projectInputFilter");
     clear.classList.remove("hidden");
   }
 }
@@ -638,9 +646,9 @@ function renderProjectDropdownList(filter) {
 
   const allRow = el("div", `project-item${state.projectFilter === null ? " selected" : ""}`);
   const allHead = el("div", "project-head");
-  allHead.append(el("span", "project-name", "全部项目"));
+  allHead.append(el("span", "project-name", t("ss.allProjects")));
   const totalSessions = state.projects.reduce((a, p) => a + p.sessions, 0);
-  allHead.append(el("span", "project-count", `${state.projects.length} 项目 · ${totalSessions} 会话`));
+  allHead.append(el("span", "project-count", t("ss.projectsSessions", { n: state.projects.length, m: totalSessions })));
   allRow.append(allHead);
   allRow.addEventListener("click", () => selectProject(null));
   listEl.append(allRow);
@@ -658,11 +666,10 @@ function renderProjectDropdownList(filter) {
     const head = el("div", "project-head");
     const name = el("span", "project-name", p.name || basename(p.path));
     if (p.kind && p.kind !== "project") {
-      const KIND_TEXT = { temp: "临时", dated: "会话目录", virtual: "内部", stale: "已删除" };
-      name.append(el("span", "project-kind-badge", KIND_TEXT[p.kind] || p.kind));
+      name.append(el("span", "project-kind-badge", t(`ss.kind.${p.kind}`)));
     }
     head.append(name);
-    head.append(el("span", "project-count", `${p.sessions} 会话`));
+    head.append(el("span", "project-count", t("ss.nSessions", { n: p.sessions })));
     row.append(head);
 
     const sub = el("div", "project-sub");
@@ -686,17 +693,17 @@ function renderProjectDropdownList(filter) {
 
   for (const p of real) renderProjectRow(p);
   if (others.length) {
-    listEl.append(el("div", "project-group-header", `临时 / 自动会话目录 / 已删除（${others.length}）`));
+    listEl.append(el("div", "project-group-header", t("ss.othersGroupHeader", { n: others.length })));
     for (const p of others) renderProjectRow(p);
   }
   state.projectMatches = projects;
   if (needle && !projects.length) {
     const raw = filter.trim();
     if (raw.startsWith("/") || raw.startsWith("~")) {
-      const hint = el("div", "project-raw-hint", `回车使用路径：${raw}`);
+      const hint = el("div", "project-raw-hint", t("ss.rawPathHint", { path: raw }));
       listEl.append(hint);
     } else {
-      listEl.append(el("div", "loading", "没有匹配的项目"));
+      listEl.append(el("div", "loading", t("ss.noMatchProjects")));
     }
   }
 }
@@ -746,7 +753,7 @@ document.addEventListener("click", (e) => {
 async function loadSessions() {
   const requestId = ++sessionsRequestId;
   const list = $("sessions-list");
-  list.replaceChildren(el("div", "loading", "读取会话…"));
+  list.replaceChildren(el("div", "loading", t("ss.loadingSessions")));
   const allProjects = state.projectFilter === null;
   let data;
   try {
@@ -778,15 +785,12 @@ function renderToolFilter() {
   for (const s of state.sessions) {
     counts.set(s.tool, (counts.get(s.tool) || 0) + 1);
   }
+  $("tool-filter-row").classList.toggle("hidden", counts.size < 2);
   box.replaceChildren();
-  if (counts.size < 2) {
-    box.classList.add("hidden");
-    return;
-  }
-  box.classList.remove("hidden");
+  if (counts.size < 2) return;
 
   const anySelected = state.toolFilters.size > 0;
-  const all = el("button", `filter-chip${!anySelected ? " active" : ""}`, `全部 ${state.sessions.length}`);
+  const all = el("button", `filter-chip${!anySelected ? " active" : ""}`, t("ss.allTools", { n: state.sessions.length }));
   all.addEventListener("click", () => {
     state.toolFilters.clear();
     renderToolFilter();
@@ -818,36 +822,49 @@ function applyToolFilter(items) {
 function renderSessions(items) {
   const filtered = applyToolFilter(items);
   updateSessionCount(filtered.length, items.length);
+  $("session-sort").textContent = t("ss.sortRecent");
   if (state.viewMode === "timeline") renderTimeline(filtered);
   else renderFlatList(filtered);
 }
 
 function updateSessionCount(shown, total, suffix) {
-  const scope = state.projectFilter === null ? "全部项目" : basename(state.projectFilter);
-  const toolScope = state.toolFilters.size ? ` · ${state.toolFilters.size} 个助手` : "";
+  const scope = state.projectFilter === null ? t("ss.allProjects") : basename(state.projectFilter);
+  const toolScope = state.toolFilters.size ? ` · ${t("ss.countTools", { n: state.toolFilters.size })}` : "";
   const tail = suffix ? ` · ${suffix}` : "";
-  $("session-count").textContent = `${scope}${toolScope}${tail} · ${shown}/${total}`;
+  const node = $("session-count");
+  node.textContent = `${shown} / ${total}${tail}`;
+  node.title = `${scope}${toolScope}`;
 }
 
 function sessionCard(s, opts = {}) {
   const item = el("div", "session-item");
+  item.style.setProperty("--tool-color", toolColor(s.tool));
   if (opts.timeline) item.classList.add("tl-card");
 
-  const title = el("div", "session-title", s.title || s.ref);
+  const top = el("div", "session-top");
+  const titleText = s.title || s.ref;
+  const title = el("div", "session-title", titleText);
+  title.title = titleText;
+  top.append(title);
+  const stamp = s.updated_at || s.started_at;
+  const time = el("span", "session-time", opts.timeText || relTime(stamp));
+  time.title = fmtDate(stamp);
+  top.append(time);
+  item.append(top);
+
   const meta = el("div", "session-meta");
-  const badge = el("span", "tool-badge", s.tool);
-  badge.style.color = toolColor(s.tool);
-  badge.style.borderColor = `${toolColor(s.tool)}55`;
-  meta.append(badge);
+  const toolTag = el("span", "tool-tag");
+  const dot = el("span", "filter-dot");
+  dot.style.backgroundColor = toolColor(s.tool);
+  toolTag.append(dot, el("span", "", s.tool));
+  meta.append(toolTag);
   if (state.projectFilter === null && s.project) {
     meta.append(el("span", "project-chip", basename(s.project)));
   }
-  if (opts.timePrefix) meta.append(el("span", "meta-item", opts.timePrefix));
-  meta.append(el("span", "meta-item", opts.dateText || fmtDate(s.updated_at)));
-  meta.append(el("span", "meta-item", `${s.message_count} 条`));
+  meta.append(el("span", "meta-item", t("ss.nMessages", { n: s.message_count })));
   if (s.branch) meta.append(el("span", "meta-item", `⑂ ${s.branch}`));
 
-  item.append(title, meta);
+  item.append(meta);
   item.addEventListener("click", () => selectSession(s, item));
   return item;
 }
@@ -857,7 +874,7 @@ function renderFlatList(items) {
   list.className = "sessions-list";
   list.replaceChildren();
   if (!items.length) {
-    list.append(el("div", "loading", state.toolFilters.size ? "所选助手没有会话" : "没有找到会话"));
+    list.append(el("div", "loading", state.toolFilters.size ? t("ss.noSessionsFiltered") : t("ss.noSessions")));
     return;
   }
   for (const s of items) list.append(sessionCard(s));
@@ -868,7 +885,7 @@ function renderTimeline(items) {
   list.className = "sessions-list timeline";
   list.replaceChildren();
   if (!items.length) {
-    list.append(el("div", "loading", state.toolFilters.size ? "所选助手没有会话" : "没有找到会话"));
+    list.append(el("div", "loading", state.toolFilters.size ? t("ss.noSessionsFiltered") : t("ss.noSessions")));
     return;
   }
 
@@ -886,13 +903,16 @@ function renderTimeline(items) {
   const tl = el("div", "timeline");
   for (const key of groups) {
     const group = el("div", "tl-group");
-    group.append(el("div", "tl-date", dateLabel(key)));
+    const date = el("div", "tl-date");
+    date.append(el("span", "", dateLabel(key)));
+    date.append(el("span", "tl-count", t("ss.dayCount", { n: byKey.get(key).length })));
+    group.append(date);
     for (const s of byKey.get(key)) {
       const entry = el("div", "tl-item");
       const dot = el("span", "tl-dot");
       dot.style.backgroundColor = toolColor(s.tool);
       entry.append(dot);
-      entry.append(sessionCard(s, { timeline: true, timePrefix: fmtTime(s.updated_at), dateText: dateLabel(key) }));
+      entry.append(sessionCard(s, { timeline: true, timeText: fmtTime(s.updated_at || s.started_at) }));
       group.append(entry);
     }
     tl.append(group);
@@ -901,7 +921,10 @@ function renderTimeline(items) {
 }
 
 /* calendar helpers */
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAYS = {
+  zh: ["日", "一", "二", "三", "四", "五", "六"],
+  en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+};
 
 function dateKey(iso) {
   const d = iso ? new Date(iso) : null;
@@ -917,11 +940,11 @@ function dateLabel(key) {
   const yest = new Date(today);
   yest.setDate(yest.getDate() - 1);
   const yestKey = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
-  if (key === todayKey) return "今天";
-  if (key === yestKey) return "昨天";
+  if (key === todayKey) return t("date.today");
+  if (key === yestKey) return t("date.yesterday");
   const d = new Date(key + "T00:00:00");
   if (!Number.isNaN(d.getTime())) {
-    return `${key} · 周${WEEKDAYS[d.getDay()]}`;
+    return t("date.weekday", { date: key, w: (WEEKDAYS[i18nLang] || WEEKDAYS.zh)[d.getDay()] });
   }
   return key;
 }
@@ -949,7 +972,7 @@ async function selectSession(session, itemEl) {
 
   const detail = $("session-detail");
   detail.className = "session-detail";
-  detail.replaceChildren(el("div", "loading", "读取会话详情…"));
+  detail.replaceChildren(el("div", "loading", t("ss.loadingDetail")));
 
   const project = session.project || state.projectFilter || ".";
   let data;
@@ -987,9 +1010,10 @@ function renderSessionDetail(data) {
   const header = el("div", "detail-header");
   header.append(el("div", "detail-title", s.title || s.ref));
   const badges = el("div", "session-meta");
-  const badge = el("span", "tool-badge", s.tool);
-  badge.style.color = toolColor(s.tool);
-  badge.style.borderColor = `${toolColor(s.tool)}55`;
+  const badge = el("span", "tool-tag lg");
+  const badgeDot = el("span", "filter-dot");
+  badgeDot.style.backgroundColor = toolColor(s.tool);
+  badge.append(badgeDot, el("span", "", s.tool));
   badges.append(badge);
   if (s.model) badges.append(el("span", "meta-item", s.model));
   if (s.branch) badges.append(el("span", "meta-item", `⑂ ${s.branch}`));
@@ -998,17 +1022,17 @@ function renderSessionDetail(data) {
 
   const grid = el("div", "meta-grid");
   grid.append(metaCell("Ref", s.ref));
-  grid.append(metaCell("项目", basename(s.project)));
-  grid.append(metaCell("更新", fmtDate(s.updated_at)));
-  grid.append(metaCell("消息数", s.message_count));
-  grid.append(metaCell("后端", s.backend));
+  grid.append(metaCell(t("ss.metaProject"), basename(s.project)));
+  grid.append(metaCell(t("ss.metaUpdated"), fmtDate(s.updated_at)));
+  grid.append(metaCell(t("ss.metaMessages"), s.message_count));
+  grid.append(metaCell(t("ss.metaBackend"), s.backend));
   detail.append(grid);
 
   const actions = el("div", "detail-actions");
-  const handoffBtn = el("button", "btn", "生成交接上下文");
+  const handoffBtn = el("button", "btn", t("ss.handoffBtn"));
   handoffBtn.addEventListener("click", async () => {
     handoffBtn.disabled = true;
-    handoffBtn.textContent = "生成中…";
+    handoffBtn.textContent = t("ss.handoffBusy");
     try {
       const text = await invoke("halter_sessions_context", {
         ref: s.ref,
@@ -1021,7 +1045,7 @@ function renderSessionDetail(data) {
         detail.append(block);
       }
       block.replaceChildren();
-      block.append(el("h2", "", "交接上下文（已脱敏）"));
+      block.append(el("h2", "", t("ss.handoffTitle")));
       const pre = el("pre", "transcript");
       pre.textContent = text;
       block.append(pre);
@@ -1031,15 +1055,15 @@ function renderSessionDetail(data) {
       detail.append(box);
     } finally {
       handoffBtn.disabled = false;
-      handoffBtn.textContent = "生成交接上下文";
+      handoffBtn.textContent = t("ss.handoffBtn");
     }
   });
   actions.append(handoffBtn);
   detail.append(actions);
 
-  detail.append(el("h2", "", "最近对话"));
+  detail.append(el("h2", "", t("ss.recentTranscript")));
   const transcript = el("div", "transcript");
-  const text = data.transcript || "（无 transcript）";
+  const text = data.transcript || t("ss.noTranscript");
   const lines = text.split("\n");
   let buf = [];
   const flush = () => {
@@ -1073,7 +1097,7 @@ async function runSearch() {
   const query = $("search-input").value.trim();
   if (!query) return;
   const list = $("sessions-list");
-  list.replaceChildren(el("div", "loading", "搜索中…"));
+  list.replaceChildren(el("div", "loading", t("ss.searching")));
   const allProjects = state.projectFilter === null;
   let data;
   try {
@@ -1094,36 +1118,22 @@ async function runSearch() {
   if (requestId !== searchRequestId) return;
   const allHits = data.hits || [];
   const hits = applyToolFilter(allHits);
-  updateSessionCount(hits.length, allHits.length, `搜索“${query}”`);
+  updateSessionCount(hits.length, allHits.length, t("ss.searchSuffix", { q: query }));
+  $("session-sort").textContent = t("ss.sortRelevance");
   list.className = "sessions-list";
   list.replaceChildren();
   if (!hits.length) {
-    list.append(el("div", "loading", `没有匹配“${query}”的会话`));
+    list.append(el("div", "loading", t("ss.noSearchHit", { q: query })));
     return;
   }
-  for (let i = 0; i < hits.length; i++) {
-    const s = hits[i].session;
-    const hit = hits[i];
-    const item = el("div", "session-item");
-    item.append(el("div", "session-title", s.title || s.ref));
-    const badge = el("span", "tool-badge", s.tool);
-    badge.style.color = toolColor(s.tool);
-    badge.style.borderColor = `${toolColor(s.tool)}55`;
-    const meta = el("div", "session-meta");
-    meta.append(badge);
-    if (allProjects && s.project) meta.append(el("span", "project-chip", basename(s.project)));
-    meta.append(el("span", "meta-item", fmtDate(s.updated_at)));
-    item.append(meta);
-    const snippet = el("div", "meta-item");
-    snippet.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);margin-top:4px;";
-    snippet.textContent = (hit.snippet || "").replace(/\s+/g, " ");
+  for (const hit of hits) {
+    const item = sessionCard(hit.session);
+    const snippet = el("div", "session-snippet", (hit.snippet || "").replace(/\s+/g, " "));
     item.append(snippet);
-    item.addEventListener("click", () => selectSession(s, item));
     list.append(item);
   }
 }
 
-$("btn-search").addEventListener("click", runSearch);
 $("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
 });
@@ -1141,7 +1151,7 @@ async function runSync(apply) {
   syncBusy = true;
   const out = $("sync-output");
   out.classList.remove("hidden");
-  out.textContent = apply ? "正在执行 sync --apply（写入变更）…\n" : "正在生成 dry-run 计划…\n";
+  out.textContent = apply ? t("sy.applying") : t("sy.planning");
   $("btn-sync-preview").disabled = true;
   $("btn-sync-apply").disabled = true;
   try {
@@ -1152,7 +1162,7 @@ async function runSync(apply) {
     if (result.stderr.trim()) parts.push("--- stderr ---\n" + result.stderr.trim());
     out.textContent = parts.join("\n\n");
   } catch (err) {
-    out.textContent = `调用失败：${typeof err === "string" ? err : JSON.stringify(err, null, 2)}`;
+    out.textContent = t("sy.invokeFailed") + (typeof err === "string" ? err : JSON.stringify(err, null, 2));
   } finally {
     syncBusy = false;
     $("btn-sync-preview").disabled = false;
@@ -1169,7 +1179,7 @@ function disarmApply() {
   clearTimeout(applyTimer);
   const btn = $("btn-sync-apply");
   btn.classList.remove("armed");
-  btn.textContent = "Apply 实际执行";
+  btn.textContent = t("sy.apply");
 }
 
 $("btn-sync-preview").addEventListener("click", () => {
@@ -1182,11 +1192,32 @@ $("btn-sync-apply").addEventListener("click", () => {
   if (!applyArmed) {
     applyArmed = true;
     btn.classList.add("armed");
-    btn.textContent = "⚠ 再点一次确认写入";
+    btn.textContent = t("sy.applyArmed");
     applyTimer = setTimeout(disarmApply, 5000);
     return;
   }
   runSync(true);
+});
+
+/* ---------------- language ---------------- */
+
+$("lang-zh").addEventListener("click", () => setLang("zh"));
+$("lang-en").addEventListener("click", () => setLang("en"));
+
+// 静态文案由 i18n.js 的 applyI18n() 刷新；这里重渲染各视图的动态文案。
+// armed 的 Apply 按钮文案会被 applyI18n 覆盖，需按当前状态重设。
+document.addEventListener("halter:langchange", () => {
+  if (applyArmed) $("btn-sync-apply").textContent = t("sy.applyArmed");
+  if (state.scanCache) {
+    renderOverview(state.scanCache);
+    renderMatrixLayerTabs();
+    renderMatrix(state.scanCache);
+  }
+  if (state.sessionsLoaded) {
+    renderProjectInput();
+    renderToolFilter();
+    renderSessions(state.sessions);
+  }
 });
 
 /* ---------------- boot ---------------- */
@@ -1198,10 +1229,10 @@ $("btn-sync-apply").addEventListener("click", () => {
     badge.textContent = `halter ${v.version}`;
     if (v.desktop && v.version && String(v.version) !== String(v.desktop)) {
       badge.classList.add("mismatch");
-      badge.title = `运行时版本 ${v.version} 与桌面打包期望 ${v.desktop} 不一致；release 不应携带旧 sidecar，请重新构建`;
+      badge.title = t("bt.mismatch", { version: v.version, desktop: v.desktop });
     }
   } catch (err) {
-    $("halter-version").textContent = "halter 不可用";
+    $("halter-version").textContent = t("bt.unavailable");
     $("halter-version").title = typeof err === "string" ? err : JSON.stringify(err);
   }
   loadOverview();
