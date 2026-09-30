@@ -1371,11 +1371,10 @@ function renderMemory() {
     const card = el("div", "mem-tool");
     const head = el("div", "mem-tool-head");
     const st = memToolState(item);
+    // 主标题 = Harness 名（第一视觉），记忆文件名（CLAUDE.md…）做成徽章
     head.append(el("span", `legend-dot ${st.cls}`, st.mark));
-    // 标题 = 对应的记忆文件名（CLAUDE.md / AGENTS.md…），副注 = 工具名
-    head.append(el("span", "mem-tool-file", item.path.split("/").pop()));
     head.append(el("span", "mem-tool-display", item.display));
-    head.append(el("span", "mem-tool-meta", `${t(st.key)} · ${item.size}B`));
+    head.append(el("span", "mem-tool-file", item.path.split("/").pop()));
     head.append(el("span", "toolbar-spacer"));
     if (item.present) {
       const openBtn = el("button", "btn btn-sm", t("mem.open"));
@@ -1386,7 +1385,7 @@ function renderMemory() {
       head.append(openBtn);
     }
     card.append(head);
-    card.append(el("div", "mem-tool-meta dim", item.path));
+    card.append(el("div", "mem-tool-meta dim", `${item.path} · ${t(st.key)} · ${item.size}B`));
     if (item.diff) {
       const details = el("details", "mem-diff");
       details.append(el("summary", "", t("mem.diffSummary")));
