@@ -123,6 +123,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
 const LAYERS = [
   ["skills", "layer.skills"],
   ["agents", "layer.agents"],
+  ["memory", "layer.memory"],
   ["mcp_servers", "layer.mcp"],
   ["plugins", "layer.plugins"],
   ["hooks", "layer.hooks"],
@@ -188,8 +189,17 @@ function renderOverview(data) {
 
     const chips = el("div", "layer-chips");
     for (const [key, labelKey] of LAYERS) {
-      const n = Array.isArray(tool[key]) ? tool[key].length : 0;
-      chips.append(el("span", `count-chip${n > 0 ? " on" : ""}`, `${t(labelKey)} ${n}`));
+      let cell, on;
+      if (key === "memory") {
+        const m = tool.memory;
+        cell = !m ? "-" : m.linked ? "●" : m.present ? "◐" : "·";
+        on = !!m && (m.linked || m.present);
+      } else {
+        const n = Array.isArray(tool[key]) ? tool[key].length : 0;
+        cell = String(n);
+        on = n > 0;
+      }
+      chips.append(el("span", `count-chip${on ? " on" : ""}`, `${t(labelKey)} ${cell}`));
     }
     card.append(chips);
     grid.append(card);
@@ -206,6 +216,7 @@ $("btn-refresh-scan").addEventListener("click", () => {
 const MATRIX_LAYERS = [
   { key: "skills", field: "skills", labelKey: "mlayer.skills" },
   { key: "agents", field: "agents", labelKey: "mlayer.agents" },
+  { key: "memory", field: "memory", labelKey: "mlayer.memory" },
   { key: "mcp", field: "mcp_servers", labelKey: "mlayer.mcp" },
   { key: "plugins", field: "plugins", labelKey: "mlayer.plugins" },
   { key: "hooks", field: "hooks", labelKey: "mlayer.hooks" },
@@ -214,6 +225,7 @@ const MATRIX_LAYERS = [
 function matrixItemName(layer, item) {
   if (layer.key === "plugins") return item.plugin_id;
   if (layer.key === "hooks") return item.label;
+  if (layer.key === "memory") return "MEMORY";
   return item.name;
 }
 
@@ -226,7 +238,10 @@ function buildMatrix(scan, layerKey) {
   }
   const rows = new Map();
   for (const tool of tools) {
-    for (const item of tool[layer.field] || []) {
+    const entries = layer.key === "memory"
+      ? (tool.memory && tool.memory.present ? [tool.memory] : [])
+      : tool[layer.field] || [];
+    for (const item of entries) {
       const name = matrixItemName(layer, item);
       if (!name) continue;
       let row = rows.get(name);
@@ -234,7 +249,7 @@ function buildMatrix(scan, layerKey) {
         row = { statuses: new Map(), items: [] };
         rows.set(name, row);
       }
-      const linked = layer.key === "skills" || layer.key === "agents" ? !!item.linked : false;
+      const linked = ["skills", "agents", "memory"].includes(layer.key) ? !!item.linked : false;
       row.statuses.set(tool.tool, linked ? "synced" : "present");
       row.items.push(item);
     }

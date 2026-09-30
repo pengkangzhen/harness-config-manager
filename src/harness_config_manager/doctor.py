@@ -15,6 +15,7 @@ import tomlkit
 
 from .config import load_config
 from .mcp_manifest import _load_secrets, load_manifest
+from .memory import resolve_memory_file
 from .registry import TOOLS, expand
 from .skills import resolve_library
 
@@ -38,6 +39,8 @@ ZH_TEXT = {
     "broken_link": "断链（指向 {target} 不存在）",
     "library_ok": "{n} 个 skill",
     "library_missing": "不存在（首次 sync --apply 时创建）",
+    "memory_library_ok": "{n}B",
+    "memory_library_missing": "不存在（首次 sync --apply 时收养/创建）",
     "mcp_secret_missing": "密钥变量未定义: {vars}",
     "dead_command": "command 指向的 {command} 不存在（死配置，建议删除）",
 }
@@ -115,14 +118,25 @@ def run_doctor() -> list[dict]:
                 if child.is_symlink() and not child.exists():
                     add("error", f"{spec.key}: agent {child.name}", "broken_link",
                         target=str(child.resolve(strict=False)))
+        for pattern in spec.memory_files:
+            target = expand(pattern)
+            if target.is_symlink() and not target.exists():
+                add("error", f"{spec.key}: memory {target.name}", "broken_link",
+                    target=str(target.resolve(strict=False)))
 
     # 3. 库状态
-    library = resolve_library(load_config())
+    cfg = load_config()
+    library = resolve_library(cfg)
     if library.is_dir():
         n = len([p for p in library.iterdir() if (p / "SKILL.md").exists()])
         add("ok", f"库: {library}", "library_ok", n=n)
     else:
         add("warn", f"库: {library}", "library_missing")
+    memory_lib = resolve_memory_file(cfg)
+    if memory_lib.is_file():
+        add("ok", f"memory 库: {memory_lib}", "memory_library_ok", n=memory_lib.stat().st_size)
+    else:
+        add("warn", f"memory 库: {memory_lib}", "memory_library_missing")
 
     # 4. MCP 清单密钥占位可解析
     import os

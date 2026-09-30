@@ -34,6 +34,11 @@ def to_json(reports: list[ToolReport]) -> str:
                  "model": a.model}
                 for a in r.agents
             ],
+            "memory": None if r.memory is None else {
+                "path": str(r.memory.path), "present": r.memory.present,
+                "linked": r.memory.linked, "size": r.memory.size,
+                "mtime": r.memory.mtime,
+            },
             "mcp_servers": [
                 {"name": m.name, "transport": m.transport, "command": m.command,
                  "url": m.url, "extra": m.extra}
@@ -57,6 +62,7 @@ def print_summary(reports: list[ToolReport]) -> None:
     table.add_column("工具", style="cyan")
     table.add_column("Skills", justify="right")
     table.add_column("Subagents", justify="right")
+    table.add_column("Memory", justify="center")
     table.add_column("MCP", justify="right")
     table.add_column("插件", justify="right")
     table.add_column("Hooks", justify="right")
@@ -64,10 +70,19 @@ def print_summary(reports: list[ToolReport]) -> None:
     for r in reports:
         linked = sum(1 for s in r.skills if s.linked)
         skills_cell = str(len(r.skills)) + (f" [green]({linked}链)[/green]" if linked else "")
+        memory_cell = "-"
+        if r.memory is not None:
+            if r.memory.linked:
+                memory_cell = "[green]●[/green]"
+            elif r.memory.present:
+                memory_cell = "[yellow]◐[/yellow]"
+            else:
+                memory_cell = "[dim]·[/dim]"
         table.add_row(
             r.display,
             skills_cell,
             str(len(r.agents)) if r.agents else "-",
+            memory_cell,
             str(len(r.mcp_servers)),
             str(len(r.plugins)),
             str(len(r.hooks)) if r.hooks else "-",
@@ -115,6 +130,29 @@ def print_agents_detail(reports: list[ToolReport]) -> None:
             mark = "[green]→link[/green]" if a.linked else " "
             table.add_row(a.name, mark, a.model or "-", str(a.path))
         console.print(table)
+
+
+def print_memory_detail(reports: list[ToolReport]) -> None:
+    capable = [r for r in reports if r.memory is not None]
+    if not capable:
+        return
+    table = Table(title=f"⚓ 用户级记忆 (memory)")
+    table.add_column("工具", style="cyan")
+    table.add_column("状态", justify="center")
+    table.add_column("文件", style="dim")
+    table.add_column("大小", justify="right")
+    for r in capable:
+        m = r.memory
+        if m.linked:
+            state = "[green]● 已同步[/green]"
+        elif m.present:
+            state = "[yellow]◐ 本地文件[/yellow]"
+        else:
+            state = "[dim]· 缺失[/dim]"
+        size = f"{m.size}B" if m.present else "-"
+        table.add_row(r.display, state, str(m.path), size)
+    console.print(table)
+    console.print("[dim]● 为指向事实源的 symlink（halter sync 分发）；◐ 为本地独立文件（内容可能与库漂移）[/dim]")
 
 
 def print_mcp_detail(reports: list[ToolReport]) -> None:
@@ -269,6 +307,16 @@ def print_agents_matrix(reports: list[ToolReport]) -> None:
     _print_matrix("SUBAGENTS", "AGENT", capable,
                   lambda r, n: next((a for a in r.agents if a.name == n), None),
                   names, linked=True)
+
+
+def print_memory_matrix(reports: list[ToolReport]) -> None:
+    """单条目层的矩阵：一行 MEMORY × 各工具的同步状态（缺失=· 本地=◐ 链接=●）。"""
+    capable = [r for r in reports if r.memory is not None]
+    if not capable:
+        return
+    _print_matrix("MEMORY", "MEMORY", capable,
+                  lambda r, n: r.memory if r.memory.present else None,
+                  ["MEMORY"], linked=True)
 
 
 def print_mcp_matrix(reports: list[ToolReport]) -> None:

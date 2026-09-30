@@ -369,7 +369,7 @@ def scan(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
-        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / sessions",
+        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / memory / sessions",
     ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
@@ -393,7 +393,7 @@ def scan(
     rp.print_summary(reports)
     console.print("[dim]Skills 中的 (n链) = 其中 n 个为指向事实源库的 symlink（halter sync 分发，一处修改全部生效）；其余为本地拷贝[/dim]")
 
-    # 默认显示五层覆盖矩阵（每个条目铺到了哪些工具）
+    # 默认显示六层覆盖矩阵（每个条目铺到了哪些工具）
     if detail:
         if "skills" in detail:
             rp.print_skills_detail(reports)
@@ -405,11 +405,14 @@ def scan(
             rp.print_hooks_detail(reports)
         if "agents" in detail:
             rp.print_agents_detail(reports)
+        if "memory" in detail:
+            rp.print_memory_detail(reports)
         if "sessions" in detail:
             rp.print_sessions_detail(reports)
     else:
         rp.print_skills_matrix(reports)
         rp.print_agents_matrix(reports)
+        rp.print_memory_matrix(reports)
         rp.print_mcp_matrix(reports)
         rp.print_plugins_matrix(reports)
         rp.print_hooks_matrix(reports)
@@ -530,6 +533,7 @@ def sync(
     layer_plugins: bool = typer.Option(True, "--plugins/--no-plugins", help="同步插件层"),
     layer_hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="同步 hooks 层"),
     layer_agents: bool = typer.Option(True, "--agents/--no-agents", help="同步 subagents 层"),
+    layer_memory: bool = typer.Option(True, "--memory/--no-memory", help="同步用户级记忆层（CLAUDE.md / AGENTS.md…）"),
     layer_sessions: bool = typer.Option(True, "--sessions/--no-sessions", help="分发跨工具历史会话查询 skill"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认跳过）/ library（备份工具侧后以清单覆盖）"),
@@ -553,6 +557,14 @@ def sync(
     from .hooks_write import sync_hooks
     from .mcp_manifest import _load_secrets, auto_mcp_source, load_manifest
     from .mcp_write import sync_mcp
+    from .memory import (
+        pick_adopt_source,
+        plan_adopt_memory,
+        plan_sync_memory,
+        resolve_memory_file,
+        run_adopt_memory,
+        run_sync_memory,
+    )
     from .plugin_sync import auto_plugin_source, load_plugin_manifest, sync_plugins
     from .scan import scan_all
     from .sessions import install_session_skill
@@ -573,6 +585,40 @@ def sync(
         for line in install_session_skill(cfg, installed, apply):
             console.print(f"  {'[apply]' if apply else '[plan]'} {line}"
                           if not line.startswith("conflict ") else f"  [yellow]{line}[/yellow]")
+
+    # --- memory 层：库缺失先收养（--from 裁决分歧），然后 symlink 分发 ---
+    if layer_memory:
+        memory_lib = resolve_memory_file(cfg, create=apply)
+        if not memory_lib.exists():
+            plan = plan_adopt_memory(reports)
+            pick = pick_adopt_source(plan, None if source == "auto" else source)
+            if pick is not None:
+                tool, src = pick
+                console.print(f"\nmemory: 事实源为空，从 {tool} 收养")
+                for line in run_adopt_memory(src, memory_lib, apply):
+                    console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
+            elif plan.sources:
+                if source != "auto":
+                    console.print(f"[yellow]--from {source} 侧没有可收养的记忆文件[/yellow]")
+                console.print("  [yellow]各工具记忆内容不一致，需 --from <tool> 指定收养源：[/yellow]")
+                for tool, path in plan.sources:
+                    console.print(f"    {tool}: {path}")
+        if memory_lib.exists():
+            memory_actions = plan_sync_memory(memory_lib, reports)
+            memory_counts: dict[str, int] = {}
+            for a in memory_actions:
+                memory_counts[a.kind] = memory_counts.get(a.kind, 0) + 1
+            console.print(f"\nmemory 事实源: {memory_lib}")
+            console.print("计划: " + (", ".join(f"{k}×{v}" for k, v in sorted(memory_counts.items()))
+                                 or "（无动作）"))
+            if not apply:
+                console.print("[dim]dry-run 模式（--apply 生效）[/dim]")
+            for line in run_sync_memory(memory_actions, memory_lib, apply, prefer):
+                style = {"link": "green", "relink": "yellow", "replace": "yellow",
+                         "conflict": "red"}.get(line.split()[0], None)
+                console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
+        elif not plan.sources:
+            console.print("\nmemory: 无事实源也无现存工具侧记忆（先在任一工具建立后再 sync）")
 
     # --- MCP 层：清单为空则自动收集 ---
     if layer_mcp:

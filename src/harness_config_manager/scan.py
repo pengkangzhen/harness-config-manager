@@ -1,4 +1,4 @@
-"""组装：探测 + 五层扫描 -> ToolReport 列表。"""
+"""组装：探测 + 六层扫描 -> ToolReport 列表。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from .agents import scan_agents
 from .detect import detect_tools
 from .hooks import HOOK_READERS
+from .memory import scan_memory
 from .model import Detection, ToolReport
 from .mcp import MCP_READERS, plugin_provided_mcp
 from .plugins import PLUGIN_READERS
@@ -25,6 +26,10 @@ def scan_tool(key: str) -> ToolReport:
 
     agents, notes = scan_agents(spec)
     report.agents = agents
+    report.scan_notes.extend(notes)
+
+    memory, notes = scan_memory(spec)
+    report.memory = memory
     report.scan_notes.extend(notes)
 
     if key in MCP_READERS:

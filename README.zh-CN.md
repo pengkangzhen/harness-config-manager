@@ -2,7 +2,7 @@
 
 统一检测、盘点、分发 AI 编码工具的用户级 **skills / MCP servers / 插件 / hooks / subagents**，并可调取当前项目的跨助手历史会话。
 
-一台机器上往往装着多个 AI 编码工具（Claude Code、ZCode、Codex、Cursor、VS Code Copilot、Gemini CLI、OpenCode……），每个工具各管一套用户级 skills、MCP 配置、插件、hooks（钩子：在工具执行特定动作前后自动运行的 shell 命令）、subagents（子代理：每代理一个 Markdown 定义文件）和 session 记录，格式互不相同（JSON 的 `mcpServers`/`servers`/`.mcp`、TOML 的 `[mcp_servers.*]`、command 数组……），配置渐渐各自为政。`halter` 用单一事实源统一管理这五层配置：先检测与盘点，再按需分发；session 记录则作为只读的项目连续性能力单独调取。
+一台机器上往往装着多个 AI 编码工具（Claude Code、ZCode、Codex、Cursor、VS Code Copilot、Gemini CLI、OpenCode……），每个工具各管一套用户级 skills、MCP 配置、插件、hooks（钩子：在工具执行特定动作前后自动运行的 shell 命令）、subagents（子代理：每代理一个 Markdown 定义文件）、用户级记忆（CLAUDE.md / AGENTS.md / GEMINI.md 等全局指令文件，各工具内容极易漂移）和 session 记录，格式互不相同（JSON 的 `mcpServers`/`servers`/`.mcp`、TOML 的 `[mcp_servers.*]`、command 数组……），配置渐渐各自为政。`halter` 用单一事实源统一管理这六层配置：先检测与盘点，再按需分发；session 记录则作为只读的项目连续性能力单独调取。
 
 ## 界面预览
 
@@ -38,7 +38,7 @@ uv tool install .          # 从本仓库安装，得到 halter 命令
 halter scan                   # 看一眼：装了哪些工具、各配置了什么 skills/MCP/插件/hooks/subagents、有无健康问题
 halter scan -d skills -d mcp  # 查看某层明细；--json 输出机器可读格式
 
-halter assess                 # 评估五层配置对当前项目的有用度（语言/框架/领域信号匹配）
+halter assess                 # 评估配置层对当前项目的有用度（语言/框架/领域信号匹配）
 halter assess -p ../my-paper  # 评估指定项目；-l skills -l mcp 只看部分层；--json 机器可读
 
 halter sync                   # 同步一下：清单/库 -> 所有工具（默认 dry-run）
@@ -76,12 +76,13 @@ halter sessions search "authentication migration" --project .
 
 内置 `halter-sessions` skill 会教所有已检测助手同一套查询流程。`halter sync --sessions`（默认开启）或 `halter sessions install --apply` 通过正常 skills library 分发。只有显式使用 `--transcript`、`search` 或 `context` 时才读取 transcript；明显凭据会脱敏，历史命令只作为证据展示，不作为可执行指令。
 
-## 五个配置层
+## 六个配置层
 
 | 层 | 事实源 | 分发方式 |
 |---|---|---|
 | skills | skills 库目录（默认 `~/.agents/skills`；可用配置 `library` 覆盖；旧自管库 `~/.config/halter/library/skills` 首次解析时自动迁移） | 条目级 symlink；同名冲突默认跳过，`--prefer library` 备份后覆盖 |
 | subagents | subagents 库目录（默认 `~/.agents/agents`；可用配置 `agents_library` 覆盖；旧路径自动迁移） | 条目级 symlink（每代理一个 `.md` 文件）；冲突语义与 skills 相同；frontmatter 字段（如 `model: opus`）原样分发，Claude 系别名在其它工具可能无效 |
+| memory | 单一记忆文件（默认 `~/.agents/memory/MEMORY.md`；可用配置 `memory_file` 覆盖） | symlink 到各工具的用户级记忆文件（claude `~/.claude/CLAUDE.md`、zcode/codex/opencode `AGENTS.md`、gemini `GEMINI.md`）；在任一工具侧编辑即改库文件，天然保持一致；库缺失时自动从工具侧收养（各工具内容不一致需 `--from <tool>` 裁决）；冲突语义与 skills 相同 |
 | MCP | `~/.config/halter/mcp.toml`（canonical：stdio/http、env、headers） | 六方言转换写入：claude（`.claude.json` 读改写）、zcode、codex（TOML 保注释）、cursor、vscode（`servers` 键）、gemini、opencode（command 数组）；http 类型只分发支持的工具 |
 | 插件 | `~/.config/halter/plugins.toml`（family: claude / codex / vscode） | claude 用 `claude plugin install -y`；zcode 镜像 claude 缓存 + 登记同源清单；codex 写 TOML 开关；vscode 用 `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml`（每条注册：id、事件列表、matcher、命令、超时秒） | 三方言转换写入：claude（`settings.json` 顶层 `hooks`）、zcode（`cli/config.json` 的 `hooks.events`，超时自动换算毫秒）、cursor（`hooks.json` 扁平结构）；写入条目带 `"halter": "<id>"` 归属标记，**只增删改自家电位，第三方注入的无标记条目一律不碰**；仅 cursor 支持的事件（如 `beforeShellExecution`）或 claude 独有事件（如 `PermissionRequest`）分发到无此事件的工具时跳过并提示 |
@@ -104,6 +105,7 @@ exclude_mcp = []
 exclude_hooks = []               # 不分发的 hook id 名单（id 见 hooks.toml / scan -d hooks）
 agents_library = ""              # subagents 事实源；缺省为 ~/.agents/agents
 exclude_agents = []              # 不分发的 subagent 名单
+memory_file = ""                 # 用户级记忆事实源；缺省为 ~/.agents/memory/MEMORY.md
 ```
 
 ## v1 边界
@@ -113,12 +115,13 @@ exclude_agents = []              # 不分发的 subagent 名单
 - `sync --plugins` 的 zcode 目标要求该插件在 claude 侧已安装（镜像来源）。
 - hooks 层仅 claude / zcode / cursor 三家支持（Codex 只有弱 notify 回调，其余工具暂无对等机制）；Cursor 的 prompt 型 hook 仅随 cursor 目标分发。
 - subagents 层仅 claude / zcode / cursor 三家支持；frontmatter 里的 `model: opus` 等是 Claude 系别名，原样分发（在其它工具可能不生效）。
+- memory 层仅覆盖有单一用户级 Markdown 指令文件的工具（claude / zcode / codex / gemini / opencode）；Cursor 的 rules 需 `.mdc` frontmatter、Windsurf / VS Code Copilot 的全局规则路径随版本变动，暂未接入。
 - Session 连续性原生覆盖 Claude Code / ZCode / Codex / OpenCode；如需更多 provider，可安装可选 ctx。halter 自身暂未实现 Gemini / Cursor 原生 transcript parser。
 - hook command 的死配置检测是保守的：仅对「单一脚本路径」形式的命令判定存在性，复合 shell 表达式不误报也不检查。
 
 ## 支持新工具
 
-在 `registry.py` 的 `TOOLS` 中追加一条 `ToolSpec`（CLI 命令名、配置目录、skills 目录），检测与 skills 层即刻生效；MCP / 插件层需在 `mcp.py` / `mcp_write.py` / `plugins.py` / `plugin_sync.py` 中补充该工具的方言读写器；hooks 层同理见 `hooks.py` / `hooks_write.py`；subagents 只需加 `agents_dirs` 条目。
+在 `registry.py` 的 `TOOLS` 中追加一条 `ToolSpec`（CLI 命令名、配置目录、skills 目录），检测与 skills 层即刻生效；MCP / 插件层需在 `mcp.py` / `mcp_write.py` / `plugins.py` / `plugin_sync.py` 中补充该工具的方言读写器；hooks 层同理见 `hooks.py` / `hooks_write.py`；subagents 只需加 `agents_dirs` 条目；memory 只需加 `memory_files` 条目。
 
 ## 测试
 
@@ -140,7 +143,7 @@ dsh plugin --profile web add dsh-halter
 
 `desktop/` 内置一个 Tauri v2 桌面应用：
 
-- **总览仪表盘**：检测到的工具、五层配置（skills / subagents / MCP / 插件 / hooks）计数、健康检查问题
+- **总览仪表盘**：检测到的工具、六层配置（skills / subagents / memory / MCP / 插件 / hooks）计数、健康检查问题
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
 - **中英双语界面**：侧边栏一键切换，选择按设备记忆

@@ -133,7 +133,7 @@ const COMMANDS = {
     ]),
   // 与 main.rs 一致：sync 返回 SidecarOutput 原始结构，不解析。
   halter_sync: async ({ apply, layers }) => {
-    const allowed = ["skills", "mcp", "plugins", "hooks", "agents", "sessions"];
+    const allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     const args = ["sync"];
     for (const layer of allowed) {
       if (!layers.includes(layer)) args.push(`--no-${layer}`);

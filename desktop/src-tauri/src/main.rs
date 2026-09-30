@@ -210,7 +210,7 @@ async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> R
 /// `apply == true`.
 #[tauri::command]
 async fn halter_sync(apply: bool, layers: Vec<String>) -> Result<SidecarOutput, String> {
-    let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "sessions"];
+    let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     let mut args: Vec<String> = vec!["sync".into()];
     for layer in allowed {
         if !layers.iter().any(|l| l == layer) {

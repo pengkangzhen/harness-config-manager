@@ -1,18 +1,18 @@
 # harness-config-manager (`halter`)
 
-Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents**, and recall project-scoped **session history** across all your AI coding harnesses — from a single source of truth.
+Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents / global memory (CLAUDE.md, AGENTS.md…)**, and recall project-scoped **session history** across all your AI coding harnesses — from a single source of truth.
 
 [中文文档](README.zh-CN.md)
 
 ## Why
 
-A serious AI-assisted developer typically runs several coding harnesses side by side — Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, ZCode… Each one keeps its **own** user-level skills, MCP server configs, plugins, hooks (commands that run automatically before/after specific agent actions), subagents (per-agent Markdown definitions), and session transcripts, in its own format (JSON with `mcpServers` vs `servers` vs `.mcp`, TOML `[mcp_servers.*]`, array-style commands…). They drift apart silently: a skill lands in one tool but never reaches the others, an MCP server gets registered twice with different definitions, a config pointing at a deleted project keeps failing on every startup.
+A serious AI-assisted developer typically runs several coding harnesses side by side — Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, ZCode… Each one keeps its **own** user-level skills, MCP server configs, plugins, hooks (commands that run automatically before/after specific agent actions), subagents (per-agent Markdown definitions), global memory files (CLAUDE.md / AGENTS.md / GEMINI.md — the instructions every session starts from, which drift apart the fastest), and session transcripts, in its own format (JSON with `mcpServers` vs `servers` vs `.mcp`, TOML `[mcp_servers.*]`, array-style commands…). They drift apart silently: a skill lands in one tool but never reaches the others, an MCP server gets registered twice with different definitions, a config pointing at a deleted project keeps failing on every startup.
 
-`halter` treats those five layers as one managed state, plus a read-only session-continuity layer:
+`halter` treats those six layers as one managed state, plus a read-only session-continuity layer:
 
 - **Detect** which harnesses are installed (CLI presence + config directories, 13 tools known).
-- **Inventory** what each one has — as coverage matrices (tool × skill, tool × MCP server, tool × plugin, tool × hook, tool × subagent), plus health checks (broken symlinks, unparseable configs, dead MCP entries whose command no longer exists, unresolved secret placeholders).
-- **Distribute** from a single source of truth to every tool: skills and subagents as per-entry symlinks, MCP definitions translated across six config dialects, plugins installed via each family's native mechanism, hooks translated across three dialects (claude / zcode / cursor).
+- **Inventory** what each one has — as coverage matrices (tool × skill, tool × MCP server, tool × plugin, tool × hook, tool × subagent, tool × memory), plus health checks (broken symlinks, unparseable configs, dead MCP entries whose command no longer exists, unresolved secret placeholders).
+- **Distribute** from a single source of truth to every tool: skills and subagents as per-entry symlinks, global memory as one symlinked file (edit anywhere, consistent everywhere), MCP definitions translated across six config dialects, plugins installed via each family's native mechanism, hooks translated across three dialects (claude / zcode / cursor).
 - **Continue work across harnesses**: list every assistant's sessions for the current project, inspect one transcript on demand, and generate a deterministic handoff without rewriting vendor session stores.
 
 ## How it compares
@@ -105,12 +105,13 @@ Native metadata readers cover Claude Code, ZCode, Codex CLI, and OpenCode. If [c
 
 The built-in `halter-sessions` skill teaches every detected assistant the same lookup workflow. `halter sync --sessions` (on by default) or `halter sessions install --apply` distributes it through the normal skills library. Transcripts are read only when `--transcript`, `search`, or `context` is explicitly requested; obvious credentials are redacted, and prior commands are presented as historical evidence rather than executable instructions.
 
-## The five managed config layers
+## The six managed config layers
 
 | Layer | Source of truth | Distribution |
 |---|---|---|
 | skills | skills library dir (default `~/.agents/skills`; config `library` overrides; legacy `~/.config/halter/library/skills` is auto-migrated once) | per-entry symlinks; same-name conflicts skipped by default, `--prefer library` to override |
 | subagents | subagents library dir (default `~/.agents/agents`; config `agents_library` overrides; legacy path auto-migrated once) | per-entry symlinks (each agent is one `.md` file); same conflict semantics as skills; frontmatter (`model: opus`, …) is distributed as-is — aliases may not resolve in non-Claude-family tools |
+| memory | one memory file (default `~/.agents/memory/MEMORY.md`; config `memory_file` overrides) | symlinked to each tool's user-level memory file (claude `~/.claude/CLAUDE.md`, zcode/codex/opencode `AGENTS.md`, gemini `GEMINI.md`); editing on any tool side edits the library, so copies can't drift; an empty library is auto-adopted from tool side (divergent copies need `--from <tool>`); same conflict semantics as skills |
 | MCP | `~/.config/halter/mcp.toml` (canonical: stdio/http, env, headers) | six dialect writers: claude (read-modify-write of `~/.claude.json`), zcode, codex (TOML, comments preserved), cursor, vscode (`servers` key), gemini, opencode (array-style command); http-type servers only go to tools that support them |
 | plugins | `~/.config/halter/plugins.toml` (families: claude / codex / vscode) | claude via `claude plugin install -y`; zcode mirrors the claude-side cache + registers the same-origin manifest; codex via TOML toggle; vscode via `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml` (per registration: id, events, matcher, command, timeout in seconds) | three dialect writers: claude (top-level `hooks` of `settings.json`), zcode (`hooks.events` in `cli/config.json`, timeouts converted ms→s), cursor (flat two-level `hooks.json`); every entry halter writes carries an `"halter": "<id>"` ownership tag — **entries without it (injected by Otty, Orca, …) are never touched**; tool-unsupported events (cursor-only like `beforeShellExecution`, claude-only like `PermissionRequest`) are skipped with a note |
@@ -133,13 +134,14 @@ exclude_mcp = []
 exclude_hooks = []               # hook ids to never distribute (see hooks.toml / scan -d hooks)
 agents_library = ""              # subagents source of truth; defaults to ~/.agents/agents
 exclude_agents = []              # agent names to never distribute
+memory_file = ""                 # user-level memory source of truth; defaults to ~/.agents/memory/MEMORY.md
 ```
 
 ## Supported tools
 
 Claude Code · ZCode · OpenAI Codex · Cursor · VS Code (Copilot) · Gemini CLI · OpenCode · GitHub Copilot CLI · Continue · Cline · Trae · Aider Desktop · Windsurf
 
-Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer work immediately); MCP/plugin support needs the tool's dialect reader/writer; hooks likewise live in `hooks.py` / `hooks_write.py`; subagents need just an `agents_dirs` entry.
+Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer work immediately); MCP/plugin support needs the tool's dialect reader/writer; hooks likewise live in `hooks.py` / `hooks_write.py`; subagents need just an `agents_dirs` entry, memory a `memory_files` entry.
 
 ## Limitations (v1)
 
@@ -148,6 +150,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 - The zcode plugin target requires the plugin to be installed on the claude side first (mirror source).
 - The hooks layer covers claude / zcode / cursor only (Codex has just a weak `notify` callback; the other tools have no equivalent); Cursor's prompt-type hooks distribute to cursor only.
 - The subagents layer covers claude / zcode / cursor only; frontmatter fields like `model: opus` are Claude-family aliases and are distributed as-is (they may not resolve elsewhere).
+- The memory layer covers tools with a single user-level Markdown instructions file (claude / zcode / codex / gemini / opencode); Cursor's rules need `.mdc` frontmatter and Windsurf / VS Code Copilot global-rule paths move between versions, so they are not wired up yet.
 - Session continuity natively covers Claude Code, ZCode, Codex CLI, and OpenCode; install optional ctx for broader provider coverage. halter itself does not yet implement native Gemini or Cursor transcript parsers.
 - Dead-hook detection is conservative: existence is only checked for commands that are a single script path; compound shell expressions are neither checked nor false-positived.
 - MCP servers injected by a harness at runtime for its own plugins (e.g. ZCode's `node_repl` via browser-use) rely on a small built-in mapping table.
@@ -177,7 +180,7 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 
 `desktop/` ships a Tauri v2 desktop app:
 
-- **Overview dashboard**: detected tools, five-layer counts (skills / subagents / MCP / plugins / hooks), doctor issues
+- **Overview dashboard**: detected tools, six-layer counts (skills / subagents / memory / MCP / plugins / hooks), doctor issues
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
 - **Bilingual UI**: zh / EN switch in the sidebar, remembered per device

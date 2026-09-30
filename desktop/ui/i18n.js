@@ -24,6 +24,7 @@ const I18N = {
 
     "layer.skills": "skills",
     "layer.agents": "agents",
+    "layer.memory": "记忆",
     "layer.mcp": "MCP",
     "layer.plugins": "插件",
     "layer.hooks": "hooks",
@@ -31,6 +32,7 @@ const I18N = {
 
     "mlayer.skills": "Skills",
     "mlayer.agents": "Subagents",
+    "mlayer.memory": "Memory",
     "mlayer.mcp": "MCP",
     "mlayer.plugins": "插件",
     "mlayer.hooks": "Hooks",
@@ -140,6 +142,8 @@ const I18N = {
     "doctor.broken_link": "断链（指向 {target} 不存在）",
     "doctor.library_ok": "{n} 个 skill",
     "doctor.library_missing": "不存在（首次 sync --apply 时创建）",
+    "doctor.memory_library_ok": "{n}B",
+    "doctor.memory_library_missing": "不存在（首次 sync --apply 时收养/创建）",
     "doctor.mcp_secret_missing": "密钥变量未定义: {vars}",
     "doctor.dead_command": "command 指向的 {command} 不存在（死配置，建议删除）",
   },
@@ -163,6 +167,7 @@ const I18N = {
 
     "layer.skills": "skills",
     "layer.agents": "agents",
+    "layer.memory": "Memory",
     "layer.mcp": "MCP",
     "layer.plugins": "Plugins",
     "layer.hooks": "hooks",
@@ -170,6 +175,7 @@ const I18N = {
 
     "mlayer.skills": "Skills",
     "mlayer.agents": "Subagents",
+    "mlayer.memory": "Memory",
     "mlayer.mcp": "MCP",
     "mlayer.plugins": "Plugins",
     "mlayer.hooks": "Hooks",
@@ -279,6 +285,8 @@ const I18N = {
     "doctor.broken_link": "Broken link (target {target} does not exist)",
     "doctor.library_ok": "{n} skills",
     "doctor.library_missing": "Missing (created on first sync --apply)",
+    "doctor.memory_library_ok": "{n}B",
+    "doctor.memory_library_missing": "Missing (adopted/created on first sync --apply)",
     "doctor.mcp_secret_missing": "Undefined secret variables: {vars}",
     "doctor.dead_command": "command points to {command} which does not exist (dead config, consider removing)",
   },

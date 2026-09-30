@@ -1,6 +1,6 @@
 """halter tui：交互式全屏矩阵浏览器（htop/k9s 风格）。
 
-1-6 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
+1-7 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
 g 只看缺口 · / 过滤 · q 退出。数据来自 scan_all，只读。
 """
 
@@ -22,10 +22,11 @@ from .model import ToolReport
 LAYERS: list[tuple[str, str, str]] = [
     ("skills", "SKILLS", "1"),
     ("agents", "SUBAGENTS", "2"),
-    ("mcp", "MCP", "3"),
-    ("plugins", "PLUGINS", "4"),
-    ("hooks", "HOOKS", "5"),
-    ("sessions", "SESSIONS", "6"),
+    ("memory", "MEMORY", "3"),
+    ("mcp", "MCP", "4"),
+    ("plugins", "PLUGINS", "5"),
+    ("hooks", "HOOKS", "6"),
+    ("sessions", "SESSIONS", "7"),
 ]
 
 
@@ -42,7 +43,7 @@ class HelpScreen(ModalScreen[None]):
         lines = [
             "[b cyan]halter tui 快捷键[/b cyan]",
             "[dim]────────────────────────────[/dim]",
-            "[b]1-6[/b]   切换层（Skills/Subagents/MCP/Plugins/Hooks/Sessions）",
+            "[b]1-7[/b]   切换层（Skills/Subagents/Memory/MCP/Plugins/Hooks/Sessions）",
             "[b]↑↓←→[/b]  移动选择，右侧面板显示详情",
             "[b]g[/b]     只看缺口（再按恢复）",
             "[b]s[/b]     循环排序：缺口 → 名称 → 覆盖",
@@ -87,6 +88,9 @@ def _layer_rows(layer: str, reports: list[ToolReport]) -> list[Row]:
         elif layer == "agents":
             for a in r.agents:
                 put(a.name, r.tool, a)
+        elif layer == "memory":
+            if r.memory is not None and r.memory.present:
+                put("MEMORY", r.tool, r.memory)
         elif layer == "mcp":
             for m in r.mcp_servers:
                 put(m.name, r.tool, m)
@@ -129,6 +133,15 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
         path = getattr(first, "path", None)
         if path is not None:
             fields.append(("路径", str(path)))
+    elif layer == "memory":
+        path = getattr(first, "path", None)
+        if path is not None:
+            fields.insert(0, ("路径", str(path)))
+        size = getattr(first, "size", 0)
+        fields.insert(1, ("大小", f"{size}B"))
+        linked = [t for t, e in row.entries.items() if getattr(e, "linked", False)]
+        if linked:
+            fields.append(("库链接", ", ".join(sorted(linked))))
     elif layer == "mcp":
         transport = getattr(first, "transport", "?")
         command = getattr(first, "command", None)
@@ -253,7 +266,7 @@ class HalterTui(App[None]):
         entry = row.entries.get(tool)
         if entry is None:
             return Text("·", style="dim")
-        if self._layer in ("skills", "agents"):
+        if self._layer in ("skills", "agents", "memory"):
             return Text("●", style="green") if getattr(entry, "linked", False) else Text("◐", style="yellow")
         return Text("●")
 

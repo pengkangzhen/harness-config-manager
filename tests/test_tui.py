@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from harness_config_manager.cli import app
 from harness_config_manager.model import (
     McpServerInfo,
+    MemoryInfo,
     PluginInfo,
     SkillInfo,
     ToolReport,
@@ -29,12 +30,15 @@ def _reports() -> list[ToolReport]:
             SkillInfo(name="figure-plotter", path=Path("/lib/figure-plotter"),
                       description="数据可视化与绘图"),
         ],
+        memory=MemoryInfo(path=Path("/h/.claude/CLAUDE.md"), present=True, linked=True,
+                          size=100, mtime=1.0),
         mcp_servers=[McpServerInfo(name="codegraph", transport="stdio")],
         plugins=[PluginInfo(plugin_id="github@claude-plugins-official")],
     )
     zcode = ToolReport(
         tool="zcode", display="ZCode", installed=True,
         skills=[SkillInfo(name="paper-polish", path=Path("/z/paper-polish"))],
+        memory=MemoryInfo(path=Path("/h/.zcode/AGENTS.md"), present=True, size=80, mtime=1.0),
         mcp_servers=[],
         plugins=[PluginInfo(plugin_id="github@zcode-plugins-official")],
     )
@@ -62,7 +66,12 @@ def test_tui_boot_skills_layer() -> None:
 async def _check_layer_switch_and_gaps() -> None:
     app_ = HalterTui(_reports())
     async with app_.run_test() as pilot:
-        await pilot.press("3")  # MCP
+        await pilot.press("3")  # MEMORY
+        assert app_._layer == "memory"
+        assert {r.name for r in app_._visible} == {"MEMORY"}
+        row = app_._visible[0]
+        assert set(row.entries) == {"claude", "zcode"}
+        await pilot.press("4")  # MCP
         assert app_._layer == "mcp"
         assert {r.name for r in app_._visible} == {"codegraph"}
         await pilot.press("g")
@@ -97,7 +106,7 @@ def test_tui_filter() -> None:
 async def _check_plugins_merge() -> None:
     app_ = HalterTui(_reports())
     async with app_.run_test() as pilot:
-        await pilot.press("4")  # PLUGINS
+        await pilot.press("5")  # PLUGINS
         rows = {r.name: r for r in app_._visible}
         assert "github" in rows  # 两个 @market 变体合并为一行
         assert set(rows["github"].entries) == {"claude", "zcode"}

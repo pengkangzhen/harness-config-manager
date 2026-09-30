@@ -17,6 +17,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         config_dirs=(".claude",),
         skills_dirs=(".claude/skills", ".agents/skills"),  # 后者为其跨工具共享发现路径
         agents_dirs=(".claude/agents",),
+        memory_files=(".claude/CLAUDE.md",),
         notes="MCP 在 ~/.claude.json 顶层 mcpServers；插件用 `claude plugin install -y` 无头安装",
     ),
     ToolSpec(
@@ -25,6 +26,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         config_dirs=(".zcode",),
         skills_dirs=(".zcode/skills", ".agents/skills"),  # 同上
         agents_dirs=(".zcode/agents",),  # 注意不是 .zcode/cli/agents（那是会话数据）
+        memory_files=(".zcode/AGENTS.md",),
         notes="MCP 在 ~/.zcode/cli/config.json 的 mcp.servers；插件体系与 Claude Code 同源",
     ),
     ToolSpec(
@@ -33,6 +35,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         cli_names=("codex",),
         config_dirs=(".codex",),
         skills_dirs=(".codex/skills",),
+        memory_files=(".codex/AGENTS.md",),
         notes="MCP 在 ~/.codex/config.toml 的 [mcp_servers.*]（TOML）；插件开关也在该文件 [plugins.*]",
     ),
     ToolSpec(
@@ -61,6 +64,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         cli_names=("gemini",),
         config_dirs=(".gemini",),
         skills_dirs=(".gemini/skills",),
+        memory_files=(".gemini/GEMINI.md",),
         notes="MCP 在 ~/.gemini/settings.json 嵌套 mcpServers（另有 config/mcp_config.json）",
     ),
     ToolSpec(
@@ -69,6 +73,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         cli_names=("opencode",),
         config_dirs=(".config/opencode", ".opencode"),
         skills_dirs=(".config/opencode/skills",),
+        memory_files=(".config/opencode/AGENTS.md", ".opencode/AGENTS.md"),
         notes="MCP 在 opencode.json 的 mcp 键，command 为数组格式",
     ),
     ToolSpec(

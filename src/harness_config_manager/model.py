@@ -1,4 +1,4 @@
-"""数据模型：工具探测结果与五层对象（skills / MCP / 插件 / hooks / subagents）的统一表示。"""
+"""数据模型：工具探测结果与六层对象（skills / MCP / 插件 / hooks / subagents / memory）的统一表示。"""
 
 from __future__ import annotations
 
@@ -58,6 +58,9 @@ class ToolSpec:
     config_dirs: tuple[str, ...] = ()
     skills_dirs: tuple[str, ...] = ()
     agents_dirs: tuple[str, ...] = ()
+    # 用户级记忆/指令文件（CLAUDE.md / AGENTS.md / GEMINI.md…），相对主目录；
+    # 多候选按序取第一个父目录存在者（跨平台路径差异）
+    memory_files: tuple[str, ...] = ()
     # harness = 独立 AI 编码代理（CLI/Agent 形态）；editor = 编辑器宿主（扩展/插件寄生）
     category: str = "harness"
     notes: str = ""
@@ -87,6 +90,15 @@ class AgentInfo:
     path: Path
     linked: bool = False          # 是否为 symlink（已同步的标志）
     model: str | None = None      # frontmatter 中的 model 字段（仅展示用）
+
+
+@dataclass
+class MemoryInfo:
+    path: Path                    # 工具侧记忆文件（CLAUDE.md / AGENTS.md / GEMINI.md…）
+    present: bool = False         # 文件存在（真实文件或有效链接）
+    linked: bool = False          # 是否为 symlink（已同步的标志）
+    size: int = 0
+    mtime: float | None = None    # 修改时间戳（展示用）
 
 
 @dataclass
@@ -125,6 +137,7 @@ class ToolReport:
     category: str = "harness"
     skills: list[SkillInfo] = field(default_factory=list)
     agents: list[AgentInfo] = field(default_factory=list)
+    memory: MemoryInfo | None = None
     mcp_servers: list[McpServerInfo] = field(default_factory=list)
     plugins: list[PluginInfo] = field(default_factory=list)
     hooks: list[HookInfo] = field(default_factory=list)
