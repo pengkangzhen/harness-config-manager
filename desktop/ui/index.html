@@ -210,12 +210,12 @@
             <span id="mem-library-path" class="mem-path"></span>
             <span id="mem-library-badge" class="mem-badge"></span>
             <span class="toolbar-spacer"></span>
-            <button id="btn-memory-open" class="btn btn-sm hidden" data-i18n="mem.open">打开</button>
-            <button id="btn-memory-edit" class="btn" data-i18n="mem.edit">编辑</button>
-            <button id="btn-memory-save" class="btn danger hidden" data-i18n="mem.save">保存</button>
-            <button id="btn-memory-cancel" class="btn hidden" data-i18n="mem.cancel">取消</button>
+            <button id="btn-memory-open" class="btn hidden" data-i18n="mem.open">打开</button>
           </div>
-          <textarea id="memory-editor" class="memory-editor" spellcheck="false" readonly></textarea>
+          <details id="mem-content" class="mem-content">
+            <summary data-i18n="mem.content">库内容</summary>
+            <pre id="memory-editor" class="memory-editor"></pre>
+          </details>
           <h2 data-i18n="mem.toolsHeading">各工具侧副本</h2>
           <div id="mem-tools" class="mem-tools"></div>
         </div>

@@ -57,36 +57,6 @@ fn run_halter(args: &[String]) -> Result<SidecarOutput, String> {
     })
 }
 
-/// Same as run_halter but pipes `input` to the child's stdin (memory write).
-fn run_halter_with_stdin(args: &[String], input: &str) -> Result<SidecarOutput, String> {
-    use std::io::Write as _;
-    let program = resolve_halter();
-    let mut child = Command::new(&program)
-        .args(args)
-        .env("HALTER_UI", "1")
-        .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn halter sidecar `{program}`: {e}"))?;
-    // Drop the handle after writing so the child sees EOF even for empty input.
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(input.as_bytes())
-            .map_err(|e| format!("failed to write sidecar stdin: {e}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("failed to wait for halter sidecar: {e}"))?;
-    Ok(SidecarOutput {
-        ok: output.status.success(),
-        code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
-}
-
 fn parse_json_output(out: &SidecarOutput) -> Result<Value, String> {
     if !out.ok {
         let detail = if out.stderr.trim().is_empty() {
@@ -157,17 +127,6 @@ async fn halter_memory_show() -> Result<Value, String> {
     run_json_args(arg(&["memory", "show", "--json"])).await
 }
 
-/// Overwrite the memory library file with `content` (the CLI backs up the old
-/// file). Returns the raw sidecar output; the UI must confirm before calling.
-#[tauri::command]
-async fn halter_memory_write(content: String) -> Result<SidecarOutput, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        run_halter_with_stdin(&arg(&["memory", "write", "--json"]), &content)
-    })
-    .await
-    .map_err(|e| format!("sidecar task failed: {e}"))?
-}
-
 /// Open a file with the system default program (Memory panel's open button).
 /// Safety constraint: only files inside the user's home directory, and only
 /// if they exist. Openers are tried in order (WSL: xdg-open via WSLg, then
@@ -191,7 +150,7 @@ fn open_path_sync(raw: &str) -> Result<(), String> {
     } else if cfg!(windows) {
         vec![vec!["cmd", "/c", "start", ""]]
     } else {
-        vec![vec!["xdg-open"], vec!["wslview"], vec!["explorer.exe"]]
+        vec![vec!["xdg-open"], vec!["wslview"]]
     };
     for argv in candidates {
         let status = Command::new(argv[0]).args(&argv[1..]).arg(&resolved_str).status();
@@ -199,12 +158,23 @@ fn open_path_sync(raw: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    // WSL 无显示会话时：wslpath -w 转成 \\wsl.localhost\… 交给 Windows explorer。
-    // explorer.exe 成功时也常返回 1，因此 0/1 均算成功。
+    // WSL 无显示会话时：wslpath -w 转成 \\wsl.localhost\…。优先 PowerShell
+    // Invoke-Item（退出码决定成败），explorer.exe 兜底（其成功时惯常返回 1）。
     if cfg!(target_os = "linux") {
         if let Ok(out) = Command::new("wslpath").arg("-w").arg(&resolved_str).output() {
             if out.status.success() {
                 let win = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let ps_full = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+                let ps = if std::path::Path::new(ps_full).exists() { ps_full } else { "powershell.exe" };
+                if let Ok(s) = Command::new(ps)
+                    .args(["-NoProfile", "-Command"])
+                    .arg(format!("Invoke-Item -LiteralPath '{win}'"))
+                    .status()
+                {
+                    if s.success() {
+                        return Ok(());
+                    }
+                }
                 let exe = if std::path::Path::new("/mnt/c/Windows/explorer.exe").exists() {
                     "/mnt/c/Windows/explorer.exe"
                 } else {
@@ -338,7 +308,6 @@ fn main() {
             halter_version,
             halter_scan,
             halter_memory_show,
-            halter_memory_write,
             open_path,
             halter_sessions_list,
             halter_sessions_projects,

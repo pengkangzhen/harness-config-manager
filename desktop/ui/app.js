@@ -1340,11 +1340,9 @@ $("btn-sync-apply").addEventListener("click", () => {
   runSync(true);
 });
 
-/* ---------------- memory: 全局指令事实源 ---------------- */
+/* ---------------- memory: 全局指令事实源（路径 + 打开 + 差异，只读） ---------------- */
 
-const memoryState = { snap: null, editing: false };
-let saveArmed = false;
-let saveTimer = null;
+const memoryState = { snap: null };
 
 function memToolState(t) {
   if (t.linked) return { cls: "synced", mark: "●", key: "mem.stateLinked" };
@@ -1365,8 +1363,8 @@ function renderMemory() {
   badge.textContent = lib.exists ? t("mem.badgeOk") : t("mem.badgeMissing");
   badge.classList.toggle("warn", !lib.exists);
   $("btn-memory-open").classList.toggle("hidden", !lib.exists);
-  const editor = $("memory-editor");
-  if (!memoryState.editing) editor.value = lib.content ?? "";
+  $("mem-content").classList.toggle("hidden", !lib.exists);
+  $("memory-editor").textContent = lib.content ?? "";
   const tools = $("mem-tools");
   tools.replaceChildren();
   for (const item of snap.tools) {
@@ -1378,8 +1376,7 @@ function renderMemory() {
     head.append(el("span", "mem-tool-file", item.path.split("/").pop()));
     head.append(el("span", "mem-tool-display", item.display));
     head.append(el("span", "mem-tool-meta", `${t(st.key)} · ${item.size}B`));
-    const spacer = el("span", "toolbar-spacer");
-    head.append(spacer);
+    head.append(el("span", "toolbar-spacer"));
     if (item.present) {
       const openBtn = el("button", "btn btn-sm", t("mem.open"));
       openBtn.addEventListener("click", () => {
@@ -1414,64 +1411,16 @@ async function loadMemory() {
     return;
   }
   $("memory-loading").classList.add("hidden");
-  disarmSave();
-  setMemoryEditing(false);
   renderMemory();
   $("memory-content").classList.remove("hidden");
 }
-
-function setMemoryEditing(on) {
-  memoryState.editing = on;
-  const editor = $("memory-editor");
-  editor.readOnly = !on;
-  $("btn-memory-edit").classList.toggle("hidden", on);
-  $("btn-memory-save").classList.toggle("hidden", !on);
-  $("btn-memory-cancel").classList.toggle("hidden", !on);
-  if (on) editor.focus();
-}
-
-function disarmSave() {
-  saveArmed = false;
-  clearTimeout(saveTimer);
-  const btn = $("btn-memory-save");
-  btn.classList.remove("armed");
-  btn.textContent = t("mem.save");
-}
-
-$("btn-memory-edit").addEventListener("click", () => setMemoryEditing(true));
 
 $("btn-memory-open").addEventListener("click", () => {
   const p = memoryState.snap?.library.path;
   if (p) invoke("open_path", { path: p }).catch((err) => showError($("memory-error"), err));
 });
 
-$("btn-memory-cancel").addEventListener("click", () => {
-  setMemoryEditing(false);
-  disarmSave();
-  $("memory-editor").value = memoryState.snap?.library.content ?? "";
-});
-
 $("btn-memory-refresh").addEventListener("click", () => loadMemory());
-
-$("btn-memory-save").addEventListener("click", async () => {
-  const btn = $("btn-memory-save");
-  if (!saveArmed) {
-    saveArmed = true;
-    btn.classList.add("armed");
-    btn.textContent = t("mem.saveArmed");
-    saveTimer = setTimeout(disarmSave, 5000);
-    return;
-  }
-  disarmSave();
-  const content = $("memory-editor").value;
-  try {
-    const out = await invoke("halter_memory_write", { content });
-    if (!out.ok) throw new Error(out.stderr || `halter exited with code ${out.code}`);
-    await loadMemory();
-  } catch (err) {
-    showError($("memory-error"), err);
-  }
-});
 
 /* ---------------- language ---------------- */
 
@@ -1492,10 +1441,7 @@ document.addEventListener("halter:langchange", () => {
     renderToolFilter();
     renderSessions(state.sessions);
   }
-  if (memoryState.snap) {
-    if (saveArmed) $("btn-memory-save").textContent = t("mem.saveArmed");
-    renderMemory();
-  }
+  if (memoryState.snap) renderMemory();
 });
 
 /* ---------------- boot ---------------- */

@@ -24,8 +24,7 @@ function resolveHalter() {
 }
 
 // main.rs 的 SidecarOutput：原样返回 stdout/stderr，不做 JSON 解析。
-// input 非空时写入子进程 stdin（memory write 用）。
-function runHalter(args, input) {
+function runHalter(args) {
   return new Promise((resolve) => {
     const child = spawn(resolveHalter(), args, {
       env: { ...process.env, HALTER_UI: "1", NO_COLOR: "1" },
@@ -34,8 +33,6 @@ function runHalter(args, input) {
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
-    if (input !== undefined) child.stdin.write(input);
-    child.stdin.end();
     child.on("error", (err) =>
       resolve({ ok: false, code: -1, stdout, stderr: String(err) }),
     );
@@ -82,23 +79,23 @@ async function desktopVersion() {
 // 用系统默认程序打开文件（Memory 面板的「打开」按钮）。
 // 安全约束：只允许打开家目录内、真实存在的文件。打开器逐个回退：
 // linux 先试 xdg-open / wslview（GUI 环境）；WSL 无显示会话时用
-// `wslpath -w` 转成 \\wsl.localhost\… 路径交给 Windows explorer.exe
-// （explorer 成功时也常返回 1，因此该候选以 0/1 均算成功）。
+// `wslpath -w` 转成 \\wsl.localhost\… 路径，优先 PowerShell Invoke-Item
+// （退出码决定成败），explorer.exe 兜底（其成功时惯常返回 1）。
 const OPENERS = {
   darwin: [["open"]],
   win32: [["cmd", "/c", "start", ""]],
-  linux: [["xdg-open"], ["wslview"], ["explorer.exe"]],
+  linux: [["xdg-open"], ["wslview"]],
 };
 
-function openWith(entries, target) {
+function openWith(entries) {
   return new Promise((resolve, reject) => {
     const tryNext = (i) => {
       if (i >= entries.length) {
-        reject(new Error(`no opener succeeded for ${target}`));
+        reject(new Error("no opener succeeded"));
         return;
       }
-      const { argv, target: t, okCodes } = entries[i];
-      const child = spawn(argv[0], [...argv.slice(1), t], { stdio: "ignore" });
+      const { argv, okCodes } = entries[i];
+      const child = spawn(argv[0], argv.slice(1), { stdio: "ignore" });
       child.on("error", () => tryNext(i + 1)); // ENOENT：没装，试下一个
       child.on("close", (code) => {
         if (okCodes.includes(code)) resolve();
@@ -126,20 +123,25 @@ async function openInSystem(rawPath) {
     throw new Error(`refusing to open outside home: ${resolved}`);
   }
   if (!existsSync(resolved)) throw new Error(`file not found: ${resolved}`);
-  const target = resolved;
-  const entries = (OPENERS[process.platform] ?? OPENERS.linux).map((argv) => ({
-    argv, target, okCodes: [0],
-  }));
+  const entries = (OPENERS[process.platform] ?? OPENERS.linux)
+    .map((argv) => ({ argv: [...argv, resolved], okCodes: [0] }));
   if (process.platform === "linux") {
     const winPath = await winPathOf(resolved);
     if (winPath) {
+      const ps = existsSync("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+        ? "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        : "powershell.exe";
+      entries.push({
+        argv: [ps, "-NoProfile", "-Command", `Invoke-Item -LiteralPath '${winPath}'`],
+        okCodes: [0],
+      });
       const exe = existsSync("/mnt/c/Windows/explorer.exe")
         ? "/mnt/c/Windows/explorer.exe"
         : "explorer.exe";
-      entries.push({ argv: [exe], target: winPath, okCodes: [0, 1] });
+      entries.push({ argv: [exe, winPath], okCodes: [0, 1] });
     }
   }
-  await openWith(entries, resolved);
+  await openWith(entries);
   return { opened: resolved };
 }
 
@@ -151,8 +153,6 @@ const COMMANDS = {
   },
   halter_scan: () => runJson(["scan", "--json"]),
   halter_memory_show: () => runJson(["memory", "show", "--json"]),
-  halter_memory_write: ({ content }) =>
-    runHalter(["memory", "write", "--json"], String(content ?? "")),
   open_path: ({ path: target }) => openInSystem(target),
   halter_sessions_list: ({ project, limit, allProjects }) =>
     runJson([
