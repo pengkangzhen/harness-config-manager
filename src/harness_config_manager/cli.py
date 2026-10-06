@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as _json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,14 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+def emit_json(text: str) -> None:
+    """--json 机器输出的唯一出口：原样写 stdout。
+
+    绝不走 rich 的 print_json——rich 在 FORCE_COLOR 等被判定为终端的
+    环境下会给 JSON 加 ANSI 语法高亮，令上游 JSON.parse 直接失败。"""
+    sys.stdout.write(text if text.endswith("\n") else text + "\n")
 
 
 def _short_time(value: datetime | None) -> str:
@@ -52,7 +61,7 @@ def _run_on_machine(machine: str, args: list[str], timeout: int = 180) -> None:
         console.print((err.strip() or text).strip(), style="red")
         raise typer.Exit(rc if 0 < rc < 256 else 1)
     if "--json" in args:
-        console.print_json(text)
+        emit_json(text)
     else:
         console.print(f"⚓ [cyan]{machine}[/cyan]")
         console.print(text.rstrip())
@@ -96,7 +105,7 @@ def sessions_list(
     if not all_sessions:
         items = items[:limit]
     if json_out:
-        console.print_json(_json.dumps({
+        emit_json(_json.dumps({
             "project": "all" if all_projects else str(project),
             "count": len(items),
             "sessions": [session_to_dict(x) for x in items],
@@ -147,7 +156,7 @@ def show(
         payload: dict[str, object] = {"session": session_to_dict(info)}
         if transcript:
             payload["transcript"] = format_transcript(messages, tail)
-        console.print_json(_json.dumps(payload, ensure_ascii=False))
+        emit_json(_json.dumps(payload, ensure_ascii=False))
         return
     data = session_to_dict(info)
     meta = Table.grid(padding=(0, 2))
@@ -196,7 +205,7 @@ def search(
             break
     if json_out:
         from .sessions import session_to_dict
-        console.print_json(_json.dumps({
+        emit_json(_json.dumps({
             "project": str(project), "query": query, "hits": [
                 {"session": session_to_dict(i), "snippet": s} for i, s in hits
             ]
@@ -271,7 +280,7 @@ def version(
     except PackageNotFoundError:
         v = "0.0.0+dev"
     if json_out:
-        console.print_json(_json.dumps({"name": "halter", "version": v}, ensure_ascii=False))
+        emit_json(_json.dumps({"name": "halter", "version": v}, ensure_ascii=False))
     else:
         console.print(f"⚓ [bold]halter[/bold] [cyan]{v}[/cyan]")
 
@@ -367,7 +376,7 @@ def sessions_projects(
         for key, v in rows
     ]
     if json_out:
-        console.print_json(_json.dumps({"count": len(payload), "projects": payload}, ensure_ascii=False))
+        emit_json(_json.dumps({"count": len(payload), "projects": payload}, ensure_ascii=False))
         return
     if not payload:
         console.print("[dim]未发现任何历史会话项目。[/dim]")
@@ -422,7 +431,7 @@ def scan(
 
     reports = scan_all(detections)
     if json_out:
-        console.print_json(_json.dumps({
+        emit_json(_json.dumps({
             "tools_detected": [d.__dict__ for d in detections if d.installed],
             "inventory": _json.loads(rp.to_json(reports)),
             "doctor": run_doctor(),
@@ -499,7 +508,7 @@ def assess(
     result = {k: v for k, v in result.items() if k in chosen}
 
     if json_out:
-        console.print_json(_json.dumps({
+        emit_json(_json.dumps({
             "project": str(profile.path),
             "profile": {
                 "languages": sorted(profile.languages),
@@ -834,7 +843,7 @@ def memory_show(json_out: bool = typer.Option(False, "--json", help="以 JSON �
 
     snap = memory_snapshot(load_config())
     if json_out:
-        console.print_json(_json.dumps(snap, ensure_ascii=False))
+        emit_json(_json.dumps(snap, ensure_ascii=False))
         return
     lib = snap["library"]
     state = "" if lib["exists"] else " [yellow](不存在)[/yellow]"
@@ -875,7 +884,7 @@ def memory_write(
     lib.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(lib, text)
     if json_out:
-        console.print_json(_json.dumps(
+        emit_json(_json.dumps(
             {"path": str(lib), "backup": backup, "size": len(text)}, ensure_ascii=False))
     else:
         line = f"已写入 {lib}（{len(text)}B）"
@@ -1010,7 +1019,7 @@ def machines_list(json_out: bool = typer.Option(False, "--json", help="以 JSON 
 
     machines = list_machines()
     if json_out:
-        console.print_json(_json.dumps({
+        emit_json(_json.dumps({
             "count": len(machines),
             "machines": [m.__dict__ for m in machines],
         }, ensure_ascii=False))
@@ -1196,7 +1205,7 @@ def providers_list(
     if json_out:
         from .providers_manifest import PRESETS
 
-        console.print_json(_json.dumps(
+        emit_json(_json.dumps(
             {"count": len(rows), "providers": rows, "current": current,
              "presets": [{"name": n, "label": t.get("label", ""),
                           "tools": [k for k in t if k in ("claude", "codex")],
@@ -1241,7 +1250,7 @@ def show(
     detail = _provider_row(spec)
     detail["tokens"] = {t: get_token(pid, t) is not None for t in spec.tools()}
     if json_out:
-        console.print_json(_json.dumps(detail, ensure_ascii=False))
+        emit_json(_json.dumps(detail, ensure_ascii=False))
         return
     console.print(Panel.fit(
         _json.dumps(detail, ensure_ascii=False, indent=2), title=f"provider {pid}"))
@@ -1351,7 +1360,7 @@ def providers_presets(json_out: bool = typer.Option(False, "--json", help="以 J
     from .providers_manifest import PRESETS
 
     if json_out:
-        console.print_json(_json.dumps({"count": len(PRESETS), "presets": [
+        emit_json(_json.dumps({"count": len(PRESETS), "presets": [
             {"name": name, "label": tpl.get("label", ""),
              "tools": [k for k in tpl if k in ("claude", "codex")],
              "claude": tpl.get("claude"), "codex": tpl.get("codex"),
