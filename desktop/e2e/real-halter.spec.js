@@ -47,6 +47,14 @@ test.beforeAll(async () => {
   if (ver.status !== 0) {
     throw new Error(`halter version failed (${ver.status}): ${ver.stderr || ver.stdout}`);
   }
+  try {
+    JSON.parse(ver.stdout.trim());
+  } catch (e) {
+    // CI 上 JSON.parse 曾在「看似合法」的 JSON 上失败：转储码点定位不可见污染字符
+    const hex = Array.from(ver.stdout)
+      .map((ch) => ch.codePointAt(0).toString(16)).join(" ");
+    throw new Error(`version stdout not parseable: ${e.message}; codepoints: ${hex}`);
+  }
   const add = runCli(
     ["providers", "add", "demo", "--tool", "claude",
       "--base-url", "https://example.com/api/anthropic", "--token-stdin"],

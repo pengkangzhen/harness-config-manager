@@ -75,8 +75,10 @@ async function runJson(args) {
   try {
     return JSON.parse(out.stdout.trim());
   } catch (err) {
+    const hex = Array.from(out.stdout.trim())
+      .map((ch) => ch.codePointAt(0).toString(16)).join(" ");
     throw new Error(
-      `failed to parse halter JSON output: ${err}\n--- stdout ---\n${out.stdout}`,
+      `failed to parse halter JSON output: ${err}\n--- stdout codepoints ---\n${hex}`,
     );
   }
 }
