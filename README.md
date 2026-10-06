@@ -23,6 +23,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 | Scope | **user-level** global config | project-level files (`CLAUDE.md`, `.cursorrules`…) | user-level | user-level | user-level |
 | Layers | skills + MCP + plugins + hooks + **subagents** + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
 | Detection / inventory / health checks | ✅ (13 tools, coverage matrices, doctor) | ❌ | ❌ | ❌ | ❌ |
+| Multi-machine | ✅ ssh: auto-discover ~/.ssh/config hosts, remote scan/sync, per-entry push/pull | ❌ | ❌ | ❌ | ❌ |
 | Secret handling | `${VAR}` placeholders + 0600 secrets file, redacted output | ❌ | ❌ | ❌ | ❌ |
 | Tech | Python + uv | TypeScript (Deno) | Rust | — | Rust |
 
@@ -72,12 +73,40 @@ halter sync --no-skills --no-plugins --no-mcp   # only hooks + sessions (all lay
 halter sync --prefer library  # on conflict, override the tool-side copy from the manifest
 halter sync --tool zcode --item paper-polishing --apply   # narrow to one matrix cell (what a dot click does)
 
+halter push skills paper-polishing --to desktop --apply   # one entry, this machine -> another machine
+halter pull mcp zotero --from lab --apply                 # ...or the other way round
+
 halter sessions list          # current project's sessions across local AI coding assistants
 halter sessions install       # distribute the halter-sessions lookup skill (dry-run)
 halter sessions install --apply
 ```
 
 The `sessions` layer only installs a lookup skill. It never copies, rewrites, or "adopts" session transcripts. When a manifest is empty, `sync` auto-collects from your best-equipped tool (the one with the most MCP servers / most enabled plugins / most hooks; override with `--from`). Third-party-injected hook entries are adopted too — keep specific ones out via `exclude_hooks`. Skills that exist nowhere in the library are adopted automatically; same-name divergent copies are reported for you to adjudicate.
+
+## Multiple machines (ssh)
+
+The same drift problem exists *between* machines: the desktop runs Claude Code, the laptop runs Claude Code too, and the two sides silently diverge. halter addresses this over plain ssh — the remote machine only needs halter installed and passwordless ssh (public key / agent); no passwords are ever stored.
+
+**Zero-registration, VS Code Remote-SSH style**: every non-wildcard `Host` alias in `~/.ssh/config` (Include directives followed recursively) is automatically a machine — connection parameters (HostName / User / Port / ProxyJump) are resolved by ssh itself. `halter machines add` remains available to override an alias or pin a custom `halter_path`:
+
+```bash
+halter machines list             # manual (machines.toml) + auto-discovered (~/.ssh/config)
+halter machines test desktop     # connectivity + remote halter check, with diagnostics
+
+# Inspect and operate a remote machine exactly like the local one
+halter scan --machine desktop --json
+halter sync --machine desktop --apply
+
+# Move a single entry between machines (skills / agents / mcp / hooks)
+halter push skills paper-polishing --to desktop --apply
+halter push mcp zotero --to desktop --with-secrets --apply   # carry real key values too (ssh-encrypted stdin)
+halter push hooks my-gate --to desktop --apply               # warns if the command embeds machine-local paths
+halter pull agents reviewer --from desktop --apply           # = push --from desktop, target is this machine
+```
+
+Semantics: entries are transferred through an idempotent export/ingest pair — same name and identical content is a no-op; divergent same-name entries are reported as conflicts (skip by default, `--prefer replace` backs up the destination side first, then overwrites). On arrival the entry lands in the remote library/manifest **and** is distributed to that machine's installed tools by its own halter — dialect translation never happens twice. MCP definitions travel with `${VAR}` placeholders; real secret values only move when `--with-secrets` is given, and they merge into the remote `secrets.toml` (0600). The memory layer is deliberately not pushed — a single global memory file has merge semantics that belong to git/syncthing, not point-to-point copies.
+
+The desktop app rides on the same channel: a machine picker on the matrix toolbar switches the whole view to any registered machine, entries that exist locally but are missing remotely appear as ghost rows (click to push), and remote-only entries get a pull button.
 
 ## Session continuity
 
@@ -101,6 +130,33 @@ halter sessions search "authentication migration" --project .
 Native metadata readers cover Claude Code, ZCode, Codex CLI, and OpenCode. If [ctx](https://ctx.rs) is installed and initialized, `halter sessions list` also includes ctx-indexed providers (Cursor, Gemini CLI, Copilot CLI, Continue, and many more) without duplicating native entries. `ctx` is optional; halter invokes only its read-only `list events` and `show session` surfaces.
 
 The built-in `halter-sessions` skill teaches every detected assistant the same lookup workflow. `halter sync --sessions` (on by default) or `halter sessions install --apply` distributes it through the normal skills library. Transcripts are read only when `--transcript`, `search`, or `context` is explicitly requested; obvious credentials are redacted, and prior commands are presented as historical evidence rather than executable instructions.
+
+## Model provider switching
+
+Claude Code and Codex can run against any Anthropic-/OpenAI-compatible endpoint (GLM, DeepSeek, local gateways, relays…), but the wiring lives in different files per tool. halter keeps a provider manifest (`~/.config/halter/providers.toml`) and switches a tool's active provider in one command. Providers are **machine-local by design** — they are identities, not distributable config, so `push`/`pull` never carries them.
+
+```bash
+# Adopt what already exists (e.g. a CC Switch setup) into the manifest:
+halter providers adopt --apply
+
+# List providers + each tool's current provider (probed from the real files):
+halter providers list
+
+# Add one from a built-in preset (endpoint filled in; model is yours to pick)
+# and switch. The token goes to secrets.toml (0600), never the manifest:
+echo "$KEY" | halter providers add zhipu --tool claude --preset zhipu \
+  --model glm-5.3 --token-stdin
+halter providers switch zhipu --tool claude
+
+# Back to vendor defaults:
+halter providers switch official --tool codex
+```
+
+Built-in presets (`halter providers presets`) currently cover zhipu (claude + codex endpoints), deepseek and moonshot — each endpoint backed by the vendor's own docs; only endpoints are pinned, model names always stay yours. Every switch first copies the target file to `~/.config/halter/backups/providers/`, so a bad switch is one file copy away from undone.
+
+What it writes — and what it never touches: claude gets only the provider-managed `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` env keys of `~/.claude/settings.json` (the rest of `env` stays yours); codex gets `model_provider` / `model` plus a `[model_providers.halter_<id>]` section while third-party sections are preserved verbatim. `doctor` flags external endpoints not in the manifest and cc-switch leftovers, so dual management can't hide. The desktop app has a Providers panel with one-click switching, an add form (with preset autofill), adoption, and removal.
+
+**Where this sits relative to CC Switch / claude-code-router**: halter is the *static configuration layer* — it writes which provider a tool points at, keeps tokens safe, and never runs a daemon. CC Switch does the same switching job as a standalone app (halter `adopt` can ingest its config). [claude-code-router](https://github.com/musistudio/claude-code-router) is a *runtime routing layer* — a resident gateway doing per-request routing, fallback and observability. The two layers compose: point a halter provider entry at a local gateway endpoint and switch to it like any other provider.
 
 ## The six managed config layers
 
@@ -143,6 +199,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 ## Limitations (v1)
 
 - Cursor plugins are inventoried but not installed (marketplace mechanism is opaque).
+- Provider switching covers claude and codex only (ZCode has no file-based model config; Gemini CLI has none here) and is deliberately machine-local: provider identities never ride `push`/`pull`.
 - Continue / Cline / Trae / Aider / Windsurf are covered on the skills layer only.
 - The zcode plugin target requires the plugin to be installed on the claude side first (mirror source).
 - The hooks layer covers claude / zcode / cursor only (Codex has just a weak `notify` callback; the other tools have no equivalent); Cursor's prompt-type hooks distribute to cursor only.
@@ -156,7 +213,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 99 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 151 tests, all against a fake $HOME — never touches your real config
 ```
 
 ## License
@@ -181,6 +238,7 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 - **Memory panel**: view and edit the global memory source of truth, inspect each tool-side copy with a unified diff, save with automatic backup
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
+- **Multiple machines**: machine picker on the matrix toolbar — `~/.ssh/config` Host aliases appear automatically (zero registration), manual registration also available; ghost rows push local-only entries over, remote-only entries get a pull button
 - **Bilingual UI**: zh / EN switch in the sidebar, remembered per device
 
 The frontend is plain static files (no build step) talking to Rust commands over Tauri IPC; the Rust side executes `halter --json` as a sidecar. Sidecar resolution order: `HALTER_BINARY` env var → bundled `halter` executable next to the app → `halter` on PATH.
