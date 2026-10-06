@@ -91,25 +91,52 @@ def spec_from_info(info: HookInfo, uid: str) -> HookSpec:
     )
 
 
+def spec_from_table(tbl) -> HookSpec:
+    """单个 [[hook]] TOML 表 -> HookSpec（load_manifest 与跨机传输共用）。"""
+    return HookSpec(
+        id=tbl["id"],
+        events=list(tbl.get("events", [])),
+        type=tbl.get("type", "command"),
+        matcher=tbl.get("matcher"),
+        command=tbl.get("command"),
+        timeout=tbl.get("timeout"),
+        description=tbl.get("description"),
+        extra=dict(tbl.get("extra", {})),
+        targets=list(tbl["targets"]) if "targets" in tbl else None,
+    )
+
+
+def spec_to_table(s: HookSpec):
+    """HookSpec -> 单个 [[hook]] TOML 表（save_manifest 与跨机传输共用）。"""
+    tbl = tomlkit.table()
+    tbl["id"] = s.id
+    tbl["events"] = s.events
+    if s.type != "command":
+        tbl["type"] = s.type
+    if s.matcher is not None:
+        tbl["matcher"] = s.matcher
+    if s.command is not None:
+        tbl["command"] = s.command
+    if s.timeout is not None:
+        tbl["timeout"] = s.timeout
+    if s.description:
+        tbl["description"] = s.description
+    if s.targets is not None:
+        tbl["targets"] = s.targets
+    if s.extra:
+        e_tbl = tomlkit.table()
+        for k, v in redact(s.extra).items():
+            e_tbl[k] = v
+        tbl["extra"] = e_tbl
+    return tbl
+
+
 def load_manifest(path: Path | None = None) -> list[HookSpec]:
     path = path or HOOK_MANIFEST()
     if not path.exists():
         return []
     doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    specs: list[HookSpec] = []
-    for tbl in doc.get("hook", []):
-        specs.append(HookSpec(
-            id=tbl["id"],
-            events=list(tbl.get("events", [])),
-            type=tbl.get("type", "command"),
-            matcher=tbl.get("matcher"),
-            command=tbl.get("command"),
-            timeout=tbl.get("timeout"),
-            description=tbl.get("description"),
-            extra=dict(tbl.get("extra", {})),
-            targets=list(tbl["targets"]) if "targets" in tbl else None,
-        ))
-    return specs
+    return [spec_from_table(tbl) for tbl in doc.get("hook", [])]
 
 
 def save_manifest(specs: list[HookSpec], path: Path | None = None) -> None:
@@ -118,27 +145,7 @@ def save_manifest(specs: list[HookSpec], path: Path | None = None) -> None:
     doc = tomlkit.document()
     aot = tomlkit.aot()
     for s in specs:
-        tbl = tomlkit.table()
-        tbl["id"] = s.id
-        tbl["events"] = s.events
-        if s.type != "command":
-            tbl["type"] = s.type
-        if s.matcher is not None:
-            tbl["matcher"] = s.matcher
-        if s.command is not None:
-            tbl["command"] = s.command
-        if s.timeout is not None:
-            tbl["timeout"] = s.timeout
-        if s.description:
-            tbl["description"] = s.description
-        if s.targets is not None:
-            tbl["targets"] = s.targets
-        if s.extra:
-            e_tbl = tomlkit.table()
-            for k, v in redact(s.extra).items():
-                e_tbl[k] = v
-            tbl["extra"] = e_tbl
-        aot.append(tbl)
+        aot.append(spec_to_table(s))
     doc["hook"] = aot
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")
 

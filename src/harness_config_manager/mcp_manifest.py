@@ -118,25 +118,58 @@ def spec_from_tool_entry(name: str, entry: dict) -> McpSpec:
     return spec
 
 
+def spec_from_table(tbl) -> McpSpec:
+    """单个 [[server]] TOML 表 -> McpSpec（load_manifest 与跨机传输共用）。"""
+    return McpSpec(
+        name=tbl["name"],
+        transport=tbl.get("transport", "stdio"),
+        command=tbl.get("command"),
+        args=list(tbl.get("args", [])),
+        env={k: str(v) for k, v in dict(tbl.get("env", {})).items()},
+        url=tbl.get("url"),
+        headers={k: str(v) for k, v in dict(tbl.get("headers", {})).items()},
+        extra=dict(tbl.get("extra", {})),
+        targets=list(tbl["targets"]) if "targets" in tbl else None,
+    )
+
+
+def spec_to_table(s: McpSpec):
+    """McpSpec -> 单个 [[server]] TOML 表（save_manifest 与跨机传输共用）。"""
+    tbl = tomlkit.table()
+    tbl["name"] = s.name
+    tbl["transport"] = s.transport
+    if s.command:
+        tbl["command"] = s.command
+    if s.args:
+        tbl["args"] = s.args
+    if s.env:
+        env_tbl = tomlkit.table()
+        for k, v in s.env.items():
+            env_tbl[k] = v
+        tbl["env"] = env_tbl
+    if s.url:
+        tbl["url"] = s.url
+    if s.headers:
+        h_tbl = tomlkit.table()
+        for k, v in s.headers.items():
+            h_tbl[k] = v
+        tbl["headers"] = h_tbl
+    if s.extra:
+        e_tbl = tomlkit.table()
+        for k, v in redact(s.extra).items():
+            e_tbl[k] = v
+        tbl["extra"] = e_tbl
+    if s.targets is not None:
+        tbl["targets"] = s.targets
+    return tbl
+
+
 def load_manifest(path: Path | None = None) -> list[McpSpec]:
     path = path or MCP_MANIFEST()
     if not path.exists():
         return []
     doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    specs: list[McpSpec] = []
-    for tbl in doc.get("server", []):
-        specs.append(McpSpec(
-            name=tbl["name"],
-            transport=tbl.get("transport", "stdio"),
-            command=tbl.get("command"),
-            args=list(tbl.get("args", [])),
-            env={k: str(v) for k, v in dict(tbl.get("env", {})).items()},
-            url=tbl.get("url"),
-            headers={k: str(v) for k, v in dict(tbl.get("headers", {})).items()},
-            extra=dict(tbl.get("extra", {})),
-            targets=list(tbl["targets"]) if "targets" in tbl else None,
-        ))
-    return specs
+    return [spec_from_table(tbl) for tbl in doc.get("server", [])]
 
 
 def save_manifest(specs: list[McpSpec], path: Path | None = None) -> None:
@@ -145,33 +178,7 @@ def save_manifest(specs: list[McpSpec], path: Path | None = None) -> None:
     doc = tomlkit.document()
     aot = tomlkit.aot()
     for s in specs:
-        tbl = tomlkit.table()
-        tbl["name"] = s.name
-        tbl["transport"] = s.transport
-        if s.command:
-            tbl["command"] = s.command
-        if s.args:
-            tbl["args"] = s.args
-        if s.env:
-            env_tbl = tomlkit.table()
-            for k, v in s.env.items():
-                env_tbl[k] = v
-            tbl["env"] = env_tbl
-        if s.url:
-            tbl["url"] = s.url
-        if s.headers:
-            h_tbl = tomlkit.table()
-            for k, v in s.headers.items():
-                h_tbl[k] = v
-            tbl["headers"] = h_tbl
-        if s.extra:
-            e_tbl = tomlkit.table()
-            for k, v in redact(s.extra).items():
-                e_tbl[k] = v
-            tbl["extra"] = e_tbl
-        if s.targets is not None:
-            tbl["targets"] = s.targets
-        aot.append(tbl)
+        aot.append(spec_to_table(s))
     doc["server"] = aot
     atomic_write_text(path, tomlkit.dumps(doc))
 
