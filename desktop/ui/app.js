@@ -2033,7 +2033,9 @@ $("btn-providers-adopt").addEventListener("click", async () => {
     }
   } catch (err) {
     $("halter-version").textContent = t("bt.unavailable");
-    $("halter-version").title = typeof err === "string" ? err : JSON.stringify(err);
+    // Error 的可枚举属性为空，JSON.stringify 只会得到 "{}"，取 message 才能看到原因
+    $("halter-version").title =
+      typeof err === "string" ? err : (err?.message ?? JSON.stringify(err));
   }
   loadOverview();
 })();

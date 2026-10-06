@@ -40,10 +40,21 @@ test.beforeAll(async () => {
   seed(".codex/config.toml", "");
 
   // provider 经真实 CLI 种入，token 走 stdin，与产品路径完全一致
-  spawnSync(HALTER, [
-    "providers", "add", "demo", "--tool", "claude",
-    "--base-url", "https://example.com/api/anthropic", "--token-stdin",
-  ], { env: { ...process.env, HOME: fakeHome }, input: "sk-e2e-token\n" });
+  const runCli = (args, input) => spawnSync(HALTER, args, {
+    env: { ...process.env, HOME: fakeHome }, input, encoding: "utf8",
+  });
+  const ver = runCli(["version", "--json"]);
+  if (ver.status !== 0) {
+    throw new Error(`halter version failed (${ver.status}): ${ver.stderr || ver.stdout}`);
+  }
+  const add = runCli(
+    ["providers", "add", "demo", "--tool", "claude",
+      "--base-url", "https://example.com/api/anthropic", "--token-stdin"],
+    "sk-e2e-token\n",
+  );
+  if (add.status !== 0) {
+    throw new Error(`providers add failed (${add.status}): ${add.stderr || add.stdout}`);
+  }
 
   server = spawn("node", [UI_SERVER, String(PORT)], {
     env: { ...process.env, HOME: fakeHome, HALTER_BINARY: HALTER },
