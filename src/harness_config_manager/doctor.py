@@ -43,6 +43,8 @@ ZH_TEXT = {
     "memory_library_missing": "不存在（首次 sync --apply 时收养/创建）",
     "mcp_secret_missing": "密钥变量未定义: {vars}",
     "dead_command": "command 指向的 {command} 不存在（死配置，建议删除）",
+    "provider_external": "自定义端点 {url} 不在 providers 清单（halter providers adopt 可收编）",
+    "cc_switch_overlap": "检测到 cc-switch 配置痕迹，双重管理会互相覆盖（建议收敛到单一管理者）",
 }
 
 
@@ -217,5 +219,16 @@ def run_doctor() -> list[dict]:
             alive = _hook_alive(h.command, Path.home())
             if alive is False:
                 add("error", f"{tool}: hook {h.label} @ {h.event}", "dead_command", command=h.command)
+
+    # 7. provider 双重管理检测：外部自定义端点不在清单 + cc-switch 残留痕迹
+    from .providers_manifest import PROVIDER_CAPABLE
+    from .providers_write import _read_codex_doc, detect_current
+
+    for tool in PROVIDER_CAPABLE:
+        cur = detect_current(tool)
+        if cur["status"] == "external" and cur["base_url"]:
+            add("warn", f"{tool}: provider", "provider_external", url=cur["base_url"])
+    if "cc-switch" in str(_read_codex_doc().get("model_catalog_json", "")):
+        add("warn", "codex: provider", "cc_switch_overlap")
 
     return results

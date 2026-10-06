@@ -35,11 +35,40 @@ def _short_ref(ref: str, keep: int = 8) -> str:
     return f"{tool}:{session_id[:keep]}…" if sep and len(session_id) > keep else ref
 
 
+def _run_on_machine(machine: str, args: list[str], timeout: int = 180) -> None:
+    """在远程机器上执行 halter 子命令并转发输出（scan/sync --machine 的通道）。"""
+    from .machines import get_machine, run_remote
+
+    m = get_machine(machine)
+    if m is None:
+        console.print(f"[red]机器 {machine} 不存在（halter machines list 查看）[/red]")
+        raise typer.Exit(2)
+    rc, out, err = run_remote(m, args, timeout=timeout)
+    if rc is None:
+        console.print(f"[red]{err}[/red]")
+        raise typer.Exit(1)
+    text = out.decode("utf-8", errors="replace")
+    if rc != 0:
+        console.print((err.strip() or text).strip(), style="red")
+        raise typer.Exit(rc if 0 < rc < 256 else 1)
+    if "--json" in args:
+        console.print_json(text)
+    else:
+        console.print(f"⚓ [cyan]{machine}[/cyan]")
+        console.print(text.rstrip())
+
+
 sessions_app = typer.Typer(help="查看并按需复用当前项目在多个 AI 编码工具中的历史会话。")
 app.add_typer(sessions_app, name="sessions")
 
 memory_app = typer.Typer(help="查看并写入用户级记忆事实源（desktop 记忆面板的数据源）。")
 app.add_typer(memory_app, name="memory")
+
+machines_app = typer.Typer(help="管理跨机器同步的远程机器（ssh 通道，远端需装有 halter）。")
+app.add_typer(machines_app, name="machines")
+
+providers_app = typer.Typer(help="管理模型供应商并一键切换 claude / codex 的端点与模型（本机独立，不参与多机同步）。")
+app.add_typer(providers_app, name="providers")
 
 @app.callback()
 def _root() -> None:
@@ -369,6 +398,7 @@ def sessions_projects(
 
 @app.command()
 def scan(
+    machine: str = typer.Option(None, "--machine", help="扫描远程机器（halter machines list 查看）"),
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
@@ -379,6 +409,13 @@ def scan(
     from . import report as rp
     from .doctor import message_zh, run_doctor
     from .scan import scan_all
+
+    if machine is not None:
+        fwd = ["scan"]
+        fwd += ["--json"] if json_out else []
+        fwd += [arg for d in detail for arg in ("-d", d)]
+        _run_on_machine(machine, fwd)
+        return
 
     detections = detect_tools()
     n_installed = sum(1 for d in detections if d.installed)
@@ -531,6 +568,7 @@ def tui() -> None:
 
 @app.command()
 def sync(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     layer_skills: bool = typer.Option(True, "--skills/--no-skills", help="同步 skills 层"),
     layer_mcp: bool = typer.Option(True, "--mcp/--no-mcp", help="同步 MCP 层"),
     layer_plugins: bool = typer.Option(True, "--plugins/--no-plugins", help="同步插件层"),
@@ -574,6 +612,28 @@ def sync(
     from .scan import scan_all
     from .sessions import install_session_skill
     from .skills import plan_adopt, plan_sync, resolve_library, run_adopt, run_sync
+
+    if machine is not None:
+        # 透传给远端 halter 自己执行：--tool 校验与方言写入都发生在远端，语义天然正确
+        fwd = ["sync",
+               "--skills" if layer_skills else "--no-skills",
+               "--mcp" if layer_mcp else "--no-mcp",
+               "--plugins" if layer_plugins else "--no-plugins",
+               "--hooks" if layer_hooks else "--no-hooks",
+               "--agents" if layer_agents else "--no-agents",
+               "--memory" if layer_memory else "--no-memory",
+               "--sessions" if layer_sessions else "--no-sessions"]
+        if apply:
+            fwd.append("--apply")
+        if prefer != "skip":
+            fwd += ["--prefer", prefer]
+        if source != "auto":
+            fwd += ["--from", source]
+        if tool is not None:
+            fwd += ["--tool", tool]
+        fwd += [x for i in item if i for x in ("--item", i)]
+        _run_on_machine(machine, fwd, timeout=600)
+        return
 
     if prefer not in ("skip", "library"):
         console.print("[red]--prefer 仅支持 skip / library[/red]")
@@ -822,3 +882,552 @@ def memory_write(
         if backup:
             line += f"，旧文件备份于 {backup}"
         console.print(line)
+
+
+# ---------------------------------------------------------------------------
+# push / pull：单条目跨机器同步（A 机器的某 skill / MCP / subagent / hook -> B 机器）
+
+
+def _push_core(layer: str, item: str, source: str | None, to: str | None,
+               with_secrets: bool, prefer: str, apply: bool) -> None:
+    """push 的编排：源侧 export -> 目标侧 ingest。缺省侧为本机。"""
+    from . import transfer
+    from .machines import get_machine, run_remote
+
+    if source is None and to is None:
+        console.print("[red]--from 与 --to 至少指定一个（缺省侧为本机）[/red]")
+        raise typer.Exit(2)
+    m_src = None if source is None else get_machine(source)
+    if source is not None and m_src is None:
+        console.print(f"[red]机器 {source} 不存在（halter machines list 查看）[/red]")
+        raise typer.Exit(2)
+    m_dst = None if to is None else get_machine(to)
+    if to is not None and m_dst is None:
+        console.print(f"[red]机器 {to} 不存在（halter machines list 查看）[/red]")
+        raise typer.Exit(2)
+
+    console.print(f"push {layer}:{item}  [cyan]{source or '本机'}[/cyan] -> [cyan]{to or '本机'}[/cyan]"
+                  + ("（dry-run）" if not apply else ""))
+
+    # 源侧导出
+    if m_src is None:
+        try:
+            payload, warnings = transfer.encode_entry(layer, item, with_secrets)
+        except (LookupError, ValueError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        for w in warnings:
+            console.print(f"[yellow]警告[/yellow] {w}")
+    else:
+        args = ["machines", "export", layer, item]
+        if with_secrets:
+            args.append("--with-secrets")
+        rc, payload, err = run_remote(m_src, args, timeout=120)
+        if rc is None or rc != 0:
+            console.print(f"[red]远端导出失败：{(err or payload.decode('utf-8', errors='replace')).strip()}[/red]")
+            raise typer.Exit(1)
+        if err.strip():
+            console.print(f"[yellow]警告[/yellow] {err.strip()}")
+
+    # 目标侧落盘
+    if m_dst is None:
+        try:
+            lines = transfer.apply_entry(layer, item, payload, prefer, with_secrets, apply)
+            lines += transfer.distribute_item(layer, item, apply)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        for line in lines:
+            style = {"add": "green", "ok": "green", "replace": "yellow",
+                     "secrets": "yellow", "conflict": "red"}.get(line.split()[0], None)
+            console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
+        return
+
+    args = ["machines", "ingest", layer, item, "--prefer", prefer]
+    if with_secrets:
+        args.append("--with-secrets")
+    if apply:
+        args.append("--apply")
+    rc, out, err = run_remote(m_dst, args, input_bytes=payload, timeout=300)
+    if rc is None or rc != 0:
+        console.print(f"[red]远端写入失败：{(err or out.decode('utf-8', errors='replace')).strip()}[/red]")
+        raise typer.Exit(1)
+    console.print(out.decode("utf-8", errors="replace").rstrip())
+
+
+@app.command()
+def push(
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    item: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名）"),
+    source: str = typer.Option(None, "--from", help="来源机器，缺省 = 本机"),
+    to: str = typer.Option(None, "--to", help="目标机器，缺省 = 本机"),
+    with_secrets: bool = typer.Option(False, "--with-secrets",
+                                      help="连同 MCP 密钥真实值（ssh 加密通道；默认不同步）"),
+    prefer: str = typer.Option("skip", help="目标侧同名冲突：skip（默认）/ replace（备份后覆盖）"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """把一个条目（skill / MCP server / subagent / hook）从 A 机器同步到 B 机器。"""
+    from . import transfer
+
+    if layer not in transfer.LAYERS:
+        console.print(f"[red]未知层 {layer}（可选 {', '.join(transfer.LAYERS)}）[/red]")
+        raise typer.Exit(2)
+    if prefer not in ("skip", "replace"):
+        console.print("[red]--prefer 仅支持 skip / replace[/red]")
+        raise typer.Exit(2)
+    _push_core(layer, item, source, to, with_secrets, prefer, apply)
+
+
+@app.command()
+def pull(
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    item: str = typer.Argument(help="条目名"),
+    source: str = typer.Option(..., "--from", help="来源机器"),
+    with_secrets: bool = typer.Option(False, "--with-secrets", help="连同 MCP 密钥真实值"),
+    prefer: str = typer.Option("skip", help="本机同名冲突：skip（默认）/ replace（备份后覆盖）"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """把远程机器的一个条目拉到本机（= push --from <机器>，目标为本机）。"""
+    from . import transfer
+
+    if layer not in transfer.LAYERS:
+        console.print(f"[red]未知层 {layer}（可选 {', '.join(transfer.LAYERS)}）[/red]")
+        raise typer.Exit(2)
+    if prefer not in ("skip", "replace"):
+        console.print("[red]--prefer 仅支持 skip / replace[/red]")
+        raise typer.Exit(2)
+    _push_core(layer, item, source, None, with_secrets, prefer, apply)
+
+
+# ---------------------------------------------------------------------------
+# machines：跨机器同步的机器注册表（ssh 通道）
+
+
+@machines_app.command("list")
+def machines_list(json_out: bool = typer.Option(False, "--json", help="以 JSON 输出")) -> None:
+    """列出可用机器：machines.toml 手动注册 + ~/.ssh/config 自动发现。"""
+    from .machines import list_machines
+
+    machines = list_machines()
+    if json_out:
+        console.print_json(_json.dumps({
+            "count": len(machines),
+            "machines": [m.__dict__ for m in machines],
+        }, ensure_ascii=False))
+        return
+    if not machines:
+        console.print("[dim]无可用机器 — 在 ~/.ssh/config 配置 Host 别名（自动识别），"
+                      "或 halter machines add <name> --host <host> 手动注册[/dim]")
+        return
+    n_ssh = sum(1 for m in machines if m.source == "ssh")
+    table = Table(title=f"Machines — {len(machines)} 台（手动 {len(machines) - n_ssh} · ssh config {n_ssh}）")
+    table.add_column("名称", style="cyan", no_wrap=True)
+    table.add_column("SSH 目标")
+    table.add_column("halter", style="dim")
+    table.add_column("来源", style="dim")
+    for m in machines:
+        origin = "~/.ssh/config" if m.source == "ssh" else "machines.toml"
+        table.add_row(m.name, m.destination, m.halter_path, origin)
+    console.print(table)
+    console.print("[dim]连通性检查：halter machines test <name>；单条目跨机同步：halter push <layer> <item> --to <name>[/dim]")
+
+
+@machines_app.command()
+def add(
+    name: str = typer.Argument(help="机器别名（本机内唯一，如 desktop）"),
+    host: str = typer.Option(..., "--host", help="ssh 主机名或 IP"),
+    user: str = typer.Option(None, "--user", help="ssh 用户名，缺省用当前用户"),
+    port: int = typer.Option(22, "--port", help="ssh 端口"),
+    halter_path: str = typer.Option("halter", "--halter-path",
+                                    help="远端 halter 可执行文件（PATH 名或绝对路径；非交互 ssh 常缺 ~/.local/bin）"),
+) -> None:
+    """注册一台远程机器（写入 ~/.config/halter/machines.toml）。"""
+    import re
+
+    from .machines import (MachineSpec, get_machine, list_machines,
+                           load_machines, save_machines)
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        console.print("[red]机器名只能含字母、数字、点、下划线、连字符[/red]")
+        raise typer.Exit(2)
+    if get_machine(name) is not None:
+        existing = get_machine(name)
+        if existing is not None and existing.source == "ssh":
+            console.print(f"[yellow]{name} 已由 ~/.ssh/config 自动识别（user/port/跳板均走 ssh 配置）[/yellow]")
+            console.print(f"[yellow]手动注册将优先生效，适合指定自定义 halter 路径；继续[/yellow]")
+        else:
+            console.print(f"[red]机器 {name} 已存在（halter machines remove {name} 后再添加）[/red]")
+            raise typer.Exit(2)
+    machines = [m for m in load_machines() if m.name != name]  # ssh 同名覆盖时去掉旧 manual 条目
+    machines.append(MachineSpec(name=name, host=host, user=user, port=port, halter_path=halter_path))
+    save_machines(machines)
+    console.print(f"已注册 [cyan]{name}[/cyan] -> {user or ''}{'@' if user else ''}{host}:{port}（halter: {halter_path}）")
+    console.print(f"[dim]下一步：halter machines test {name} 验证连通[/dim]")
+
+
+@machines_app.command()
+def remove(name: str = typer.Argument(help="机器别名")) -> None:
+    """移除一台手动注册的远程机器（不动两台机器上的任何配置）。"""
+    from .machines import get_machine, load_machines, save_machines
+
+    existing = get_machine(name)
+    if existing is None:
+        console.print(f"[red]机器 {name} 不存在（halter machines list 查看）[/red]")
+        raise typer.Exit(2)
+    if existing.source == "ssh":
+        console.print(f"[red]{name} 来自 ~/.ssh/config，编辑该文件即可（machines.toml 管不到它）[/red]")
+        raise typer.Exit(2)
+    save_machines([m for m in load_machines() if m.name != name])
+    console.print(f"已移除 [cyan]{name}[/cyan]")
+
+
+@machines_app.command()
+def test(name: str = typer.Argument(help="机器别名")) -> None:
+    """检查与远程机器的连通性及远端 halter 可用性。"""
+    import json as _j
+
+    from .machines import get_machine, probe_remote_halter
+
+    machine = get_machine(name)
+    if machine is None:
+        console.print(f"[red]机器 {name} 不存在（halter machines list 查看）[/red]")
+        raise typer.Exit(2)
+    console.print(f"连接 [cyan]{machine.destination}:{machine.port}[/cyan]（halter: {machine.halter_path}）…")
+    ok, detail = probe_remote_halter(machine)
+    if ok:
+        try:
+            version = _j.loads(detail).get("version", "?")
+        except _j.JSONDecodeError:
+            version = "?"
+        console.print(f"[green]● 通[/green] 远端 halter {version}")
+        console.print(f"[dim]跨机同步示例：halter push skills <item> --to {name}[/dim]")
+    else:
+        console.print(f"[red]✕ 不通[/red] {detail}")
+        console.print("[dim]检查项：ssh 免密（公钥/ssh-agent）、--halter-path 绝对路径、远端 halter 已安装[/dim]")
+        raise typer.Exit(1)
+
+
+@machines_app.command()
+def export(
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    name: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名）"),
+    with_secrets: bool = typer.Option(False, "--with-secrets",
+                                       help="连同该条目引用的密钥真实值（仅 MCP；走 ssh 加密通道）"),
+) -> None:
+    """[内部] 把本机一个条目以传输格式写到 stdout（push/pull 调用，数据走 stdout、警告走 stderr）。"""
+    import sys
+
+    from . import transfer
+
+    try:
+        payload, warnings = transfer.encode_entry(layer, name, with_secrets)
+    except (LookupError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    for w in warnings:
+        print(f"警告 {w}", file=sys.stderr)
+    sys.stdout.buffer.write(payload)
+
+
+@machines_app.command()
+def ingest(
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    name: str = typer.Argument(help="条目名"),
+    prefer: str = typer.Option("skip", help="冲突处理：skip（默认）/ replace（备份目标侧后覆盖）"),
+    with_secrets: bool = typer.Option(False, "--with-secrets",
+                                      help="合并传输流中的 [secrets] 到本机 secrets.toml（0600）"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行并分发（默认 dry-run）"),
+) -> None:
+    """[内部] 从 stdin 读传输格式落盘到本机库/清单，--apply 时随后分发该条目到所有工具。"""
+    import sys
+
+    from . import transfer
+
+    if prefer not in ("skip", "replace"):
+        console.print("[red]--prefer 仅支持 skip / replace[/red]")
+        raise typer.Exit(2)
+    payload = sys.stdin.buffer.read()
+    try:
+        lines = transfer.apply_entry(layer, name, payload, prefer, with_secrets, apply)
+        lines += transfer.distribute_item(layer, name, apply)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    for line in lines:
+        style = {"add": "green", "ok": "green", "replace": "yellow",
+                 "secrets": "yellow", "conflict": "red"}.get(line.split()[0], None)
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
+
+
+# ---------------------------------------------------------------------------
+# providers：模型供应商清单与一键切换（claude / codex；本机独立，不参与多机同步）
+
+
+def _provider_row(spec) -> dict:
+    from .providers_write import detect_current
+
+    row = {"id": spec.id, "label": spec.label or spec.id, "tools": spec.tools(), "builtin": False}
+    if spec.claude is not None:
+        row["claude"] = {"base_url": spec.claude.base_url, "model": spec.claude.model or ""}
+    if spec.codex is not None:
+        row["codex"] = {"base_url": spec.codex.base_url, "model": spec.codex.model or ""}
+    return row
+
+
+@providers_app.command("list")
+def providers_list(
+    tool: str = typer.Option(None, "--tool", help="过滤工具：claude / codex"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """列出供应商清单与各工具当前激活状态（激活状态按目标文件实测推断）。"""
+    from .providers_manifest import OFFICIAL_ID, PROVIDER_CAPABLE, load_manifest
+    from .providers_write import detect_current
+
+    if tool is not None and tool not in PROVIDER_CAPABLE:
+        console.print(f"[red]--tool 仅支持：{' / '.join(PROVIDER_CAPABLE)}[/red]")
+        raise typer.Exit(2)
+    tools = [tool] if tool else list(PROVIDER_CAPABLE)
+    specs = load_manifest()
+    rows = [_provider_row(s) for s in specs]
+    rows.append({"id": OFFICIAL_ID, "label": OFFICIAL_ID, "tools": list(PROVIDER_CAPABLE),
+                 "builtin": True})
+    current = {t: detect_current(t, specs) for t in tools}
+
+    if json_out:
+        from .providers_manifest import PRESETS
+
+        console.print_json(_json.dumps(
+            {"count": len(rows), "providers": rows, "current": current,
+             "presets": [{"name": n, "label": t.get("label", ""),
+                          "tools": [k for k in t if k in ("claude", "codex")],
+                          "urls": {k: t[k]["base_url"] for k in t
+                                   if k in ("claude", "codex")}}
+                         for n, t in PRESETS.items()]},
+            ensure_ascii=False))
+        return
+    table = Table(title=f"Providers — {len(specs)} 个自定义 + official（内置）")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Tools", no_wrap=True)
+    table.add_column("Claude 端点", overflow="ellipsis")
+    table.add_column("Codex 端点", overflow="ellipsis")
+    for r in rows:
+        c_url = r.get("claude", {}).get("base_url", "-") if r.get("claude") else "-"
+        x_url = r.get("codex", {}).get("base_url", "-") if r.get("codex") else "-"
+        mark = "（内置）" if r["builtin"] else ""
+        table.add_row(r["id"] + mark, ",".join(r["tools"]) or "-", c_url, x_url)
+    console.print(table)
+    for t in tools:
+        cur = current[t]
+        style = {"halter": "green", "external": "yellow", "official": "dim"}[cur["status"]]
+        console.print(f"[{style}]▸ {t}: {cur['provider'] or 'external'}"
+                      f"（{cur['status']}） {cur['base_url'] or '官方默认'}"
+                      f"{(' — ' + cur['detail']) if cur['detail'] else ''}[/{style}]")
+    console.print("[dim]切换：halter providers switch <id> --tool claude|codex；"
+                  "收编现有配置：halter providers adopt --apply[/dim]")
+
+
+@providers_app.command()
+def show(
+    pid: str = typer.Argument(help="provider id"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """查看单个供应商的完整定义（token 只显示有无，不显示值）。"""
+    from .providers_manifest import get_token, load_manifest
+
+    spec = next((s for s in load_manifest() if s.id == pid), None)
+    if spec is None:
+        console.print(f"[red]未找到 provider '{pid}'[/red]")
+        raise typer.Exit(2)
+    detail = _provider_row(spec)
+    detail["tokens"] = {t: get_token(pid, t) is not None for t in spec.tools()}
+    if json_out:
+        console.print_json(_json.dumps(detail, ensure_ascii=False))
+        return
+    console.print(Panel.fit(
+        _json.dumps(detail, ensure_ascii=False, indent=2), title=f"provider {pid}"))
+
+
+@providers_app.command()
+def add(
+    pid: str = typer.Argument(help="provider id（字母数字._-；再次 add 同 id 可补充另一工具块）"),
+    tool: str = typer.Option(..., "--tool", help="claude / codex"),
+    base_url: str = typer.Option(None, "--base-url", help="该工具协议的 API 端点（或用 --preset）"),
+    preset: str = typer.Option(None, "--preset", help="内置预设名，自动填充端点（halter providers presets 查看）"),
+    label: str = typer.Option("", "--label", help="显示名，缺省 = 预设名或 id"),
+    model: str = typer.Option(None, "--model", help="主模型名（claude → ANTHROPIC_MODEL / codex → model）"),
+    token_stdin: bool = typer.Option(False, "--token-stdin", help="从 stdin 读 token（不进 shell 历史）"),
+    token_env: str = typer.Option(None, "--token-env", help="从该环境变量读 token"),
+    env: list[str] = typer.Option([], "--env", help="claude 额外托管 env，KEY=VAL，可多选"),
+    wire_api: str = typer.Option("responses", "--wire-api", help="codex：responses / chat"),
+    reasoning_effort: str = typer.Option(None, "--reasoning-effort", help="codex：模型推理力度"),
+    context_window: int = typer.Option(None, "--context-window", help="codex：上下文窗口 token 数"),
+) -> None:
+    """新增（或补充）供应商定义；token 只入 secrets.toml（0600），不进清单。"""
+    import re
+    import sys
+
+    from .providers_manifest import (PRESETS, ProviderClaude, ProviderCodex,
+                                     ProviderSpec, is_managed_env_key,
+                                     load_manifest, save_manifest,
+                                     set_token, token_secret_key)
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", pid) or pid == "official":
+        console.print("[red]id 只能含字母数字._- 且不能是 official[/red]")
+        raise typer.Exit(2)
+    if tool not in ("claude", "codex"):
+        console.print("[red]--tool 仅支持：claude / codex[/red]")
+        raise typer.Exit(2)
+
+    if preset is not None:
+        tpl = PRESETS.get(preset)
+        if tpl is None:
+            console.print(f"[red]未知预设 {preset}（可选：{' / '.join(PRESETS)}）[/red]")
+            raise typer.Exit(2)
+        if tool not in tpl:
+            console.print(f"[red]预设 {preset} 不含 {tool} 块（可选工具："
+                          f"{' / '.join(k for k in tpl if k in ('claude', 'codex'))}）[/red]")
+            raise typer.Exit(2)
+        if base_url is not None:
+            console.print("[red]--preset 与 --base-url 只能选一个[/red]")
+            raise typer.Exit(2)
+        base_url = tpl[tool]["base_url"]
+        if not label:
+            label = tpl.get("label", "")
+        if tool == "codex" and tpl[tool].get("wire_api") and wire_api == "responses":
+            wire_api = tpl[tool]["wire_api"]
+    elif base_url is None:
+        console.print("[red]--base-url 与 --preset 必须提供其一[/red]")
+        raise typer.Exit(2)
+
+    extra_env: dict[str, str] = {}
+    for item in env:
+        key, sep, value = item.partition("=")
+        if tool != "claude" or not sep or not is_managed_env_key(key):
+            console.print(f"[red]--env 仅用于 claude 的托管键（ANTHROPIC_*/CLAUDE_CODE_*）：{item}[/red]")
+            raise typer.Exit(2)
+        extra_env[key] = value
+
+    token = None
+    if token_stdin:
+        token = sys.stdin.read().strip() or None
+    elif token_env:
+        import os
+
+        token = os.environ.get(token_env) or None
+    if token_stdin and token_env:
+        console.print("[red]--token-stdin 与 --token-env 只能选一个[/red]")
+        raise typer.Exit(2)
+
+    specs = load_manifest()
+    spec = next((s for s in specs if s.id == pid), None)
+    if spec is None:
+        spec = ProviderSpec(id=pid, label=label or pid)
+        specs.append(spec)
+        action = f"新增 provider {pid}"
+    else:
+        if tool in spec.tools():
+            console.print(f"[red]{pid} 已声明 {tool} 块（手改 providers.toml 或先 remove）[/red]")
+            raise typer.Exit(2)
+        if label:
+            spec.label = label
+        action = f"补充 {pid} 的 {tool} 块"
+    if tool == "claude":
+        spec.claude = ProviderClaude(base_url=base_url, model=model, env=extra_env)
+    else:
+        spec.codex = ProviderCodex(base_url=base_url, model=model, wire_api=wire_api,
+                                   reasoning_effort=reasoning_effort,
+                                   context_window=context_window)
+    save_manifest(specs)
+    if token:
+        set_token(pid, tool, token)
+    secret_note = f"，token → secrets.toml [{token_secret_key(pid, tool)}]" if token else ""
+    console.print(f"[green]{action}{secret_note}[/green]")
+    console.print(f"[dim]激活：halter providers switch {pid} --tool {tool}[/dim]")
+
+
+@providers_app.command("presets")
+def providers_presets(json_out: bool = typer.Option(False, "--json", help="以 JSON 输出")) -> None:
+    """列出内置供应商预设（只固化端点，模型名由 --model 自填）。"""
+    from .providers_manifest import PRESETS
+
+    if json_out:
+        console.print_json(_json.dumps({"count": len(PRESETS), "presets": [
+            {"name": name, "label": tpl.get("label", ""),
+             "tools": [k for k in tpl if k in ("claude", "codex")],
+             "claude": tpl.get("claude"), "codex": tpl.get("codex"),
+             "note": tpl.get("note", "")}
+            for name, tpl in PRESETS.items()]}, ensure_ascii=False))
+        return
+    table = Table(title=f"Provider presets — {len(PRESETS)} 个内置")
+    table.add_column("预设", style="cyan", no_wrap=True)
+    table.add_column("Tools", no_wrap=True)
+    table.add_column("端点", overflow="ellipsis")
+    table.add_column("说明", style="dim", overflow="ellipsis")
+    for name, tpl in PRESETS.items():
+        tools = [k for k in tpl if k in ("claude", "codex")]
+        urls = "  ".join(f"{k}:{tpl[k]['base_url']}" for k in tools)
+        table.add_row(name, ",".join(tools), urls, tpl.get("note", ""))
+    console.print(table)
+    console.print("[dim]使用：halter providers add <id> --tool <t> --preset <name> --token-stdin[/dim]")
+
+
+@providers_app.command()
+def adopt(
+    name: str = typer.Option(None, "--name", help="覆盖自动命名的 id（恰好收编出一个 provider 时生效）"),
+    apply: bool = typer.Option(False, "--apply", help="实际写入（默认 dry-run）"),
+) -> None:
+    """收编 claude env / codex [model_providers.*] 中的现有供应商为清单条目。"""
+    from .providers_manifest import adopt_providers
+
+    for line in adopt_providers(apply=apply, name=name):
+        console.print(line)
+
+
+@providers_app.command()
+def switch(
+    pid: str = typer.Argument(help="provider id（official = 切回官方默认端点）"),
+    tool: str = typer.Option(..., "--tool", help="claude / codex"),
+) -> None:
+    """切换工具的激活供应商（直接写目标配置；token 缺失时只写非密钥键）。"""
+    from .providers_write import switch_provider
+
+    for line in switch_provider(pid, tool):
+        if "[red]" in line:
+            console.print(line)
+            raise typer.Exit(1)
+        console.print(f"[green]{line}[/green]")
+
+
+@providers_app.command()
+def remove(
+    pid: str = typer.Argument(help="provider id"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """删除清单条目与对应 token（目标工具的配置文件不动，必要时先 switch）。"""
+    from .providers_manifest import load_manifest, load_tokens, save_manifest, save_tokens
+    from .providers_write import detect_current
+
+    specs = load_manifest()
+    spec = next((s for s in specs if s.id == pid), None)
+    if spec is None:
+        console.print(f"[red]未找到 provider '{pid}'[/red]")
+        raise typer.Exit(2)
+    active = [t for t in spec.tools() if detect_current(t, specs)["provider"] == pid]
+    warn = (f"[yellow]注意：{pid} 仍是 {'/'.join(active)} 的当前激活供应商，"
+            f"删除后其配置会残留在目标文件（先 switch official 或其它 provider）[/yellow]\n"
+            if active else "")
+    if not apply:
+        console.print(f"{warn}[dim]dry-run 将删除 providers.toml 条目 {pid}"
+                      f"（tools: {','.join(spec.tools())}）及其 secrets token（--apply 生效）[/dim]")
+        return
+    save_manifest([s for s in specs if s.id != pid])
+    tokens = load_tokens()
+    for key in [k for k in tokens if k.startswith(f"provider/{pid}/")]:
+        del tokens[key]
+    if tokens:
+        save_tokens(tokens)
+    else:
+        from .mcp_manifest import SECRETS_FILE
+
+        SECRETS_FILE().unlink(missing_ok=True)
+    console.print(f"[green]已删除 {pid}（清单 + token）[/green]\n{warn}", style=None)

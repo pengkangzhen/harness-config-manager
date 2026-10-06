@@ -151,8 +151,66 @@ def test_sessions_projects_kind_classification(fake_home, monkeypatch, tmp_path)
         assert got[path] == kind, (path, got.get(path), kind)
 
 
-def test_model_configure_requires_custom_base_url(fake_home: Path) -> None:
-    result = runner.invoke(app, [
-        "model", "configure", "--model", "unknown/model", "--json",
-    ])
-    assert result.exit_code == 2
+def test_providers_json_contract(fake_home: Path, monkeypatch) -> None:
+    """desktop Providers 面板的数据源：list 形状 + add→switch→current 全链路。"""
+    import json as _json
+
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude/settings.json").write_text(_json.dumps({
+        "env": {"ENABLE_TOOL_SEARCH": "true"}}), encoding="utf-8")
+
+    result = runner.invoke(app, ["providers", "list", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["count"] == 1                                  # 仅 official 内置
+    assert payload["providers"][0] == {"id": "official", "label": "official",
+                                       "tools": ["claude", "codex"], "builtin": True}
+    for tool in ("claude", "codex"):
+        cur = payload["current"][tool]
+        assert cur["status"] == "official" and set(cur) == {
+            "status", "provider", "base_url", "model", "detail"}
+
+    monkeypatch.setenv("ZHIPU_TOKEN", "sk-from-env")
+    r = runner.invoke(app, [
+        "providers", "add", "zhipu", "--tool", "claude",
+        "--base-url", "https://open.bigmodel.cn/api/anthropic",
+        "--model", "glm-5.3[1M]", "--token-env", "ZHIPU_TOKEN"])
+    assert r.exit_code == 0
+
+    result = runner.invoke(app, ["providers", "list", "--json"])
+    payload = json.loads(result.output)
+    zhipu = next(p for p in payload["providers"] if p["id"] == "zhipu")
+    assert zhipu["tools"] == ["claude"] and zhipu["builtin"] is False
+    assert zhipu["claude"] == {"base_url": "https://open.bigmodel.cn/api/anthropic",
+                               "model": "glm-5.3[1M]"}
+    assert payload["current"]["claude"]["status"] == "official"
+
+    r = runner.invoke(app, ["providers", "switch", "zhipu", "--tool", "claude"])
+    assert r.exit_code == 0
+    result = runner.invoke(app, ["providers", "list", "--json"])
+    payload = json.loads(result.output)
+    cur = payload["current"]["claude"]
+    assert cur == {"status": "halter", "provider": "zhipu",
+                   "base_url": "https://open.bigmodel.cn/api/anthropic",
+                   "model": "glm-5.3[1M]", "detail": ""}
+    env = json.loads((fake_home / ".claude/settings.json").read_text(encoding="utf-8"))["env"]
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-from-env"
+    assert env["ENABLE_TOOL_SEARCH"] == "true"
+
+
+def test_machines_list_json_contract(fake_home: Path) -> None:
+    """desktop 机器下拉的数据源：machines 字段与 MachineSpec 一一对应。"""
+    result = runner.invoke(app, ["machines", "list", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["count"] == 0 and payload["machines"] == []
+
+    r = runner.invoke(app, ["machines", "add", "desktop", "--host", "10.0.0.2",
+                            "--user", "pk", "--port", "2222", "--halter-path", "/usr/bin/halter"])
+    assert r.exit_code == 0
+    result = runner.invoke(app, ["machines", "list", "--json"])
+    payload = json.loads(result.output)
+    assert payload["count"] == 1
+    m = payload["machines"][0]
+    assert m == {"name": "desktop", "host": "10.0.0.2", "user": "pk",
+                 "port": 2222, "halter_path": "/usr/bin/halter", "source": "manual"}

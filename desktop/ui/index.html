@@ -49,6 +49,9 @@
         <button class="nav-item" data-view="memory">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2.5px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/></svg></span> <span data-i18n="nav.memory">记忆</span>
         </button>
+        <button class="nav-item" data-view="providers">
+          <span class="nav-icon">⚡</span> <span data-i18n="nav.providers">供应商</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="lang-toggle" role="group" data-i18n-aria-label="lang.label" aria-label="语言">
@@ -85,6 +88,8 @@
         <header class="view-header">
           <h1 data-i18n="mx.heading">配置矩阵</h1>
           <div class="header-actions">
+            <select id="matrix-machine-select" class="machine-select" data-i18n-title="mx.machineSelect" aria-label="machine"></select>
+            <button id="btn-matrix-machines" class="btn" data-i18n="mx.machines">⌗ 机器</button>
             <label class="gap-toggle"><input type="checkbox" id="matrix-harness-only" checked /> <span data-i18n="mx.harnessOnly">仅 AI Harness</span></label>
             <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> <span data-i18n="mx.gapsOnly">仅显示缺口</span></label>
             <label class="gap-toggle"><input type="checkbox" id="matrix-include-sessions" checked /> <span data-i18n="mx.syncIncludeSessions">含 sessions skill</span></label>
@@ -94,6 +99,22 @@
           </div>
         </header>
         <pre id="matrix-sync-output" class="sync-output hidden"></pre>
+        <div id="machines-panel" class="machines-panel hidden">
+          <div class="machines-panel-head">
+            <span data-i18n="mx.machinesTitle">远程机器</span>
+            <button id="btn-machines-close" class="btn btn-sm" type="button" data-i18n="mx.machinesClose">✕</button>
+          </div>
+          <div id="machines-list"></div>
+          <form id="machine-add-form" class="machine-add-form">
+            <input id="machine-name" data-i18n-placeholder="mx.machineName" placeholder="名称（如 desktop）" autocomplete="off" />
+            <input id="machine-host" data-i18n-placeholder="mx.machineHost" placeholder="ssh 主机名 / IP" autocomplete="off" />
+            <input id="machine-user" data-i18n-placeholder="mx.machineUser" placeholder="用户（可选）" autocomplete="off" />
+            <input id="machine-port" data-i18n-placeholder="mx.machinePort" placeholder="端口 22" inputmode="numeric" autocomplete="off" />
+            <input id="machine-halter-path" data-i18n-placeholder="mx.machineHalterPath" placeholder="远端 halter 路径（可选）" autocomplete="off" />
+            <button type="submit" class="btn btn-sm" data-i18n="mx.machineAdd">添加</button>
+          </form>
+          <div class="dim machines-note" data-i18n="mx.machineHint">远端需装有 halter 且 ssh 免密；连通性用 halter machines test 检查</div>
+        </div>
         <div id="matrix-error" class="error-box hidden"></div>
         <div id="matrix-loading" class="loading" data-i18n="mx.building">正在构建 Harness × 配置矩阵…</div>
         <div id="matrix-content" class="hidden">
@@ -193,6 +214,53 @@
           </details>
           <h2 data-i18n="mem.toolsHeading">各工具侧副本</h2>
           <div id="mem-tools" class="mem-tools"></div>
+        </div>
+      </section>
+      <!-- ============ Providers ============ -->
+      <section id="view-providers" class="view">
+        <header class="view-header">
+          <h1 data-i18n="pv.heading">模型供应商</h1>
+          <div class="header-actions">
+            <button id="btn-providers-adopt" class="btn" data-i18n="pv.adopt">⇤ 收编现有配置</button>
+            <button id="btn-providers-add" class="btn" data-i18n="pv.add">＋ 添加供应商</button>
+            <button id="btn-refresh-providers" class="btn" data-i18n="pv.refresh">↻ 刷新</button>
+          </div>
+        </header>
+        <p class="sync-note" data-i18n="pv.note">
+          一键切换 Claude Code / Codex 的模型端点与身份；token 只存本机 secrets.toml（0600），本层不参与多机同步。
+        </p>
+        <div id="providers-add-panel" class="machines-panel hidden">
+          <div class="machines-panel-head">
+            <span data-i18n="pv.formTitle">添加供应商</span>
+            <button id="btn-providers-form-close" class="btn btn-sm" type="button" data-i18n="pv.formClose">✕</button>
+          </div>
+          <form id="provider-add-form" class="provider-add-form">
+            <div class="pv-form-grid">
+              <select id="pv-preset" data-i18n-title="pv.formPresetTitle">
+                <option value="" data-i18n="pv.formPresetCustom">自定义（手填端点）</option>
+              </select>
+              <input id="pv-id" data-i18n-placeholder="pv.formId" placeholder="id（如 zhipu）" autocomplete="off" required />
+              <select id="pv-tool">
+                <option value="claude">claude</option>
+                <option value="codex">codex</option>
+              </select>
+              <input id="pv-base-url" data-i18n-placeholder="pv.formBaseUrl" placeholder="API 端点 https://…" autocomplete="off" required />
+              <input id="pv-label" data-i18n-placeholder="pv.formLabel" placeholder="显示名（可选）" autocomplete="off" />
+              <input id="pv-model" data-i18n-placeholder="pv.formModel" placeholder="模型名（可选）" autocomplete="off" />
+              <input id="pv-token" type="password" data-i18n-placeholder="pv.formToken" placeholder="API token（可选；只存 secrets.toml）" autocomplete="new-password" />
+              <input id="pv-reasoning-effort" data-i18n-placeholder="pv.formEffort" placeholder="推理力度（codex 可选）" autocomplete="off" />
+              <input id="pv-context-window" data-i18n-placeholder="pv.formCtx" placeholder="上下文窗口 token（codex 可选）" inputmode="numeric" autocomplete="off" />
+            </div>
+            <button type="submit" class="btn btn-sm" data-i18n="pv.formSubmit">保存</button>
+          </form>
+          <div class="dim machines-note" data-i18n="pv.formHint">选预设自动填端点；claude 档位映射等高级项用 CLI：halter providers add --env KEY=VAL</div>
+        </div>
+        <div id="providers-error" class="error-box hidden"></div>
+        <div id="providers-loading" class="loading" data-i18n="pv.loading">正在读取供应商清单…</div>
+        <div id="providers-content" class="hidden">
+          <div id="providers-tool-tabs" class="layer-tabs"></div>
+          <div id="providers-current"></div>
+          <div id="providers-list"></div>
         </div>
       </section>
     </main>

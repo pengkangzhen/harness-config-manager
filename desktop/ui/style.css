@@ -740,6 +740,98 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   50% { opacity: 1; }
 }
 
+/* ---------- 跨机器：选择器 / 管理面板 / 幽灵行 ---------- */
+
+.machine-select {
+  background: var(--bg-raise);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.machine-select.has-remote { border-color: var(--accent-dim); }
+.machine-select:focus { outline: 1px solid var(--accent); }
+
+.machines-panel {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.machines-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-weight: 600;
+}
+.machines-note { font-size: 12px; line-height: 1.5; }
+
+.machine-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 6px 0;
+  border-bottom: 1px solid rgba(35, 45, 77, .5);
+}
+.machine-info { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.machine-name { font-family: var(--mono); color: var(--accent); font-size: 12.5px; }
+.machine-host { font-size: 12px; }
+.machine-origin {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--text-faint);
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+.machine-add-form {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.machine-add-form input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  width: 130px;
+}
+.machine-add-form input:focus { outline: 1px solid var(--accent); }
+
+/* 幽灵行：本机有、远端无的条目（虚线分节 + 推送格） */
+.mx-ghost-sep {
+  grid-column: 1 / -1;
+  margin-top: 10px; padding: 6px 4px 2px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
+  border-top: 1px dashed var(--border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mx-name.ghost span { color: var(--text-dim); }
+.mx-name.ghost { font-style: italic; }
+.mx-cell.ghost-push {
+  justify-content: flex-start;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--accent);
+  transition: background .12s;
+}
+.mx-cell.ghost-push:hover { background: var(--bg-hover); }
+
+/* 远端视图行级拉取按钮 */
+.mx-pull-btn {
+  margin-left: 8px; padding: 0 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.mx-pull-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+
 /* ---------- project picker dropdown ---------- */
 
 .project-item {
@@ -1108,3 +1200,70 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   border: 1px solid var(--accent-dim); border-radius: 999px;
   padding: 1px 8px; color: var(--text-dim); background: var(--bg);
 }
+
+/* ---------------- providers 面板 ---------------- */
+
+.pv-current {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 10px 0 14px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pv-cur-label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em; }
+.pv-cur-title { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+
+.pv-status {
+  font-size: 11px; font-weight: 600;
+  border-radius: 999px; padding: 1px 9px;
+  border: 1px solid var(--border);
+}
+.pv-status.halter { color: var(--green); border-color: var(--green); }
+.pv-status.external { color: var(--amber); border-color: var(--amber); }
+.pv-status.official { color: var(--text-faint); }
+
+.pv-external-hint {
+  margin-top: 6px; font-size: 12px; color: var(--amber);
+  line-height: 1.5;
+}
+
+#providers-list { display: flex; flex-direction: column; }
+
+.pv-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 9px 4px;
+  border-bottom: 1px solid rgba(35, 45, 77, .5);
+}
+.pv-row.active .pv-row-name strong { color: var(--green); }
+.pv-row-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pv-row-name { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; }
+.pv-row-endpoint {
+  font-family: var(--mono); font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pv-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.pv-badge {
+  font-size: 10.5px; font-weight: 600;
+  border: 1px dashed var(--border); border-radius: 5px;
+  padding: 0 6px; color: var(--text-faint);
+}
+.pv-badge.current { color: var(--green); border-color: var(--green); border-style: solid; }
+
+.pv-form-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px;
+}
+.pv-form-grid input, .pv-form-grid select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  width: 100%;
+}
+.provider-add-form { display: flex; flex-direction: column; gap: 8px; }
+.provider-add-form .btn-sm { align-self: flex-start; }
+

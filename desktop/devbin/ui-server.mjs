@@ -46,6 +46,27 @@ function failDetail(out) {
   return out.stderr.trim() || out.stdout.trim();
 }
 
+// 对应 main.rs 的 run_halter_stdin：token 走子进程 stdin，不进 argv。
+function runHalterStdin(args, stdinData) {
+  return new Promise((resolve) => {
+    const child = spawn(resolveHalter(), args, {
+      env: { ...process.env, HALTER_UI: "1", NO_COLOR: "1" },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += c));
+    child.stderr.on("data", (c) => (stderr += c));
+    child.on("error", (err) =>
+      resolve({ ok: false, code: -1, stdout, stderr: String(err) }),
+    );
+    child.on("close", (code) =>
+      resolve({ ok: code === 0, code: code ?? -1, stdout, stderr }),
+    );
+    child.stdin.on("error", () => {}); // EPIPE：子进程提前退出也走 close
+    child.stdin.end(stdinData ?? "");
+  });
+}
+
 async function runJson(args) {
   const out = await runHalter(args);
   if (!out.ok) {
@@ -151,7 +172,26 @@ const COMMANDS = {
     value.desktop = await desktopVersion();
     return value;
   },
-  halter_scan: () => runJson(["scan", "--json"]),
+  halter_scan: ({ machine } = {}) =>
+    runJson(["scan", "--json", ...(machine ? ["--machine", String(machine)] : [])]),
+  halter_machines_list: () => runJson(["machines", "list", "--json"]),
+  halter_machines_add: ({ name, host, user, port, halterPath }) => {
+    const args = ["machines", "add", String(name), "--host", String(host)];
+    if (user) args.push("--user", String(user));
+    if (port) args.push("--port", String(port));
+    if (halterPath) args.push("--halter-path", String(halterPath));
+    return runHalter(args);
+  },
+  halter_machines_remove: ({ name }) =>
+    runHalter(["machines", "remove", String(name)]),
+  halter_push: ({ layer, item, to, from, withSecrets }) => {
+    const args = ["push", String(layer), String(item)];
+    if (to) args.push("--to", String(to));
+    if (from) args.push("--from", String(from));
+    if (withSecrets) args.push("--with-secrets");
+    args.push("--apply");
+    return runHalter(args);
+  },
   halter_memory_show: () => runJson(["memory", "show", "--json"]),
   open_path: ({ path: target }) => openInSystem(target),
   halter_sessions_list: ({ project, limit, allProjects }) =>
@@ -205,10 +245,12 @@ const COMMANDS = {
       String(ref),
     ]),
   // 与 main.rs 一致：sync 返回 SidecarOutput 原始结构，不解析。
-  // tool / items 把同步收窄到矩阵的一个单元格（层由 layers 收窄）。
-  halter_sync: async ({ apply, layers, tool, items }) => {
+  // tool / items 把同步收窄到矩阵的一个单元格（层由 layers 收窄）；
+  // machine 把整个执行路由到注册的远程机器。
+  halter_sync: async ({ apply, layers, tool, items, machine }) => {
     const allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     const args = ["sync"];
+    if (machine) args.push("--machine", String(machine));
     for (const layer of allowed) {
       if (!layers.includes(layer)) args.push(`--no-${layer}`);
     }
@@ -217,6 +259,26 @@ const COMMANDS = {
     if (apply) args.push("--apply");
     return runHalter(args);
   },
+  // providers：与 main.rs 的 5 条命令 1:1 对应。
+  halter_providers_list: () => runJson(["providers", "list", "--json"]),
+  halter_providers_switch: ({ id, tool }) =>
+    runHalter(["providers", "switch", String(id), "--tool", String(tool)]),
+  halter_providers_add: ({ id, tool, baseUrl, label, model, token, envs, wireApi, reasoningEffort, contextWindow }) => {
+    const args = ["providers", "add", String(id), "--tool", String(tool),
+      "--base-url", String(baseUrl)];
+    if (label) args.push("--label", String(label));
+    if (model) args.push("--model", String(model));
+    for (const pair of envs || []) args.push("--env", String(pair));
+    if (wireApi) args.push("--wire-api", String(wireApi));
+    if (reasoningEffort) args.push("--reasoning-effort", String(reasoningEffort));
+    if (contextWindow) args.push("--context-window", String(contextWindow));
+    const tokenData = String(token || "");
+    if (tokenData.trim()) args.push("--token-stdin");
+    return runHalterStdin(args, tokenData);
+  },
+  halter_providers_remove: ({ id }) =>
+    runHalter(["providers", "remove", String(id), "--apply"]),
+  halter_providers_adopt: () => runHalter(["providers", "adopt", "--apply"]),
 };
 
 const MIME = {
