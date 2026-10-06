@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# 推送含 desktop/ui 或 src 改动的提交时，自动重截 README 截图：
+# 跑 desktop/devbin/shot-all.mjs（约 1-2 分钟），docs/images 有更新则
+# 追加提交 docs: refresh README screenshots，随本次推送一起出去。
+# 跳过一次：      HALTER_SKIP_SHOTS=1 git push
+# 截图失败改阻塞： HALTER_STRICT_SHOTS=1 git push
+set -u
+[ "${HALTER_SKIP_SHOTS:-0}" = "1" ] && exit 0
+cd "$(git rev-parse --show-toplevel)"
+
+ZERO=0000000000000000000000000000000000000000
+need=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # 新远端分支：与 origin/HEAD 分叉点比，退化时只看末位提交
+    base=$(git merge-base origin/HEAD "$local_sha" 2>/dev/null || echo "$local_sha")
+    range="$base..$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  [ -n "$(git diff --name-only "$range" -- desktop/ui src)" ] && need=1
+done
+[ "$need" = "1" ] || exit 0
+
+echo "pre-push: 待推提交改动了 desktop/ui 或 src，刷新 README 截图（约 1-2 分钟）…"
+if ! node desktop/devbin/shot-all.mjs; then
+  if [ "${HALTER_STRICT_SHOTS:-0}" = "1" ]; then
+    echo "pre-push: 截图失败（HALTER_STRICT_SHOTS=1），已中止推送。" >&2
+    exit 1
+  fi
+  echo "pre-push: ⚠ 截图失败，本次跳过刷新，继续推送。" >&2
+  exit 0
+fi
+if [ -n "$(git status --porcelain docs/images)" ]; then
+  git add docs/images
+  git commit -m "docs: refresh README screenshots"
+  echo "pre-push: 截图已更新，追加提交 docs: refresh README screenshots。"
+fi
+exit 0
