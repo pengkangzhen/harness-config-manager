@@ -16,6 +16,7 @@ from pathlib import Path
 
 import tomlkit
 
+from .io_utils import parse_manifest_toml
 from .model import HookInfo, redact
 from .registry import expand
 
@@ -135,7 +136,7 @@ def load_manifest(path: Path | None = None) -> list[HookSpec]:
     path = path or HOOK_MANIFEST()
     if not path.exists():
         return []
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return [spec_from_table(tbl) for tbl in doc.get("hook", [])]
 
 

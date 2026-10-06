@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import tomlkit
 
-from .io_utils import atomic_write_text
+from .io_utils import atomic_write_text, parse_manifest_toml
 from .model import is_sensitive_key, redact
 from .registry import expand
 
@@ -168,7 +168,7 @@ def load_manifest(path: Path | None = None) -> list[McpSpec]:
     path = path or MCP_MANIFEST()
     if not path.exists():
         return []
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return [spec_from_table(tbl) for tbl in doc.get("server", [])]
 
 
@@ -191,7 +191,7 @@ def _load_secrets(path: Path | None = None) -> dict[str, str]:
     path = path or SECRETS_FILE()
     if not path.exists():
         return {}
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return {k: str(v) for k, v in doc.items()}
 
 

@@ -350,6 +350,24 @@ def test_presets_shape_and_add_preset(fake_home: Path) -> None:
         "providers", "add", "x", "--tool", "codex", "--preset", "moonshot"]).exit_code == 2
 
 
+def test_list_bad_manifest_toml_fails_readably(fake_home: Path) -> None:
+    """清单 TOML 语法坏时给一行可读错误，绝不吐裸 traceback（S4-1）。"""
+    from typer.testing import CliRunner
+
+    from harness_config_manager.cli import app
+
+    manifest = fake_home / ".config/halter/providers.toml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("[[provider\nbroken", encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["providers", "list"])
+    assert result.exit_code not in (0, None)
+    message = str(result.exception or result.output)
+    assert "TOML 语法错误" in message
+    assert str(manifest) in message
+    assert "Traceback" not in result.output
+
+
 def test_switch_backs_up_target_configs(fake_home: Path, claude_settings: Path,
                                         codex_config: Path) -> None:
     """切换前把目标文件副本存入 backups/providers/（CC Switch 式安全垫）。"""

@@ -7,6 +7,23 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+import tomlkit
+from tomlkit.exceptions import ParseError
+
+
+def parse_manifest_toml(path: Path):
+    """读取并解析 halter 自身清单 TOML；语法错误以可读消息终止而非裸 traceback。
+
+    SystemExit(str) 由解释器顶层打印到 stderr（退出码 1），CLI、测试
+    CliRunner 与远端子进程三层的呈现保持一致。
+    """
+    try:
+        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    except ParseError as err:
+        raise SystemExit(
+            f"halter: {path} TOML 语法错误（{err}）；请修复或移走该文件后重试"
+        ) from err
+
 
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
     """Replace *path* atomically; a crash never exposes a truncated file."""

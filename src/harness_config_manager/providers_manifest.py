@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 import tomlkit
 
-from .io_utils import atomic_write_text
+from .io_utils import atomic_write_text, parse_manifest_toml
 from .registry import expand
 
 PROVIDER_MANIFEST = lambda: expand(".config/halter/providers.toml")  # noqa: E731
@@ -171,7 +171,7 @@ def load_manifest(path: Path | None = None) -> list[ProviderSpec]:
     path = path or PROVIDER_MANIFEST()
     if not path.exists():
         return []
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return [spec_from_table(tbl) for tbl in doc.get("provider", [])]
 
 

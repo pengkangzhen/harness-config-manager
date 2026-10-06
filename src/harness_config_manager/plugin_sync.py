@@ -20,7 +20,13 @@ from pathlib import Path
 
 import tomlkit
 
-from .io_utils import atomic_write_json, atomic_write_text, load_json_object, version_key
+from .io_utils import (
+    atomic_write_json,
+    atomic_write_text,
+    load_json_object,
+    parse_manifest_toml,
+    version_key,
+)
 from .registry import expand
 
 PLUGINS_MANIFEST = lambda: expand(".config/halter/plugins.toml")  # noqa: E731
@@ -45,7 +51,7 @@ def load_plugin_manifest() -> list[PluginSpec]:
     path = PLUGINS_MANIFEST()
     if not path.exists():
         return []
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return [
         PluginSpec(
             plugin_id=t["id"],

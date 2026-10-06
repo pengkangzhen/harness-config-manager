@@ -7,7 +7,7 @@ from pathlib import Path
 
 import tomlkit
 
-from .io_utils import atomic_write_text
+from .io_utils import atomic_write_text, parse_manifest_toml
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config/halter/config.toml"  # 兼容引用；运行时走 _config_path()
 
@@ -38,7 +38,7 @@ def load_config(path: Path | None = None) -> HalterConfig:
         return HalterConfig()
     # A corrupt or unreadable file must fail loudly. Returning defaults here
     # would let a later save overwrite the user's real configuration.
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     return HalterConfig(
         library=doc.get("library"),
         exclude_skills=list(doc.get("exclude_skills", [])),
@@ -54,7 +54,7 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
     """Save managed fields while preserving unrelated tables and comments."""
     path = path or _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+    doc = parse_manifest_toml(path) if path.exists() else tomlkit.document()
 
     scalar_fields = {
         "library": cfg.library,

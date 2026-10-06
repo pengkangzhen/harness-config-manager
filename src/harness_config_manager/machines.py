@@ -21,7 +21,7 @@ from pathlib import Path
 
 import tomlkit
 
-from .io_utils import atomic_write_text
+from .io_utils import atomic_write_text, parse_manifest_toml
 from .registry import expand
 
 MACHINES_MANIFEST = lambda: expand(".config/halter/machines.toml")  # noqa: E731
@@ -48,7 +48,7 @@ def load_machines(path: Path | None = None) -> list[MachineSpec]:
     path = path or MACHINES_MANIFEST()
     if not path.exists():
         return []
-    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    doc = parse_manifest_toml(path)
     machines: list[MachineSpec] = []
     for tbl in doc.get("machine", []):
         machines.append(MachineSpec(
