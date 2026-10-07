@@ -1418,7 +1418,7 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   z-index: 1;   /* 负 margin 叠边时激活段描边压住邻段 */
 }
 
-/* 供应商列表：圆角卡片（与 updates 卡同语言），激活态靠左强调条 + 徽标表达、底色保持中性 */
+/* 供应商列表：圆角卡片（与 updates 卡同语言），激活态整卡着色 + 徽标表达 */
 #providers-list { display: flex; flex-direction: column; gap: 8px; }
 
 .pv-row {
@@ -1428,13 +1428,14 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   border: 1px solid var(--border);
   border-radius: var(--radius);
   transition: border-color .15s ease;
-  position: relative;
 }
 .pv-row:hover { border-color: var(--accent-dim); }
-.pv-row.active::before {
-  content: ""; position: absolute; left: 0; top: 10px; bottom: 10px;
-  width: 3px; border-radius: 2px; background: var(--green);
+/* 激活态整卡着色（绿描边 + 淡绿底），与 updates 卡 state-latest 同一语言 */
+.pv-row.active {
+  border-color: rgba(61, 220, 151, .65);
+  background: linear-gradient(rgba(61, 220, 151, .14), rgba(61, 220, 151, .14)), var(--bg-raise);
 }
+.pv-row.active:hover { border-color: rgba(61, 220, 151, .85); }
 .pv-row-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .pv-row-name { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; }
 .pv-row-endpoint {
