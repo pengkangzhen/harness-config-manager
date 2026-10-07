@@ -74,11 +74,14 @@ app.add_typer(sessions_app, name="sessions")
 memory_app = typer.Typer(help="查看并写入用户级记忆事实源（desktop 记忆面板的数据源）。")
 app.add_typer(memory_app, name="memory")
 
-machines_app = typer.Typer(help="管理跨机器同步的远程机器（ssh 通道，远端需装有 halter）。")
+machines_app = typer.Typer(help="管理跨机器同步的远程机器（ssh 通道；halter library 通道远端可零安装）。")
 app.add_typer(machines_app, name="machines")
 
 providers_app = typer.Typer(help="管理模型供应商并一键切换 claude / codex 的端点与模型（本机独立，不参与多机同步）。")
 app.add_typer(providers_app, name="providers")
+
+library_app = typer.Typer(help="~/.agents 库的跨机同步：远端零安装（ssh + python3 即接管 statusline）。")
+app.add_typer(library_app, name="library")
 
 update_app = typer.Typer(help="管理 harness 升级：npm 渠道版本对比与一键升级（desktop 更新面板的数据源）。")
 app.add_typer(update_app, name="update")
@@ -463,6 +466,10 @@ def scan(
         [], "--detail", "-d",
         help="查看某层明细，可多选：skills / mcp / plugins / mods / hooks / agents / memory / statusline / sessions",
     ),
+    sessions_all: bool = typer.Option(
+        False, "--sessions-all-projects",
+        help="sessions 计数改为全项目口径（默认仅当前目录所属项目；桌面总览即此口径）",
+    ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
     from . import report as rp
@@ -473,13 +480,14 @@ def scan(
         fwd = ["scan"]
         fwd += ["--json"] if json_out else []
         fwd += [arg for d in detail for arg in ("-d", d)]
+        fwd += ["--sessions-all-projects"] if sessions_all else []
         _run_on_machine(machine, fwd)
         return
 
     detections = detect_tools()
     n_installed = sum(1 for d in detections if d.installed)
 
-    reports = scan_all(detections)
+    reports = scan_all(detections, sessions_all)
     if json_out:
         emit_json(_json.dumps({
             "tools_detected": [d.__dict__ for d in detections if d.installed],
@@ -994,6 +1002,60 @@ def memory_write(
         if backup:
             line += f"，旧文件备份于 {backup}"
         console.print(line)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# library：~/.agents 库跨机同步（远端零安装）
+
+
+@library_app.command("init")
+def library_init_cmd(
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """把 ~/.agents git 化（幂等）并提交现状——库即同步的基础。"""
+    from .library import library_init
+
+    for line in library_init(apply):
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}")
+
+
+@library_app.command("adopt")
+def library_adopt_cmd(
+    machine: str = typer.Argument(help="目标机器（halter machines list 查看）"),
+    tool: list[str] = typer.Option(["claude"], "--tool", help="接管的工具，可多选（claude / zcode / cursor / qwen）"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """远端零安装接管：建库 → 拉入本机库 → statusline 直连库路径（远端旧库自动备份）。"""
+    from .library import library_adopt
+
+    for line in library_adopt(machine, tool, apply):
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}")
+
+
+@library_app.command("push")
+def library_push_cmd(
+    machine: str = typer.Option(..., "--to", help="目标机器"),
+    tool: list[str] = typer.Option(["claude"], "--tool", help="刷新接管的工具，可多选"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """本机提交库变更 → 推到远端 → 刷新接管（日常改完 statusline/记忆后的同步命令）。"""
+    from .library import library_push
+
+    for line in library_push(machine, tool, apply):
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}")
+
+
+@library_app.command("pull")
+def library_pull_cmd(
+    machine: str = typer.Option(..., "--from", help="来源机器"),
+    apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
+) -> None:
+    """远端提交的库变更拉回本机（fast-forward）；随后 halter sync --apply 分发到本机各工具。"""
+    from .library import library_pull
+
+    for line in library_pull(machine, apply):
+        console.print(f"  {'[apply]' if apply else '[plan]'} {line}")
 
 
 # ---------------------------------------------------------------------------

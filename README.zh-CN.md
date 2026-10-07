@@ -80,6 +80,19 @@ halter pull agents reviewer --from desktop --apply           # = push --from des
 
 语义：条目经幂等的 export/ingest 对传输——同名同内容视为 no-op；同名不同内容报冲突（默认跳过，`--prefer replace` 先备份目标侧再覆盖）。条目到达后落入远端库/清单，并由远端自己的 halter 分发到那台机器的已装工具——方言翻译绝不重复实现。MCP 定义以 `${VAR}` 占位符传输；真实密钥仅在 `--with-secrets` 时携带，合并进远端 `secrets.toml`（0600）。memory 层刻意不做跨机推送——单一全局记忆文件的合并语义适合 git/syncthing，不适合点对点复制。
 
+**远端零安装——库通道**。上面的 push/pull 需要两端都有 halter；对不想装任何东西的机器，库通道用纯 ssh + git bundle 搬运整个 `~/.agents` 事实源（skills / subagents / memory / statusline），并用 POSIX sh + python3（macOS/Linux 开发机自带）完成远端「接管」：
+
+```bash
+halter library init --apply            # ~/.agents 一次性 git 化（幂等，快照现状）
+halter library adopt mac --apply       # 远端：从本机建库 + 接管 statusline
+                                       #（settings 的 statusLine.command -> ~/.agents/... 直连路径；
+                                       #  远端原 ~/.agents 先整包 tar 备份，绝不裸丢数据）
+halter library push --to mac --apply   # 日常命令：提交本机变更 → 推送 → 刷新接管
+halter library pull --from mac --apply # 远端改过的库内容拉回本机（fast-forward）
+```
+
+在任一台改 `~/.agents/statusline/claude/statusline.py` 再 push，两台的状态栏就同时变化。直连路径形态（`~` 展开）与 halter 的收养解析兼容，远端将来装上 halter 可零迁移切换到完整托管。历史分叉时快速失败并提示先 pull，绝不静默覆盖。声明式 statusline 方言（codex / gemini / kimi）的配置写入仍需远端真装 halter。
+
 桌面 App 走同一通道，且机器优先：侧栏顶部的机器选择器先定作用域，总览 / 矩阵 / 会话 / 记忆 / 供应商五个视图都在所选机器之下（远端经 ssh 转发到那台机器的 halter 执行）；选择持久化，下次启动直接恢复。矩阵里本机有而远端缺的条目显示为幽灵行（点击即推送），远端独有的条目带拉取按钮。
 
 ## Session 连续性

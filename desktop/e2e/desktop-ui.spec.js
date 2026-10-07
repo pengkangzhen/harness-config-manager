@@ -5,7 +5,8 @@ const { openApp, setHandler, callsWithArgs } = require("./tauri-mock");
 const SCAN = {
   doctor: [],
   inventory: [
-    { tool: "claude", display: "Claude Code", installed: true, category: "harness" },
+    { tool: "claude", display: "Claude Code", installed: true, category: "harness",
+      sessions: [{ ref: "claude:s1" }, { ref: "claude:s2" }] },
     { tool: "vscode", display: "VS Code", installed: false, category: "editor" },
   ],
 };
@@ -39,6 +40,9 @@ test("boot 显示运行时版本与工具总览", async ({ page }) => {
   await expect(page.locator("#halter-version")).not.toHaveClass(/mismatch/);
   await expect(page.locator("#tools-heading")).toHaveText("Harness（1）");
   await expect(page.locator(".tool-card .tool-name")).toContainText("Claude Code");
+  // 总览 sessions chip：读 scan 返回的全项目会话计数（Rust 侧固定带 --sessions-all-projects）
+  await expect(page.locator(".tool-card .count-chip", { hasText: "sessions" }))
+    .toHaveText("sessions 2");
 });
 
 test("doctor 健康检查文案跟随语言切换（code 驱动）", async ({ page }) => {

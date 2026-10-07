@@ -18,7 +18,7 @@ from .skills import scan_skills
 from .statusline import scan_statusline
 
 
-def scan_tool(key: str) -> ToolReport:
+def scan_tool(key: str, sessions_all_projects: bool = False) -> ToolReport:
     spec = BY_KEY[key]
     report = ToolReport(tool=spec.key, display=spec.display, installed=True, category=spec.category)
 
@@ -56,19 +56,21 @@ def scan_tool(key: str) -> ToolReport:
     if key in HOOK_READERS:
         HOOK_READERS[key](report.hooks, report.scan_notes)
 
-    # Session history is project-scoped rather than a distributed config layer.
-    report.sessions = scan_sessions(Path.cwd(), tools=[key])
+    # Session history is project-scoped rather than a distributed config layer;
+    # `sessions_all_projects` switches the count to whole-machine (desktop overview).
+    report.sessions = scan_sessions(None if sessions_all_projects else Path.cwd(), tools=[key])
 
     return report
 
 
-def scan_all(detections: list[Detection] | None = None) -> list[ToolReport]:
+def scan_all(detections: list[Detection] | None = None,
+             sessions_all_projects: bool = False) -> list[ToolReport]:
     """Assemble reports; *detections* lets callers reuse their own probe."""
     reports: list[ToolReport] = []
     for det in (detect_tools() if detections is None else detections):
         if not det.installed:
             continue
-        reports.append(scan_tool(det.tool))
+        reports.append(scan_tool(det.tool, sessions_all_projects))
     return reports
 
 

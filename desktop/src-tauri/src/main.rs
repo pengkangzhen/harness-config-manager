@@ -161,6 +161,9 @@ async fn halter_version() -> Result<Value, String> {
 async fn halter_scan(machine: Option<String>) -> Result<Value, String> {
     let mut parts = vec!["scan".to_string()];
     push_machine(&mut parts, &machine);
+    // The desktop has no meaningful cwd, so session counts are whole-machine
+    // (the CLI default would scope them to the sidecar's launch directory).
+    parts.push("--sessions-all-projects".to_string());
     parts.push("--json".to_string());
     run_json_args(parts).await
 }

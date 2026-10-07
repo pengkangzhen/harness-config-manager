@@ -271,6 +271,27 @@ def test_machines_list_json_contract(fake_home: Path) -> None:
                  "local": False, "host_name": None, "os": None}  # 未探测过 → null
 
 
+def test_scan_sessions_all_projects_flag(fake_home: Path, monkeypatch) -> None:
+    """desktop 总览数据源：--sessions-all-projects 把 sessions 口径切到全项目。"""
+    from halter import scan as scan_mod
+
+    (fake_home / ".claude").mkdir()   # 保证至少检测到 claude，scan_tool 真正跑一遍
+    captured: list[object] = []
+
+    def fake_scan_sessions(project, tools=None):
+        captured.append(project)
+        return []
+
+    monkeypatch.setattr(scan_mod, "scan_sessions", fake_scan_sessions)
+    result = runner.invoke(app, ["scan", "--json"])
+    assert result.exit_code == 0
+    assert captured and captured[-1] == Path.cwd()          # 默认：当前目录所属项目
+
+    result = runner.invoke(app, ["scan", "--json", "--sessions-all-projects"])
+    assert result.exit_code == 0
+    assert captured[-1] is None                             # 开关：全项目（desktop 口径）
+
+
 def test_update_status_json_contract(fake_home, monkeypatch) -> None:
     """desktop 更新面板数据源：npm 渠道工具的当前/最新/状态形状与比较口径。"""
     from halter import updates as upd

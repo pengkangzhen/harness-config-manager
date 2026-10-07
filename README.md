@@ -110,6 +110,19 @@ halter pull agents reviewer --from desktop --apply           # = push --from des
 
 Semantics: entries are transferred through an idempotent export/ingest pair — same name and identical content is a no-op; divergent same-name entries are reported as conflicts (skip by default, `--prefer replace` backs up the destination side first, then overwrites). On arrival the entry lands in the remote library/manifest **and** is distributed to that machine's installed tools by its own halter — dialect translation never happens twice. MCP definitions travel with `${VAR}` placeholders; real secret values only move when `--with-secrets` is given, and they merge into the remote `secrets.toml` (0600). The memory layer is deliberately not pushed — a single global memory file has merge semantics that belong to git/syncthing, not point-to-point copies.
 
+**Zero-install remotes** — the library channel. The push/pull commands above need halter on both ends. For machines where you don't want to install anything, the library channel moves the whole `~/.agents` truth (skills / subagents / memory / statusline) over plain ssh + git bundles, and "adopts" the remote with nothing but POSIX sh and python3 (both ship with macOS/Linux dev machines):
+
+```bash
+halter library init --apply            # git-ify ~/.agents once (idempotent, snapshots current state)
+halter library adopt mac --apply       # remote: build the library from this machine's + take over statusline
+                                       # (settings' statusLine.command -> ~/.agents/... direct path; the
+                                       #  remote's old ~/.agents is tar-backed-up first — data is never lost)
+halter library push --to mac --apply   # the daily command: commit local changes, ship, refresh the takeover
+halter library pull --from mac --apply # remote-edited library content comes back (fast-forward)
+```
+
+Editing `~/.agents/statusline/claude/statusline.py` on either machine and pushing makes both statuslines change — the direct-path form is also what halter's adopter expects (`~` is expanded), so a remote can switch to full halter management later with zero migration. Divergent histories fail fast with a pull hint instead of silently overwriting. Declarative statusline dialects (codex / gemini / kimi) still need real halter on the remote to write their config files.
+
 The desktop app rides on the same channel, machine-first: a machine picker at the top of the sidebar fixes the scope, and all five views — overview, matrix, sessions, memory, providers — load under the selected machine (remote requests are forwarded over ssh to that machine's halter). The choice persists across launches. Inside the matrix, entries that exist locally but are missing remotely appear as ghost rows (click to push), and remote-only entries get a pull button.
 
 ## Session continuity
