@@ -14,7 +14,7 @@
   --amber: #ffc65c;
   --violet: #a78bfa;
   --radius: 10px;
-  --hairline: var(--hairline);
+  --hairline: rgba(139, 150, 184, .16);
   --shadow: 0 12px 32px rgba(0, 0, 0, .45);
   --mono: "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
 }
@@ -777,18 +777,23 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   margin-bottom: 12px;
 }
 
+/* 卡片贴合内容宽度（内容窄于面板时不再空一大截），工具多时回退为占满 + 横向滚动 */
 .matrix-wrap {
   overflow-x: auto;
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-raise);
-  padding: 6px 10px 12px 0;
+  padding: 6px 10px 12px 10px;
 }
 
 .matrix {
   display: inline-grid;
-  gap: 2px;
-  min-width: 100%;
+  /* 行分隔线要连续：水平不留 gap（间隔改由 cell 的 padding 提供），
+     垂直 gap 只影响行间距、不切断 border-top */
+  column-gap: 0;
+  row-gap: 2px;
 }
 
 .mx-corner { position: sticky; left: 0; z-index: 2; background: var(--bg-raise); }
@@ -817,16 +822,18 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   display: flex; align-items: center; justify-content: center;
   font-size: 13px;
   border-top: 1px solid var(--hairline);
-  border-radius: 4px;
-  margin: 0 3px;
+  border-radius: 0;
+  padding: 0 3px;   /* 用 padding 而非 margin 提供间隔：margin 会把行分隔线切成断续段 */
 }
 .mx-cell.synced { color: var(--green); }
 .mx-cell.present { color: var(--amber); }
-.mx-cell.missing { color: var(--text-faint); opacity: .55; }
+/* 只压暗字形、不用 opacity：opacity 会连 border-top 一起压暗，行分隔线深浅不均 */
+.mx-cell.missing { color: var(--text-faint); }
 
 /* 可点击单元格：点一下圆点 = 同步该条目到该工具 */
-.mx-cell.clickable { cursor: pointer; transition: background .12s, opacity .12s; }
-.mx-cell.clickable:hover { background: var(--bg-hover); opacity: 1; }
+.mx-cell.clickable { cursor: pointer; transition: background .12s; }
+.mx-cell.clickable:hover { background: var(--bg-hover); }
+.mx-cell.clickable.missing:hover { color: var(--text-dim); }
 .mx-cell.syncing {
   cursor: wait;
   pointer-events: none;
