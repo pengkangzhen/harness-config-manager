@@ -1349,11 +1349,26 @@ def show(
         _json.dumps(detail, ensure_ascii=False, indent=2), title=f"provider {pid}"))
 
 
+def _inherit_live_token(base_url: str) -> str | None:
+    """收编安全垫：实况端点与目标一致时继承实况 token。
+
+    未显式给 token 的收编若不带继承，switch（删托管键后按清单回写）会清掉
+    实况的 ANTHROPIC_AUTH_TOKEN，Claude Code 直接失去认证。
+    """
+    from .providers_write import detect_current, live_claude_token
+
+    cur = detect_current("claude")
+    if cur["base_url"] and cur["base_url"].rstrip("/") == base_url.rstrip("/"):
+        return live_claude_token()
+    return None
+
+
 def _load_block_def(def_json: str, tool: str, preset: str | None = None):
     """--def 配置 JSON（对标 CC Switch 的「配置JSON」）→ 工具块。
 
     @file 从文件读；preset 作底模板（端点等键可被 --def 覆盖）。
-    token 刻意不在此 JSON 中——密钥与配置分离，token 走 --token-stdin/--token-env。
+    token 刻意不在此 JSON 中——密钥与配置分离，token 走 --token-stdin/--token-env
+    （桌面端粘贴含 token 的整块 JSON 由 UI 剥离后走 stdin）。
     """
     import json as _json
     from pathlib import Path
@@ -1444,6 +1459,10 @@ def add(
     if token_stdin and token_env:
         console.print("[red]--token-stdin 与 --token-env 只能选一个[/red]")
         raise typer.Exit(2)
+    inherited = False
+    if not token and tool == "claude":
+        token = _inherit_live_token(block.base_url)
+        inherited = token is not None
 
     specs = load_manifest()
     spec = next((s for s in specs if s.id == pid), None)
@@ -1466,6 +1485,8 @@ def add(
     if token:
         set_token(pid, tool, token)
     secret_note = f"，token → secrets.toml [{token_secret_key(pid, tool)}]" if token else ""
+    if inherited:
+        secret_note += "（继承自实况）"
     console.print(f"[green]{action}{secret_note}[/green]")
     console.print(f"[dim]激活：halter providers switch {pid} --tool {tool}[/dim]")
 
@@ -1518,6 +1539,10 @@ def edit(
         import os
 
         token = os.environ.get(token_env) or None
+    inherited = False
+    if not token and tool == "claude":
+        token = _inherit_live_token(block.base_url)
+        inherited = token is not None
 
     # 编辑前实况：恰为当前激活供应商时，保存后按新定义重写该工具配置，避免清单与实况漂移
     cur_before = detect_current(tool, specs)
@@ -1533,11 +1558,60 @@ def edit(
     if token:
         set_token(pid, tool, token)
     secret_note = f"，token → secrets.toml [{token_secret_key(pid, tool)}]" if token else ""
+    if inherited:
+        secret_note += "（继承自实况）"
     console.print(f"[green]{action}{secret_note}[/green]")
     if was_active:
         for line in switch_provider(pid, tool):
             console.print(line)
         console.print("[dim]已按新定义重写激活配置[/dim]")
+
+
+@providers_app.command("rename")
+def providers_rename(
+    old: str = typer.Argument(help="现有 provider id"),
+    new: str = typer.Argument(help="新 id（字母数字._-，不可与现有冲突）"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+) -> None:
+    """重命名供应商 id（token 键随迁；实况按实测推断，不受改名影响）。"""
+    import re as _re
+
+    from .providers_manifest import (OFFICIAL_ID, load_manifest, load_tokens,
+                                     save_manifest, save_tokens, token_secret_key)
+
+    if machine is not None:
+        _run_on_machine(machine, ["providers", "rename", old, new])
+        return
+    if not _re.fullmatch(r"[A-Za-z0-9._-]+", new) or new == OFFICIAL_ID:
+        console.print(f"[red]新 id 只能含字母、数字、点、下划线、连字符，且不可为 {OFFICIAL_ID}[/red]")
+        raise typer.Exit(2)
+    specs = load_manifest()
+    spec = next((s for s in specs if s.id == old), None)
+    if spec is None:
+        console.print(f"[red]未找到 provider '{old}'（halter providers list 查看）[/red]")
+        raise typer.Exit(2)
+    if new == old:
+        return
+    if any(s.id == new for s in specs):
+        console.print(f"[red]provider id '{new}' 已存在[/red]")
+        raise typer.Exit(2)
+    spec.id = new
+    if not spec.label or spec.label == old:
+        spec.label = new  # 收编默认 label=id 随之同步；自定义显示名保留
+    save_manifest(specs)
+    # token 键迁移：旧键有值才写新键，旧键始终清除
+    tokens = load_tokens()
+    moved = []
+    for tool in spec.tools():
+        old_key = token_secret_key(old, tool)
+        if tokens.get(old_key):
+            tokens[token_secret_key(new, tool)] = tokens[old_key]
+            moved.append(tool)
+        tokens.pop(old_key, None)
+    if moved:
+        save_tokens(tokens)
+    note = f"，token 随迁（{', '.join(moved)}）" if moved else ""
+    console.print(f"[green]{old} → [cyan]{new}[/cyan]{note}[/green]")
 
 
 @providers_app.command("presets")

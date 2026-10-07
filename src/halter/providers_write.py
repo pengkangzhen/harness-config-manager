@@ -162,6 +162,11 @@ def _read_codex_doc() -> dict:
         return {}
 
 
+def live_claude_token() -> str | None:
+    """实况 settings.json 的 ANTHROPIC_AUTH_TOKEN（收编继承用；不进 argv 与日志）。"""
+    return _read_claude_env().get("ANTHROPIC_AUTH_TOKEN") or None
+
+
 def detect_current(tool: str, specs: list[ProviderSpec] | None = None) -> dict:
     """推断工具当前供应商：{status, provider, base_url, model, detail}；claude 另带 env。
 

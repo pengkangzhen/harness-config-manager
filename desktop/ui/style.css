@@ -228,6 +228,15 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 .btn.danger { border-color: #7a2d3c; color: var(--red); }
 .btn.danger:hover:not(:disabled) { background: rgba(255, 107, 129, .1); }
 .btn.danger.armed { background: var(--red); color: #fff; border-color: var(--red); }
+/* 主操作实心按钮（面板核心动作，如「添加供应商」）与纯图标按钮（辅助动作降级） */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--accent); border-color: var(--accent); filter: brightness(1.1); }
+.btn-icon { padding: 7px 10px; color: var(--text-dim); }
 
 .text-input {
   padding: 7px 11px;
@@ -1418,30 +1427,73 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   margin-top: 6px; font-size: 12px; color: var(--amber);
   line-height: 1.5;
 }
-/* 外部配置当前卡的动作行（「编辑」带入实况参数收编） */
 
-#providers-list { display: flex; flex-direction: column; }
+/* 供应商视图：内容限宽居中，超宽窗口下列表与说明行不再无限拉伸 */
+#view-providers { max-width: 960px; margin: 0 auto; }
+
+/* 工具页签：整体分段控件（共享外框零缝隙，激活段实色），与矩阵的松散 layer-tab 布局区分 */
+#providers-tool-tabs { gap: 0; }
+#providers-tool-tabs .layer-tab {
+  flex: 1; max-width: 220px; text-align: center;
+  border-radius: 0; margin-left: -1px;
+}
+#providers-tool-tabs .layer-tab:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+#providers-tool-tabs .layer-tab:last-child { border-radius: 0 8px 8px 0; }
+#providers-tool-tabs .layer-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  z-index: 1;   /* 负 margin 叠边时激活段描边压住邻段 */
+}
+
+/* 供应商列表：圆角卡片（与 updates 卡同语言），激活态靠左强调条 + 徽标表达、底色保持中性 */
+#providers-list { display: flex; flex-direction: column; gap: 8px; }
 
 .pv-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 9px 4px;
-  border-bottom: 1px solid var(--hairline);
+  gap: 12px; padding: 12px 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color .15s ease;
+  position: relative;
 }
-.pv-row.active .pv-row-name strong { color: var(--green); }
-.pv-row-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pv-row:hover { border-color: var(--accent-dim); }
+.pv-row.active::before {
+  content: ""; position: absolute; left: 0; top: 10px; bottom: 10px;
+  width: 3px; border-radius: 2px; background: var(--green);
+}
+.pv-row-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .pv-row-name { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; }
 .pv-row-endpoint {
   font-family: var(--mono); font-size: 11.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
 }
-.pv-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.pv-row-actions { display: flex; gap: 10px; flex-shrink: 0; }
+
+/* 模型名 chip：与端点 URL 分离，不再用「·」挤一行 */
+.pv-chip {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
 
 .pv-badge {
   font-size: 10.5px; font-weight: 600;
-  border: 1px dashed var(--border); border-radius: 5px;
-  padding: 0 6px; color: var(--text-faint);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--text-faint);
+  background: var(--bg-hover);
 }
-.pv-badge.current { color: var(--green); border-color: var(--green); border-style: solid; }
+.pv-badge.current {
+  color: var(--green);
+  background: rgba(61, 220, 151, .12);
+}
 
 .pv-form-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

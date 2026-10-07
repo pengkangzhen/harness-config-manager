@@ -261,9 +261,9 @@
         <header class="view-header">
           <h1 data-i18n="pv.heading">模型供应商</h1>
           <div class="header-actions">
-            <button id="btn-providers-adopt" class="btn" data-i18n="pv.adopt">⇤ 收编现有配置</button>
-            <button id="btn-providers-add" class="btn" data-i18n="pv.add">＋ 添加供应商</button>
-            <button id="btn-refresh-providers" class="btn" data-i18n="pv.refresh">↻ 刷新</button>
+            <button id="btn-providers-adopt" class="btn" data-i18n="pv.adopt">收编现有配置</button>
+            <button id="btn-providers-add" class="btn btn-primary" data-i18n="pv.add">＋ 添加供应商</button>
+            <button id="btn-refresh-providers" class="btn btn-icon" data-i18n-title="pv.refresh" title="↻ 刷新">↻</button>
           </div>
         </header>
         <p class="sync-note" data-i18n="pv.note">
@@ -283,6 +283,7 @@
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
               </select>
+              <input id="pv-id" class="hidden" data-i18n-placeholder="pv.formId" placeholder="ID（可改名）" autocomplete="off" spellcheck="false" />
               <input id="pv-label" data-i18n-placeholder="pv.formLabel" placeholder="显示名（可选）" autocomplete="off" />
               <input id="pv-token" type="password" data-i18n-placeholder="pv.formToken" placeholder="API token（可选；只存 secrets.toml）" autocomplete="new-password" />
             </div>

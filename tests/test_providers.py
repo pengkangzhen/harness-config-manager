@@ -463,6 +463,77 @@ def test_edit_updates_block_and_keeps_token(fake_home: Path) -> None:
     assert load_manifest()[0].claude.env == {"FOO": "bar"}
 
 
+def test_rename_migrates_id_label_and_tokens(fake_home: Path) -> None:
+    """rename：id 与默认 label（=id）同步改、token 键随迁、冲突与非法 id 拒绝。"""
+    from typer.testing import CliRunner
+
+    from halter.cli import app
+    from halter.providers_manifest import get_token, load_manifest, save_manifest, set_token
+
+    runner = CliRunner()
+    spec = _spec("zhipu-2")
+    spec.label = "zhipu-2"  # 收编默认 label=id
+    save_manifest([spec])
+    set_token("zhipu-2", "claude", "sk-test")
+    set_token("zhipu-2", "codex", "sk-x")
+
+    r = runner.invoke(app, ["providers", "rename", "zhipu-2", "zhipu"])
+    assert r.exit_code == 0
+    got = load_manifest()[0]
+    assert got.id == "zhipu" and got.label == "zhipu"
+    assert get_token("zhipu", "claude") == "sk-test"
+    assert get_token("zhipu", "codex") == "sk-x"
+    assert get_token("zhipu-2", "claude") is None  # 旧键清除
+
+    # 自定义显示名在改名时保留
+    got.label = "Zhipu GLM"
+    save_manifest([got])
+    r = runner.invoke(app, ["providers", "rename", "zhipu", "zhipu9"])
+    assert r.exit_code == 0
+    assert load_manifest()[0].label == "Zhipu GLM"
+
+    # 校验口径：未知 pid / 与 official 撞名 / 非法字符 / 新旧同名（幂等成功）
+    assert runner.invoke(app, ["providers", "rename", "nope", "x"]).exit_code == 2
+    assert runner.invoke(app, ["providers", "rename", "zhipu9", "official"]).exit_code == 2
+    assert runner.invoke(app, ["providers", "rename", "zhipu9", "bad id"]).exit_code == 2
+    save_manifest([_spec("taken"), _spec("zhipu9")])
+    assert runner.invoke(app, ["providers", "rename", "zhipu9", "taken"]).exit_code == 2
+    assert runner.invoke(app, ["providers", "rename", "zhipu9", "zhipu9"]).exit_code == 0
+
+
+def test_add_edit_inherit_live_token(fake_home: Path, claude_settings: Path) -> None:
+    """收编安全垫：未给 token 且实况端点一致 → 继承实况 token；端点不同则不继承。"""
+    from typer.testing import CliRunner
+
+    from halter.cli import app
+    from halter.providers_manifest import get_token, load_manifest
+
+    runner = CliRunner()
+    # fixture 实况：zhipu 端点 + sk-live-secret；收编同端点（未给 token）→ 继承
+    r = runner.invoke(app, [
+        "providers", "add", "zhipu", "--tool", "claude",
+        "--def", '{"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}'])
+    assert r.exit_code == 0 and "继承自实况" in r.output
+    assert get_token("zhipu", "claude") == "sk-live-secret"
+
+    # 端点不同 → 不继承（无 token）
+    r = runner.invoke(app, [
+        "providers", "add", "relay", "--tool", "claude",
+        "--def", '{"ANTHROPIC_BASE_URL": "https://relay.example/api"}'])
+    assert r.exit_code == 0 and "继承自实况" not in r.output
+    assert get_token("relay", "claude") is None
+
+    # edit 同样继承：清掉 token 后重编辑同端点块 → 恢复
+    from halter.providers_manifest import save_manifest
+    specs = load_manifest()
+    save_manifest(specs)   # token 已在 secrets，此处仅确认 edit 路径
+    r = runner.invoke(app, [
+        "providers", "edit", "relay", "--tool", "claude",
+        "--def", '{"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}'])
+    assert r.exit_code == 0 and "继承自实况" in r.output
+    assert get_token("relay", "claude") == "sk-live-secret"
+
+
 def test_edit_active_provider_rewrites_live(fake_home: Path, claude_settings: Path) -> None:
     """编辑当前激活的供应商：清单保存后按新定义重写 ~/.claude/settings.json（非托管键不动）。"""
     from typer.testing import CliRunner

@@ -483,7 +483,7 @@ test("providers：codex 页签显示当前徽标；添加表单以配置 JSON �
   await page.locator('.nav-item[data-view="providers"]').click();
   // codex 页签：zhipu 是当前激活（halter 态）→ 当前卡无动作行，行内无切换按钮
   await page.locator(".layer-tab", { hasText: "Codex" }).click();
-  await expect(page.locator(".pv-current.adoptable")).toHaveCount(0);
+  await expect(page.locator(".pv-current")).toHaveCount(0);   // halter 态：激活信息由列表行 active 徽标表达，无顶部卡
   const zhipuRow = page.locator(".pv-row", { hasText: "zhipu" });
   await expect(zhipuRow.locator(".pv-badge.current")).toHaveText("当前");
   await expect(zhipuRow.locator("button", { hasText: "切换" })).toHaveCount(0);
@@ -514,6 +514,10 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
     window.__editArgs = args;
     return { ok: true, code: 0, stdout: "更新 zhipu 的 claude 块", stderr: "" };
   });
+  await setHandler(page, "halter_providers_rename", () => async (args) => {
+    window.__renameArgs = args;
+    return { ok: true, code: 0, stdout: "zhipu → zhipu9", stderr: "" };
+  });
 
   await page.locator('.nav-item[data-view="providers"]').click();
   // official 内置行没有编辑按钮；zhipu 行点击编辑
@@ -528,6 +532,8 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
   await expect(page.locator("#pv-preset")).toBeDisabled();
   await expect(page.locator("#pv-preset")).toHaveValue("zhipu");   // 锁定态按端点展示厂商
   await expect(page.locator("#pv-label")).toHaveValue("Zhipu GLM");
+  await expect(page.locator("#pv-id")).toBeVisible();   // 编辑模式解锁 ID（可改名）
+  await expect(page.locator("#pv-id")).toHaveValue("zhipu");
   await expect(page.locator("#pv-token")).toHaveAttribute("placeholder", "API token（留空 = 保持不变）");
   expect(JSON.parse(await page.locator("#pv-def").inputValue())).toEqual({
     ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
@@ -545,10 +551,14 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]",
     ANTHROPIC_AUTH_TOKEN: "sk-json-pasted",
   }));
+  // ID 改为 zhipu9 → 保存先 rename（token 键随迁），再以新 id 提交 edit
+  await page.locator("#pv-id").fill("zhipu9");
   await page.locator('#provider-add-form button[type="submit"]').click();
+  expect(await page.evaluate(() => window.__renameArgs))
+    .toEqual({ old: "zhipu", new: "zhipu9", machine: undefined });
   const editArgs = await page.evaluate(() => window.__editArgs);
   expect(editArgs).toEqual({
-    id: "zhipu",
+    id: "zhipu9",
     tool: "claude",
     def: '{"ANTHROPIC_BASE_URL":"https://open.bigmodel.cn/api/anthropic","ANTHROPIC_MODEL":"glm-5.4[1M]",'
       + '"ANTHROPIC_DEFAULT_OPUS_MODEL":"glm-5.4[1M]",'
@@ -556,11 +566,12 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
     label: "Zhipu GLM",
     token: "sk-json-pasted",
   });
-  await expect(page.locator("#matrix-toast")).toContainText("更新 zhipu");
+  await expect(page.locator("#matrix-toast")).toContainText("更新 zhipu9");
 
-  // 重新点「添加供应商」恢复新增模式：JSON 回到 claude 模板
+  // 重新点「添加供应商」恢复新增模式：JSON 回到 claude 模板，ID 字段收回
   await page.locator("#btn-providers-add").click();
   await expect(page.locator("#pv-form-title")).toHaveText("添加供应商");
+  await expect(page.locator("#pv-id")).toBeHidden();
   expect(JSON.parse(await page.locator("#pv-def").inputValue()))
     .toEqual({ ANTHROPIC_BASE_URL: "" });
 });

@@ -470,7 +470,7 @@ async fn halter_sync(
     items: Option<Vec<String>>,
     machine: Option<String>,
 ) -> Result<SidecarOutput, String> {
-    let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
+    let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "statusline", "sessions"];
     let mut args: Vec<String> = vec!["sync".into()];
     push_machine(&mut args, &machine);
     for layer in allowed {
@@ -580,6 +580,20 @@ async fn halter_providers_edit(
         .map_err(|e| format!("sidecar task failed: {e}"))?
 }
 
+/// Rename a provider (id + default label; token keys migrate along).
+#[tauri::command]
+async fn halter_providers_rename(
+    old: String,
+    new: String,
+    machine: Option<String>,
+) -> Result<SidecarOutput, String> {
+    let mut args = vec!["providers".into(), "rename".into(), old, new];
+    push_machine(&mut args, &machine);
+    tauri::async_runtime::spawn_blocking(move || run_halter(&args))
+        .await
+        .map_err(|e| format!("sidecar task failed: {e}"))?
+}
+
 /// Remove a provider entry (manifest + its tokens; target configs untouched).
 #[tauri::command]
 async fn halter_providers_remove(
@@ -641,6 +655,7 @@ fn main() {
             halter_providers_switch,
             halter_providers_add,
             halter_providers_edit,
+            halter_providers_rename,
             halter_providers_remove,
             halter_providers_adopt,
             halter_update_status,

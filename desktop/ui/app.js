@@ -222,6 +222,7 @@ const LAYERS = [
   ["skills", "layer.skills"],
   ["agents", "layer.agents"],
   ["memory", "layer.memory"],
+  ["statusline", "layer.statusline"],
   ["mcp_servers", "layer.mcp"],
   ["plugins", "layer.plugins"],
   ["hooks", "layer.hooks"],
@@ -295,6 +296,10 @@ function renderOverview(data) {
         const m = tool.memory;
         cell = !m ? "-" : m.linked ? "●" : m.present ? "◐" : "·";
         on = !!m && (m.linked || m.present);
+      } else if (key === "statusline") {
+        const s = tool.statusline;
+        cell = !s ? "-" : s.linked ? "●" : s.present ? "◐" : "·";
+        on = !!s && (s.linked || s.present);
       } else {
         const n = Array.isArray(tool[key]) ? tool[key].length : 0;
         cell = String(n);
@@ -318,18 +323,20 @@ const MATRIX_LAYERS = [
   { key: "skills", field: "skills", labelKey: "mlayer.skills" },
   { key: "agents", field: "agents", labelKey: "mlayer.agents" },
   { key: "memory", field: "memory", labelKey: "mlayer.memory" },
+  { key: "statusline", field: "statusline", labelKey: "mlayer.statusline" },
   { key: "mcp", field: "mcp_servers", labelKey: "mlayer.mcp" },
   { key: "plugins", field: "plugins", labelKey: "mlayer.plugins" },
   { key: "hooks", field: "hooks", labelKey: "mlayer.hooks" },
 ];
 
-// 支持跨机器 push/pull 的层（memory/plugins/sessions 不在跨机范围）
+// 支持跨机器 push/pull 的层（memory/statusline/plugins/sessions 不在跨机范围）
 const PUSH_LAYERS = ["skills", "agents", "mcp", "hooks"];
 
 function matrixItemName(layer, item) {
   if (layer.key === "plugins") return item.plugin_id;
   if (layer.key === "hooks") return item.label;
   if (layer.key === "memory") return "MEMORY";
+  if (layer.key === "statusline") return "STATUSLINE";
   return item.name;
 }
 
@@ -344,7 +351,9 @@ function buildMatrix(scan, layerKey) {
   for (const tool of tools) {
     const entries = layer.key === "memory"
       ? (tool.memory && tool.memory.present ? [tool.memory] : [])
-      : tool[layer.field] || [];
+      : layer.key === "statusline"
+        ? (tool.statusline && tool.statusline.present ? [tool.statusline] : [])
+        : tool[layer.field] || [];
     for (const item of entries) {
       const name = matrixItemName(layer, item);
       if (!name) continue;
@@ -353,7 +362,8 @@ function buildMatrix(scan, layerKey) {
         row = { statuses: new Map(), items: [] };
         rows.set(name, row);
       }
-      const linked = ["skills", "agents", "memory"].includes(layer.key) ? !!item.linked : false;
+      const linked = ["skills", "agents", "memory", "statusline"].includes(layer.key)
+        ? !!item.linked : false;
       row.statuses.set(tool.tool, linked ? "synced" : "present");
       row.items.push(item);
     }
@@ -2103,7 +2113,9 @@ function renderProviders() {
       el("strong", "", cur.provider || t("pv.externalName")),
       statusEl,
     );
-    const curMeta = el("div", "dim", `${cur.base_url}${cur.model ? " · " + cur.model : ""}`);
+    const curMeta = el("div", "dim pv-row-endpoint");
+    curMeta.append(document.createTextNode(cur.base_url));
+    if (cur.model) curMeta.append(el("span", "pv-chip", cur.model));
     const currentCard = el("div", "pv-current");
     currentCard.append(el("div", "pv-cur-label", t("pv.currentLabel")), curTitle, curMeta);
     if (cur.detail) {
@@ -2144,9 +2156,12 @@ function renderProviderRow(p, tool, cur) {
   if (p.label && p.label !== p.id) nameLine.append(el("span", "dim", p.label));
   if (p.builtin) nameLine.append(el("span", "pv-badge", t("pv.builtin")));
   if (isActive) nameLine.append(el("span", "pv-badge current", t("pv.current")));
+  // 端点与模型分列：URL 等宽、模型独立 chip，不再挤一行
+  const endpointLine = el("div", "dim pv-row-endpoint");
   const endpoint = (p[tool] && p[tool].base_url) || t("pv.officialEndpoint");
-  const model = p[tool] && p[tool].model ? ` · ${p[tool].model}` : "";
-  info.append(nameLine, el("div", "dim pv-row-endpoint", endpoint + model));
+  endpointLine.append(document.createTextNode(endpoint));
+  if (p[tool] && p[tool].model) endpointLine.append(el("span", "pv-chip", p[tool].model));
+  info.append(nameLine, endpointLine);
   row.append(info);
 
   const actions = el("div", "pv-row-actions");
@@ -2344,6 +2359,9 @@ function openProviderForm(mode, entry = null) {
   hint.textContent = t(hint.dataset.i18n);
   $("pv-preset").disabled = editing;
   $("pv-tool").disabled = editing || external;
+  // 编辑模式解锁 ID（改名走 providers rename，token 键随迁）；add/external 由预设/端点自动推导
+  $("pv-id").classList.toggle("hidden", !editing);
+  $("pv-id").value = editing ? entry.id : "";
   const tokenInput = $("pv-token");
   tokenInput.dataset.i18nPlaceholder = editing ? "pv.formTokenKeep" : "pv.formToken";
   tokenInput.placeholder = t(tokenInput.dataset.i18nPlaceholder);
@@ -2439,6 +2457,27 @@ $("provider-add-form").addEventListener("submit", async (e) => {
     $("pv-def").focus();
     return;
   }
+  // 编辑改了 ID → 先 rename（token 键随迁），后续 edit 用新 id；rename 失败即中断
+  let finalId = id;
+  if (editing) {
+    const wanted = $("pv-id").value.trim();
+    if (wanted && wanted !== id) {
+      let rn = null;
+      try {
+        rn = await invoke("halter_providers_rename", {
+          old: id, new: wanted, machine: state.machine || undefined,
+        });
+      } catch (err) {
+        showMatrixToast(t("pv.renameFail", { id: wanted }), errorDetail(err), true);
+        return;
+      }
+      if (!rn.ok) {
+        showMatrixToast(t("pv.renameFail", { id: wanted }), rn.stderr || rn.stdout || "", true);
+        return;
+      }
+      finalId = wanted;
+    }
+  }
   // 整块粘贴的 JSON 可含 token（CLI 侧 --def 走 argv 会泄密故拒绝；UI 无此约束）：
   // 保存前剥离出 def，经 stdin 通道进 secrets.toml——表单 token 字段非空时优先
   let token = $("pv-token").value || null;
@@ -2447,7 +2486,7 @@ $("provider-add-form").addEventListener("submit", async (e) => {
     delete def.ANTHROPIC_AUTH_TOKEN;
   }
   const args = {
-    id,
+    id: finalId,
     tool,
     def: JSON.stringify(def),
     label: $("pv-label").value.trim() || null,   // 空 = 保持不变 / 缺省
@@ -2460,12 +2499,12 @@ $("provider-add-form").addEventListener("submit", async (e) => {
   try {
     result = await invoke(editing ? "halter_providers_edit" : "halter_providers_add", args);
   } catch (err) {
-    showMatrixToast(t(failKey, { id }), errorDetail(err), true);
+    showMatrixToast(t(failKey, { id: finalId }), errorDetail(err), true);
     return;
   }
   const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
   showMatrixToast(
-    t(result.ok ? doneKey : failKey, { id }),
+    t(result.ok ? doneKey : failKey, { id: finalId }),
     body || t("pv.noop"),
     !result.ok,
   );

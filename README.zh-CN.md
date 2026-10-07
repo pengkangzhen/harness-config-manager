@@ -135,7 +135,7 @@ halter providers edit zhipu --tool claude \
 
 内置预设（`halter providers presets`）目前覆盖 zhipu（claude + codex 双端点）、deepseek、moonshot——端点均有厂商官方文档背书；预设只固化端点，模型名始终由你自填。每次切换前都会把目标文件副本存入 `~/.config/halter/backups/providers/`，切坏了拷回来即可回滚。
 
-只动自家的键：claude 侧仅写 `~/.claude/settings.json` env 里的 `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` 托管键（env 其余键保持原样）；codex 侧仅写 `model_provider` / `model` 与 `[model_providers.halter_<id>]` 段，第三方段（如 CC Switch 写的）原样保留。`doctor` 会提示清单之外的自定义端点与 cc-switch 残留痕迹，双重管理无处藏身。桌面 App 的「供应商」面板支持一键切换、CC Switch 式配置 JSON 编辑（实时校验，选预设自动合入端点）、就地编辑、收编与删除。
+写入口径：claude 侧的清理只针对 `~/.claude/settings.json` env 里的 `ANTHROPIC_*` / `CLAUDE_CODE_*` 托管键（切走供应商时绝不误删其余键），而 `--def` / 配置 JSON 接受**任意** env 键值对（`API_TIMEOUT_MS` 等一并入清单、切换时写入）；codex 侧仅写 `model_provider` / `model` 与 `[model_providers.halter_<id>]` 段，第三方段（如 CC Switch 写的）原样保留。`doctor` 会提示清单之外的自定义端点与 cc-switch 残留痕迹，双重管理无处藏身。桌面 App 的「供应商」面板支持一键切换、CC Switch 式配置 JSON 编辑（实时校验，选预设自动合入端点；整块粘贴含 token 的配置会自动剥离转存 secrets.toml）、就地编辑、双击收编与删除。
 
 **与 CC Switch / claude-code-router 的分工**：halter 是*静态配置层*——写的是「工具指向哪个供应商」，管密钥安全，不驻留进程。CC Switch 做同样的切换（独立 App 形态），halter 的 `adopt` 可直接收编它的配置；[claude-code-router](https://github.com/musistudio/claude-code-router) 是*运行时路由层*——常驻网关做逐请求路由、fallback 与可观测性。两层可组合：把本地网关端点注册为 halter 的一个普通 provider，像切换其它供应商一样切换到它。
 

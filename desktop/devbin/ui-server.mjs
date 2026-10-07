@@ -299,6 +299,11 @@ const COMMANDS = {
     args.push(...machineArgs(machine));
     return runHalterStdin(args, tokenData);
   },
+  halter_providers_rename: ({ old, new: next, machine }) => {
+    const args = ["providers", "rename", String(old), String(next)];
+    args.push(...machineArgs(machine));
+    return runHalter(args);
+  },
   halter_providers_edit: ({ id, tool, def, label, token, machine }) => {
     const args = ["providers", "edit", String(id), "--tool", String(tool),
       "--def", String(def)];
