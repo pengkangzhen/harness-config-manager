@@ -4,8 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from harness_config_manager.config import HalterConfig
-from harness_config_manager.sessions import (
+from halter.config import HalterConfig
+from halter.sessions import (
     build_context,
     format_transcript,
     install_session_skill,
@@ -185,7 +185,7 @@ def test_install_builtin_skill_to_detected_tools(fake_home: Path) -> None:
 def test_cli_json_list_and_context(fake_home: Path, tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     project = tmp_path / "repo"
     project.mkdir()
@@ -208,7 +208,7 @@ def test_cli_json_list_and_context(fake_home: Path, tmp_path: Path) -> None:
 def test_optional_ctx_provider_is_merged_without_duplication(
     fake_home: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    import harness_config_manager.sessions as mod
+    import halter.sessions as mod
 
     project = tmp_path / "repo"
     project.mkdir()

@@ -18,8 +18,23 @@ function bootData(extra = {}) {
   };
 }
 
+// 设置浮层：语言 / 主题 / 关于（版本徽章）都收在侧栏底部 ⚙ 按钮之后
+async function openSettings(page) {
+  await page.locator("#btn-settings").click();
+  await expect(page.locator("#settings-panel")).toBeVisible();
+}
+
+// 自定义下拉（dd 组件替代原生 select）：点开按钮 → 点菜单项
+async function ddChoose(page, id, value) {
+  const wrap = page.locator(`.dd-wrap[data-dd-for="${id}"]`);
+  await wrap.locator(".dd-btn").click();
+  await wrap.locator(`.dd-item[data-value="${value}"]`).click();
+}
+
 test("boot 显示运行时版本与工具总览", async ({ page }) => {
   await openApp(page, bootData());
+  await openSettings(page);
+  await expect(page.locator("#halter-version")).toBeVisible();
   await expect(page.locator("#halter-version")).toHaveText("halter 0.1.0");
   await expect(page.locator("#halter-version")).not.toHaveClass(/mismatch/);
   await expect(page.locator("#tools-heading")).toHaveText("Harness（1）");
@@ -37,6 +52,7 @@ test("doctor 健康检查文案跟随语言切换（code 驱动）", async ({ pa
   await openApp(page, bootData({ halter_scan: scan }));
   await expect(page.locator(".doctor-item").first())
     .toContainText("断链（指向 /home/dev/.agents/skills/paper-polish 不存在）");
+  await openSettings(page);
   await page.locator("#lang-en").click();
   await expect(page.locator(".doctor-item").first())
     .toContainText("Broken link (target /home/dev/.agents/skills/paper-polish does not exist)");
@@ -48,6 +64,7 @@ test("runtime 版本与桌面期望不一致时给出 mismatch 告警", async ({
   await openApp(page, bootData({
     halter_version: { version: "0.0.1-old", desktop: "0.1.0" },
   }));
+  await openSettings(page);
   const badge = page.locator("#halter-version");
   await expect(badge).toHaveClass(/mismatch/);
   await expect(badge).toHaveText(/0\.0\.1-old/);
@@ -83,7 +100,7 @@ test("matrix 悬停 skill 显示功能与描述预览卡", async ({ page }) => {
   const card = page.locator("#hover-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("语言润色");
-  await expect(card).toContainText("库链接");
+  await expect(card).toContainText("已链接工具");
 });
 
 test("切换语言中英文：文案、html lang、矩阵摘要与持久化", async ({ page }) => {
@@ -99,6 +116,7 @@ test("切换语言中英文：文案、html lang、矩阵摘要与持久化", as
   await openApp(page, bootData({ halter_scan: scan }));
   await expect(page.locator("#tools-heading")).toHaveText("Harness（1）");
 
+  await openSettings(page);
   await page.locator("#lang-en").click();
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.locator("#tools-heading")).toHaveText("Harness (1)");
@@ -114,10 +132,37 @@ test("切换语言中英文：文案、html lang、矩阵摘要与持久化", as
   await expect(page.locator("#tools-heading")).toHaveText("Harness (1)");
 
   // 切回中文
+  await openSettings(page);
   await page.locator("#lang-zh").click();
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
   await expect(page.locator("#tools-heading")).toHaveText("Harness（1）");
   await expect(page.locator(".nav-item.active")).toContainText("总览");
+});
+
+test("设置面板：主题三档切换与持久化、关于版本", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await openApp(page, bootData());
+  await openSettings(page);
+
+  // 默认跟随系统（emulate dark → 深色）
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("#theme-auto")).toHaveClass(/active/);
+
+  // 切浅色：主题属性即时切换，reload 后仍为浅色（localStorage 持久化）
+  await page.locator("#theme-light").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+  // 关于：版本徽章收进设置面板
+  await openSettings(page);
+  await expect(page.locator("#halter-version")).toHaveText("halter 0.1.0");
+
+  // 切回跟随系统（深色）；点面板外自动收起
+  await page.locator("#theme-auto").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.locator("#view-overview h1").click();
+  await expect(page.locator("#settings-panel")).toBeHidden();
 });
 
 test("matrix 点击圆点单元格触发定向同步并刷新矩阵", async ({ page }) => {
@@ -233,8 +278,13 @@ test("机器下拉切换远端矩阵：幽灵行推送与行级拉取", async ({
     halter_version: { version: "0.1.0", desktop: "0.1.0" },
     halter_scan: localScan,
     halter_machines_list: {
-      count: 1,
-      machines: [{ name: "desktop", host: "10.0.0.2", user: null, port: 22, halter_path: "halter" }],
+      count: 2,
+      local: { host_name: "WSLBOX", os: "wsl" },
+      machines: [
+        { name: "desktop", host: "10.0.0.2", user: null, port: 22, halter_path: "halter",
+          local: false, host_name: "studio.example", os: "linux" },
+        { name: "self", host: "127.0.0.1", user: null, port: 2222, halter_path: "halter", local: true },
+      ],
     },
   });
 
@@ -248,8 +298,14 @@ test("机器下拉切换远端矩阵：幽灵行推送与行级拉取", async ({
   });
 
   await page.locator('.nav-item[data-view="matrix"]').click();
-  await expect(page.locator("#matrix-machine-select")).toContainText("desktop");
-  await page.locator("#matrix-machine-select").selectOption("desktop");
+  const machineDD = page.locator('.dd-wrap[data-dd-for="global-machine-select"]');
+  // 本机选项显示真实主机名；远端显示远端主机名（sub = ssh 名）
+  await expect(machineDD.locator(".dd-btn")).toContainText("WSLBOX");
+  await machineDD.locator(".dd-btn").click();
+  await expect(machineDD.locator(".dd-menu")).toContainText("studio.example");
+  // 回环条目（local）即本机，折叠不进下拉框
+  await expect(machineDD.locator(".dd-menu")).not.toContainText("self");
+  await machineDD.locator('.dd-item[data-value="desktop"]').click();
 
   // 远端矩阵 = codex 列；本机对照产生幽灵行 alpha 与 beta 的拉取按钮
   await expect(page.locator(".mx-tool-head", { hasText: "codex" })).toBeVisible();
@@ -269,6 +325,67 @@ test("机器下拉切换远端矩阵：幽灵行推送与行级拉取", async ({
     layer: "skills", item: "beta", to: null, from: "desktop", withSecrets: false,
   });
   await expect(page.locator("#matrix-toast")).toContainText("add    beta");
+});
+
+test("机器作用域：切换后 sessions/memory/providers 请求都带 machine 并持久化", async ({ page }) => {
+  // 先选机器、视图在机器之下：侧栏全局选择器切换时重载当前视图，
+  // 其余视图在进入时按当前机器取数；选择持久化到 localStorage
+  await openApp(page, {
+    halter_version: { version: "0.1.0", desktop: "0.1.0" },
+    halter_scan: SCAN,
+    halter_machines_list: {
+      count: 2,
+      local: { host_name: "WSLBOX", os: "wsl" },
+      machines: [
+        { name: "desktop", host: "10.0.0.2", user: null, port: 22, halter_path: "halter",
+          local: false, host_name: "studio.example", os: "linux" },
+        { name: "self", host: "127.0.0.1", user: null, port: 2222, halter_path: "halter", local: true },
+      ],
+    },
+  });
+  await setHandler(page, "halter_sessions_projects", () => (args) => {
+    window.__projArgs = args;
+    return { count: 0, projects: [] };
+  });
+  await setHandler(page, "halter_sessions_list", () => (args) => {
+    window.__listArgs = args;
+    return { project: "all", count: 0, sessions: [] };
+  });
+  await setHandler(page, "halter_memory_show", () => (args) => {
+    window.__memArgs = args;
+    return { library: { path: "/h/.agents/AGENTS.md", exists: true, content: "x" }, tools: [] };
+  });
+  await setHandler(page, "halter_providers_list", () => (args) => {
+    window.__pvArgs = args;
+    return {
+      count: 0, providers: [], presets: [],
+      current: {
+        claude: { status: "official", provider: "", base_url: "", model: "" },
+        codex: { status: "official", provider: "", base_url: "", model: "" },
+      },
+    };
+  });
+
+  // 本机：sessions 不带 machine
+  await page.locator('.nav-item[data-view="sessions"]').click();
+  await page.waitForFunction(() => window.__listArgs);
+  expect((await page.evaluate(() => window.__listArgs)).machine).toBeUndefined();
+
+  // 切到 desktop：当前 sessions 视图自动重载并携带 machine
+  await ddChoose(page, "global-machine-select", "desktop");
+  await page.waitForFunction(() => window.__listArgs && window.__listArgs.machine === "desktop");
+  expect((await page.evaluate(() => window.__projArgs)).machine).toBe("desktop");
+
+  // 其余视图进入时也在所选机器之下
+  await page.locator('.nav-item[data-view="memory"]').click();
+  await page.waitForFunction(() => window.__memArgs && window.__memArgs.machine === "desktop");
+  await page.locator('.nav-item[data-view="providers"]').click();
+  await page.waitForFunction(() => window.__pvArgs && window.__pvArgs.machine === "desktop");
+
+  // reload 后 boot 恢复机器作用域（选择器值 + localStorage）
+  await page.reload();
+  await expect(page.locator("#global-machine-select")).toHaveValue("desktop");
+  expect(await page.evaluate(() => localStorage.getItem("halter-machine"))).toBe("desktop");
 });
 
 // ---------------- providers 面板 ----------------
@@ -291,8 +408,10 @@ const PROVIDERS = {
   providers: [
     {
       id: "zhipu", label: "Zhipu GLM", tools: ["claude", "codex"], builtin: false,
-      claude: { base_url: "https://open.bigmodel.cn/api/anthropic", model: "glm-5.3[1M]" },
-      codex: { base_url: "http://127.0.0.1:8787/api/v1", model: "glm-5.3" },
+      claude: { base_url: "https://open.bigmodel.cn/api/anthropic", model: "glm-5.3[1M]",
+                env: { ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.3[1M]",
+                       ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]" } },
+      codex: { base_url: "http://127.0.0.1:8787/api/v1", model: "glm-5.3", wire_api: "responses" },
     },
     { id: "official", label: "official", tools: ["claude", "codex"], builtin: true },
   ],
@@ -301,6 +420,11 @@ const PROVIDERS = {
       status: "external", provider: "",
       base_url: "https://open.bigmodel.cn/api/anthropic",
       model: "glm-5.3-flash[1M]", detail: "端点不在 halter 清单中",
+      env: {
+        ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
+        ANTHROPIC_MODEL: "glm-5.3-flash[1M]",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.3-flash[1M]",
+      },
     },
     codex: {
       status: "halter", provider: "zhipu",
@@ -320,10 +444,22 @@ test("providers：external 当前卡、列表渲染与一键切换参数", async
 
   await page.locator('.nav-item[data-view="providers"]').click();
 
-  // 当前卡：external 状态 + 端点 + 收编提示
+  // 当前卡：external 状态 + 端点 + 收编提示 + 「编辑」带入实况参数
   await expect(page.locator(".pv-current .pv-status")).toHaveText(/外部工具配置/);
   await expect(page.locator(".pv-current .dim")).toContainText("open.bigmodel.cn");
   await expect(page.locator(".pv-external-hint")).toContainText("收编现有配置");
+  await page.locator(".pv-current").dblclick();   // 双击外部配置卡进入收编表单
+  await expect(page.locator("#pv-form-title")).toHaveText("编辑当前外部配置（收编进清单）");
+  // 收编带入实况全部扁平托管键（端点/模型/档位映射）
+  expect(JSON.parse(await page.locator("#pv-def").inputValue())).toEqual({
+    ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
+    ANTHROPIC_MODEL: "glm-5.3-flash[1M]",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.3-flash[1M]" });
+  // 实况端点命中 zhipu 预设 → 预选之（收编时一眼看出厂商归属；标识无字段，保存时自动生成）
+  await expect(page.locator("#pv-preset")).toHaveValue("zhipu");
+  await expect(page.locator("#pv-preset")).toBeEnabled();
+  await expect(page.locator("#pv-tool")).toBeDisabled();
+  await page.locator("#btn-providers-form-close").click();
 
   // 列表：zhipu 可切换（非激活），official 内置徽标；codex 页签下 zhipu 是当前
   await expect(page.locator(".pv-row")).toHaveCount(2);
@@ -336,7 +472,7 @@ test("providers：external 当前卡、列表渲染与一键切换参数", async
   await expect(page.locator("#matrix-toast")).toContainText("claude: zhipu →");
 });
 
-test("providers：codex 页签显示当前徽标；添加表单提交 camelCase 参数", async ({ page }) => {
+test("providers：codex 页签显示当前徽标；添加表单以配置 JSON 提交", async ({ page }) => {
   await openApp(page, bootData({ halter_providers_list: PROVIDERS }));
   await setHandler(page, "halter_providers_list", ({ base }) => () => base, { base: PROVIDERS });
   await setHandler(page, "halter_providers_add", () => async (args) => {
@@ -345,30 +481,86 @@ test("providers：codex 页签显示当前徽标；添加表单提交 camelCase 
   });
 
   await page.locator('.nav-item[data-view="providers"]').click();
-  // codex 页签：zhipu 是当前激活 → 无切换按钮，带「当前」徽标
+  // codex 页签：zhipu 是当前激活（halter 态）→ 当前卡无动作行，行内无切换按钮
   await page.locator(".layer-tab", { hasText: "Codex" }).click();
+  await expect(page.locator(".pv-current.adoptable")).toHaveCount(0);
   const zhipuRow = page.locator(".pv-row", { hasText: "zhipu" });
   await expect(zhipuRow.locator(".pv-badge.current")).toHaveText("当前");
   await expect(zhipuRow.locator("button", { hasText: "切换" })).toHaveCount(0);
 
-  // 添加表单：填基础字段提交，参数为 camelCase；token 原样经 IPC 传递
+  // 添加表单（ccswitch 式配置 JSON）：填 JSON + token 提交；token 原样经 IPC 传递。
+  // 无预设 → 标识自动取端点域名 api.deepseek.com（codex 页签，工具跟随页签）
   await page.locator("#btn-providers-add").click();
-  await page.locator("#pv-id").fill("deepseek");
-  await page.locator("#pv-base-url").fill("https://api.deepseek.com/api/anthropic");
-  await page.locator("#pv-model").fill("deepseek-chat");
+  await page.locator("#pv-def").fill(JSON.stringify(
+    { base_url: "https://api.deepseek.com/api/anthropic", model: "deepseek-chat" }));
   await page.locator("#pv-token").fill("sk-test-token");
   await page.locator('#provider-add-form button[type="submit"]').click();
 
   const addArgs = await page.evaluate(() => window.__addArgs);
   expect(addArgs).toEqual({
-    id: "deepseek",
-    tool: "claude",
-    baseUrl: "https://api.deepseek.com/api/anthropic",
+    id: "api.deepseek.com",
+    tool: "codex",
+    def: '{"base_url":"https://api.deepseek.com/api/anthropic","model":"deepseek-chat"}',
     label: null,
-    model: "deepseek-chat",
     token: "sk-test-token",
   });
-  await expect(page.locator("#matrix-toast")).toContainText("新增 provider deepseek");
+  await expect(page.locator("#matrix-toast")).toContainText("已保存 api.deepseek.com");
+});
+
+test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑按钮 → halter_providers_edit）", async ({ page }) => {
+  await openApp(page, bootData({ halter_providers_list: PROVIDERS }));
+  await setHandler(page, "halter_providers_list", ({ base }) => () => base, { base: PROVIDERS });
+  await setHandler(page, "halter_providers_edit", () => async (args) => {
+    window.__editArgs = args;
+    return { ok: true, code: 0, stdout: "更新 zhipu 的 claude 块", stderr: "" };
+  });
+
+  await page.locator('.nav-item[data-view="providers"]').click();
+  // official 内置行没有编辑按钮；zhipu 行点击编辑
+  await expect(page.locator(".pv-row", { hasText: "official" })
+    .locator("button", { hasText: "编辑" })).toHaveCount(0);
+  await page.locator(".pv-row", { hasText: "zhipu" })
+    .locator("button", { hasText: "编辑" }).click();
+
+  // 编辑模式：标题带 id、工具/预设锁定、现有块预填为配置 JSON、token 占位符提示保持不变
+  await expect(page.locator("#pv-form-title")).toHaveText("编辑供应商 zhipu（claude）");
+  await expect(page.locator("#pv-tool")).toBeDisabled();
+  await expect(page.locator("#pv-preset")).toBeDisabled();
+  await expect(page.locator("#pv-preset")).toHaveValue("zhipu");   // 锁定态按端点展示厂商
+  await expect(page.locator("#pv-label")).toHaveValue("Zhipu GLM");
+  await expect(page.locator("#pv-token")).toHaveAttribute("placeholder", "API token（留空 = 保持不变）");
+  expect(JSON.parse(await page.locator("#pv-def").inputValue())).toEqual({
+    ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
+    ANTHROPIC_MODEL: "glm-5.3[1M]",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.3[1M]",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]",
+  });
+
+  // 整体替换：加 Opus 档、删 Sonnet 档、Haiku 档保持、换主模型（def 紧凑序列化传 IPC）
+  await page.locator("#pv-def").fill(JSON.stringify({
+    ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
+    ANTHROPIC_MODEL: "glm-5.4[1M]",
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.4[1M]",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]",
+  }));
+  await page.locator('#provider-add-form button[type="submit"]').click();
+  const editArgs = await page.evaluate(() => window.__editArgs);
+  expect(editArgs).toEqual({
+    id: "zhipu",
+    tool: "claude",
+    def: '{"ANTHROPIC_BASE_URL":"https://open.bigmodel.cn/api/anthropic","ANTHROPIC_MODEL":"glm-5.4[1M]",'
+      + '"ANTHROPIC_DEFAULT_OPUS_MODEL":"glm-5.4[1M]",'
+      + '"ANTHROPIC_DEFAULT_HAIKU_MODEL":"glm-5.3-flash[1M]"}',
+    label: "Zhipu GLM",
+    token: null,
+  });
+  await expect(page.locator("#matrix-toast")).toContainText("更新 zhipu");
+
+  // 重新点「添加供应商」恢复新增模式：JSON 回到 claude 模板
+  await page.locator("#btn-providers-add").click();
+  await expect(page.locator("#pv-form-title")).toHaveText("添加供应商");
+  expect(JSON.parse(await page.locator("#pv-def").inputValue()))
+    .toEqual({ ANTHROPIC_BASE_URL: "" });
 });
 
 test("providers：删除两步确认，第二次点击才真正调用", async ({ page }) => {
@@ -389,7 +581,7 @@ test("providers：删除两步确认，第二次点击才真正调用", async ({
   expect(await page.evaluate(() => window.__removeCalls)).toEqual([{ id: "zhipu" }]);
 });
 
-test("providers：预设下拉自动填充端点，不含当前工具时切工具", async ({ page }) => {
+test("providers：预设下拉把端点合入配置 JSON，不含当前工具时切工具", async ({ page }) => {
   await openApp(page, bootData({ halter_providers_list: PROVIDERS }));
   await setHandler(page, "halter_providers_list", ({ base }) => () => base, { base: PROVIDERS });
 
@@ -398,16 +590,18 @@ test("providers：预设下拉自动填充端点，不含当前工具时切工�
   await expect(page.locator("#pv-preset")).toContainText("自定义（手填端点）");
   await expect(page.locator("#pv-preset")).toContainText("zhipu · Zhipu GLM");
 
-  // 选 zhipu：当前工具 claude 有块 → 直接填端点
-  await page.locator("#pv-preset").selectOption("zhipu");
-  await expect(page.locator("#pv-base-url")).toHaveValue("https://open.bigmodel.cn/api/anthropic");
+  // 选 zhipu：当前工具 claude 有块 → 端点合入 JSON（claude 为扁平托管键）、显示名跟随
+  await ddChoose(page, "pv-preset", "zhipu");
+  expect(JSON.parse(await page.locator("#pv-def").inputValue()).ANTHROPIC_BASE_URL)
+    .toBe("https://open.bigmodel.cn/api/anthropic");
   await expect(page.locator("#pv-label")).toHaveValue("Zhipu GLM");
 
-  // 换到 codex 工具不自动变端点；选 deepseek（无 codex 块）→ 自动切回 claude 并填端点
-  await page.locator("#pv-tool").selectOption("codex");
-  await page.locator("#pv-preset").selectOption("deepseek");
+  // 换到 codex 工具换模板；选 deepseek（无 codex 块）→ 自动切回 claude 并合入端点
+  await ddChoose(page, "pv-tool", "codex");
+  await ddChoose(page, "pv-preset", "deepseek");
   await expect(page.locator("#pv-tool")).toHaveValue("claude");
-  await expect(page.locator("#pv-base-url")).toHaveValue("https://api.deepseek.com/anthropic");
+  expect(JSON.parse(await page.locator("#pv-def").inputValue()).ANTHROPIC_BASE_URL)
+    .toBe("https://api.deepseek.com/anthropic");
 });
 
 test("providers：文案跟随语言切换", async ({ page }) => {
@@ -416,8 +610,101 @@ test("providers：文案跟随语言切换", async ({ page }) => {
   await expect(page.locator("#view-providers h1")).toHaveText("模型供应商");
   await expect(page.locator(".pv-current .pv-cur-label")).toHaveText("当前激活");
 
+  await openSettings(page);
   await page.locator("#lang-en").click();
   await expect(page.locator("#view-providers h1")).toHaveText("Model Providers");
   await expect(page.locator(".pv-current .pv-cur-label")).toHaveText("Active");
   await expect(page.locator(".pv-current .pv-status")).toHaveText(/external tool config/);
+});
+
+// ---------------- updates 面板 ----------------
+
+const UPDATES = {
+  platform: "macOS",
+  npm_available: true,
+  tools: [
+    { key: "claude", display: "Claude Code", npm_package: "@anthropic-ai/claude-code",
+      installed: true, current: "2.1.292", latest: "2.1.292", state: "latest",
+      install: [
+        "bash -c 'tmp=$(mktemp) && curl -fsSL https://claude.ai/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'",
+        "npm install -g @anthropic-ai/claude-code@latest",
+      ] },
+    { key: "codex", display: "Codex", npm_package: "@openai/codex",
+      installed: true, current: "0.158.0", latest: "0.160.1", state: "upgradeable",
+      install: ["npm install -g @openai/codex@latest"] },
+    { key: "pi", display: "Pi", npm_package: "@earendil-works/pi-coding-agent",
+      installed: true, current: "0.83.0", latest: "0.73.1", state: "ahead",
+      install: ["npm install -g @earendil-works/pi-coding-agent@latest"] },
+    { key: "kimi", display: "Kimi Code", npm_package: "@moonshot-ai/kimi-code",
+      installed: false, current: null, latest: "2.1.1", state: "missing",
+      install: ["npm install -g @moonshot-ai/kimi-code@latest"] },
+  ],
+};
+
+test("updates：版本卡片渲染与整卡红绿灰状态", async ({ page }) => {
+  await openApp(page, bootData({ halter_update_status: UPDATES }));
+
+  await page.locator('.nav-item[data-view="updates"]').click();
+
+  // 已最新：绿卡（绿描边着色类）+ 状态徽标（文字 + 颜色双通道）；无任何动作按钮
+  const claudeCard = page.locator(".up-card", { hasText: "Claude Code" });
+  await expect(claudeCard).toHaveClass(/state-latest/);
+  await expect(claudeCard.locator(".up-state")).toHaveClass(/ok/);
+  await expect(claudeCard.locator(".up-state")).toHaveText("已就绪");
+  await expect(claudeCard.locator(".up-state")).toHaveAttribute("title", "已就绪");
+  // 卡内按钮均为安装命令的「复制」：官方脚本与 npm 各一行、逐行复制
+  await expect(claudeCard.locator("button")).toHaveCount(2);
+  await expect(claudeCard.locator(".up-copy")).toHaveCount(2);
+  await expect(claudeCard.locator(".up-copy").first()).toHaveText("复制");
+  const claudeCmds = claudeCard.locator(".up-install-cmd");
+  await expect(claudeCmds).toHaveCount(2);
+  await expect(claudeCmds.first()).toContainText("https://claude.ai/install.sh");
+  await expect(claudeCmds.first()).not.toContainText("npm install");
+  await expect(claudeCmds.nth(1)).toHaveText("npm install -g @anthropic-ai/claude-code@latest");
+  await expect(claudeCard.locator(".up-row-value")).toHaveText(["macOS", "2.1.292", "2.1.292"]);
+
+  // 待更新：红卡 + 状态徽标；未安装：灰卡（最新版可查、当前为 —）；均无按钮（升级走 CLI）
+  const codexCard = page.locator(".up-card", { hasText: "Codex" });
+  await expect(codexCard).toHaveClass(/state-upgradeable/);
+  await expect(codexCard.locator(".up-state")).toHaveClass(/upgradeable/);
+  await expect(codexCard.locator(".up-state")).toHaveText("待更新");
+  // 超前：current > latest 同为红卡（弃更/源码安装不再假绿），提示更新即降级
+  // （hasText 大小写不敏感，"Pi" 会误中 @anthropic-ai，故用包名片段定位）
+  const piCard = page.locator(".up-card", { hasText: "@earendil-works" });
+  await expect(piCard).toHaveClass(/state-ahead/);
+  await expect(piCard.locator(".up-state")).toHaveClass(/ahead/);
+  await expect(piCard.locator(".up-state")).toHaveText("高于最新");
+  await expect(piCard.locator(".up-state"))
+    .toHaveAttribute("title", "高于 registry 最新（疑似源码/预发布安装），此刻更新等于降级");
+  const kimiCard = page.locator(".up-card", { hasText: "Kimi Code" });
+  await expect(kimiCard).toHaveClass(/state-missing/);
+  await expect(kimiCard.locator(".up-state")).toHaveText("未安装");
+  await expect(kimiCard.locator(".up-row-value")).toHaveText(["macOS", "—", "2.1.1"]);
+  // 复制按钮 = 命令行数（claude 2 条 + codex/kimi/pi 各 1 条），没有其他动作按钮（升级走 CLI）
+  await expect(page.locator(".up-card button")).toHaveCount(5);
+  await expect(codexCard.locator(".up-install-cmd")).toHaveText("npm install -g @openai/codex@latest");
+
+  // 语言切换：已渲染的更新面板动态文案重渲染（状态徽标与悬停提示变英文）
+  await openSettings(page);
+  await page.locator("#lang-en").click();
+  const claudeBadgeEn = page.locator(".up-card", { hasText: "Claude Code" }).locator(".up-state");
+  await expect(claudeBadgeEn).toHaveText("Up to date");
+  await expect(claudeBadgeEn).toHaveAttribute("title", "Up to date");
+});
+
+test("updates：npm 不可用时显示告警且不出现动作按钮", async ({ page }) => {
+  const broken = {
+    ...UPDATES,
+    npm_available: false,
+    tools: UPDATES.tools.map((tool) => ({ ...tool, latest: null, state: "unknown" })),
+  };
+  await openApp(page, bootData({ halter_update_status: broken }));
+  await setHandler(page, "halter_update_status", ({ base }) => () => base, { base: broken });
+
+  await page.locator('.nav-item[data-view="updates"]').click();
+  await expect(page.locator("#updates-npm-warning")).toBeVisible();
+  await expect(page.locator("#updates-npm-warning")).toContainText("npm");
+  // npm 缺失：latest 全空 → 全部卡片徽标为「未知」；安装命令照常展示（复制按钮数 = 命令行数）
+  await expect(page.locator(".up-card .up-state").first()).toHaveText("未知");
+  await expect(page.locator(".up-card button")).toHaveCount(5);
 });

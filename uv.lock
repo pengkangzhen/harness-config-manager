@@ -30,7 +30,7 @@ wheels = [
 ]
 
 [[package]]
-name = "harness-config-manager"
+name = "halter"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

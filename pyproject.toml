@@ -1,5 +1,5 @@
 [project]
-name = "harness-config-manager"
+name = "halter"
 version = "0.1.0"
 description = "Detect, distribute, and recall user-level AI coding harness config and project-scoped session history."
 readme = "README.md"
@@ -31,12 +31,11 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/pengkangzhen/harness-config-manager"
-Issues = "https://github.com/pengkangzhen/harness-config-manager/issues"
+Repository = "https://github.com/pengkangzhen/halter"
+Issues = "https://github.com/pengkangzhen/halter/issues"
 
 [project.scripts]
-halter = "harness_config_manager:main"
-harness-config-manager = "harness_config_manager:cli_main"
+halter = "halter:main"
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"

@@ -1,4 +1,4 @@
-# harness-config-manager (`halter`) // [中文文档](README.zh-CN.md)
+# halter // [中文文档](README.zh-CN.md)
 
 统一检测、盘点、分发 AI 编码工具的用户级 **skills / MCP servers / 插件 / hooks / subagents**，并可调取当前项目的跨助手历史会话。
 
@@ -66,6 +66,9 @@ halter machines test desktop     # 连通性 + 远端 halter 可用性检查，�
 # 像操作本机一样操作远端
 halter scan --machine desktop --json
 halter sync --machine desktop --apply
+halter sessions list --machine desktop --all-projects   # 会话/记忆/供应商同理
+halter memory show --machine desktop
+halter providers list --machine desktop
 
 # 在机器之间搬单个条目（skills / agents / mcp / hooks）
 halter push skills paper-polishing --to desktop --apply
@@ -76,7 +79,7 @@ halter pull agents reviewer --from desktop --apply           # = push --from des
 
 语义：条目经幂等的 export/ingest 对传输——同名同内容视为 no-op；同名不同内容报冲突（默认跳过，`--prefer replace` 先备份目标侧再覆盖）。条目到达后落入远端库/清单，并由远端自己的 halter 分发到那台机器的已装工具——方言翻译绝不重复实现。MCP 定义以 `${VAR}` 占位符传输；真实密钥仅在 `--with-secrets` 时携带，合并进远端 `secrets.toml`（0600）。memory 层刻意不做跨机推送——单一全局记忆文件的合并语义适合 git/syncthing，不适合点对点复制。
 
-桌面 App 走同一通道：矩阵工具栏的机器下拉可切换查看任意已注册机器；本机有而远端缺的条目显示为幽灵行（点击即推送），远端独有的条目带拉取按钮。
+桌面 App 走同一通道，且机器优先：侧栏顶部的机器选择器先定作用域，总览 / 矩阵 / 会话 / 记忆 / 供应商五个视图都在所选机器之下（远端经 ssh 转发到那台机器的 halter 执行）；选择持久化，下次启动直接恢复。矩阵里本机有而远端缺的条目显示为幽灵行（点击即推送），远端独有的条目带拉取按钮。
 
 ## Session 连续性
 
@@ -112,19 +115,27 @@ halter providers adopt --apply
 # 列出供应商与各工具当前激活者（按真实配置文件实测推断）：
 halter providers list
 
-# 从内置预设新增（端点自动填，模型名自选）并切换；
-# token 只进 secrets.toml（0600），永不进清单：
+# 从内置预设新增（预设端点合入 --def 底部，模型名自选）并切换；
+# claude 的 --def 即 settings.json env 的扁平托管键（ANTHROPIC_* / CLAUDE_CODE_*），
+# 与 CC Switch「配置JSON」同构，可整块粘贴迁移；token 只进 secrets.toml（0600），
+# 永不进清单——def JSON 里刻意不放 token（防泄 argv）：
 echo "$KEY" | halter providers add zhipu --tool claude --preset zhipu \
-  --model glm-5.3 --token-stdin
+  --def '{"ANTHROPIC_MODEL": "glm-5.3", "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1M]"}' \
+  --token-stdin
 halter providers switch zhipu --tool claude
 
 # 切回官方默认端点：
 halter providers switch official --tool codex
+
+# 就地编辑供应商（--def 整体替换该工具块，JSON 里没写的键即移除；
+# 编辑激活中的供应商会按新定义重写实况配置）：
+halter providers edit zhipu --tool claude \
+  --def '{"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic", "ANTHROPIC_MODEL": "glm-5.3[1M]"}'
 ```
 
 内置预设（`halter providers presets`）目前覆盖 zhipu（claude + codex 双端点）、deepseek、moonshot——端点均有厂商官方文档背书；预设只固化端点，模型名始终由你自填。每次切换前都会把目标文件副本存入 `~/.config/halter/backups/providers/`，切坏了拷回来即可回滚。
 
-只动自家的键：claude 侧仅写 `~/.claude/settings.json` env 里的 `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` 托管键（env 其余键保持原样）；codex 侧仅写 `model_provider` / `model` 与 `[model_providers.halter_<id>]` 段，第三方段（如 CC Switch 写的）原样保留。`doctor` 会提示清单之外的自定义端点与 cc-switch 残留痕迹，双重管理无处藏身。桌面 App 的「供应商」面板支持一键切换、表单添加（预设自动填充端点）、收编与删除。
+只动自家的键：claude 侧仅写 `~/.claude/settings.json` env 里的 `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` 托管键（env 其余键保持原样）；codex 侧仅写 `model_provider` / `model` 与 `[model_providers.halter_<id>]` 段，第三方段（如 CC Switch 写的）原样保留。`doctor` 会提示清单之外的自定义端点与 cc-switch 残留痕迹，双重管理无处藏身。桌面 App 的「供应商」面板支持一键切换、CC Switch 式配置 JSON 编辑（实时校验，选预设自动合入端点）、就地编辑、收编与删除。
 
 **与 CC Switch / claude-code-router 的分工**：halter 是*静态配置层*——写的是「工具指向哪个供应商」，管密钥安全，不驻留进程。CC Switch 做同样的切换（独立 App 形态），halter 的 `adopt` 可直接收编它的配置；[claude-code-router](https://github.com/musistudio/claude-code-router) 是*运行时路由层*——常驻网关做逐请求路由、fallback 与可观测性。两层可组合：把本地网关端点注册为 halter 的一个普通 provider，像切换其它供应商一样切换到它。
 
@@ -190,7 +201,7 @@ uv run pytest               # 151 项单测，全部使用假 HOME，绝不触�
 dsh plugin --profile web add dsh-halter
 ```
 
-插件注册 `halter_cli` 只读 agent 工具（scan / assess / sessions list·show·context·search），以及面向人类的 `/halter` 斜杠命令（完整 CLI）——写操作（`sync --apply`、`sessions install`）永远不会开放给模型。源码在 [`dsh-plugin/`](dsh-plugin/)；halter 本体需单独安装（`uv tool install harness-config-manager`）。
+插件注册 `halter_cli` 只读 agent 工具（scan / assess / sessions list·show·context·search），以及面向人类的 `/halter` 斜杠命令（完整 CLI）——写操作（`sync --apply`、`sessions install`）永远不会开放给模型。源码在 [`dsh-plugin/`](dsh-plugin/)；halter 本体需单独安装（`uv tool install git+https://github.com/pengkangzhen/halter.git`）。
 
 ## 桌面 App（Tauri + halter sidecar）
 

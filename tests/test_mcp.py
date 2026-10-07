@@ -8,7 +8,7 @@ import stat
 
 import tomlkit
 
-from harness_config_manager.mcp_manifest import (
+from halter.mcp_manifest import (
     McpSpec,
     _load_secrets,
     adopt_mcp,
@@ -17,7 +17,7 @@ from harness_config_manager.mcp_manifest import (
     collect_secret,
     spec_from_tool_entry,
 )
-from harness_config_manager.mcp_write import (
+from halter.mcp_write import (
     _normalize_for_compare,
     sync_mcp,
     write_claude,
@@ -193,7 +193,7 @@ def test_normalize_compare(fake_home: Path) -> None:
 
 
 def test_auto_mcp_source(fake_home: Path) -> None:
-    from harness_config_manager.mcp_manifest import auto_mcp_source
+    from halter.mcp_manifest import auto_mcp_source
     # claude 有 1 个，cursor 0 个 -> 选 claude
     _mk_claude_cfg(fake_home, {"zotero": {"type": "stdio", "command": "x"}})
     assert auto_mcp_source(["claude", "cursor"]) == "claude"
@@ -202,7 +202,7 @@ def test_auto_mcp_source(fake_home: Path) -> None:
 
 
 def test_plugin_provided_mcp(fake_home: Path) -> None:
-    from harness_config_manager.mcp import plugin_provided_mcp
+    from halter.mcp import plugin_provided_mcp
 
     # zcode 已启用 browser-use（宿主内置 node_repl）与 context7（.mcp.json 声明）
     cache = fake_home / ".zcode/cli/plugins/cache"
@@ -229,7 +229,7 @@ def test_plugin_provided_mcp(fake_home: Path) -> None:
 
 
 def test_doctor_dead_mcp_detection(fake_home: Path) -> None:
-    from harness_config_manager.doctor import run_doctor
+    from halter.doctor import run_doctor
 
     _mk_claude_cfg(fake_home, {
         "dead": {"type": "stdio", "command": "/no/such/binary"},
@@ -243,7 +243,7 @@ def test_doctor_dead_mcp_detection(fake_home: Path) -> None:
 
 
 def test_save_secrets_is_private_and_atomic(fake_home: Path, tmp_path: Path) -> None:
-    from harness_config_manager.mcp_manifest import save_secrets
+    from halter.mcp_manifest import save_secrets
 
     path = tmp_path / "config" / "secrets.toml"
     save_secrets({"API_TOKEN": "super-secret"}, path)
@@ -272,7 +272,7 @@ def test_url_credentials_become_placeholders_and_secret_values() -> None:
 
 
 def test_redaction_does_not_treat_max_tokens_as_secret() -> None:
-    from harness_config_manager.model import redact
+    from halter.model import redact
 
     assert redact({"max_tokens": 4096, "tokenizer": "cl100k"}) == {
         "max_tokens": 4096,
@@ -282,7 +282,7 @@ def test_redaction_does_not_treat_max_tokens_as_secret() -> None:
 
 
 def test_from_mcp_servers_ignores_non_object_container() -> None:
-    from harness_config_manager.mcp import _from_mcp_servers
+    from halter.mcp import _from_mcp_servers
 
     assert _from_mcp_servers(None) == []
     assert _from_mcp_servers([{"name": "bad"}]) == []

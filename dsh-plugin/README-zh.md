@@ -1,7 +1,7 @@
 # dsh-halter
 
 一个 [DeepSeek Harness](https://www.deepseek.com/harness/en) 插件：把
-[halter](https://github.com/pengkangzhen/harness-config-manager) CLI —— 管理所有 AI 编程
+[halter](https://github.com/pengkangzhen/halter) CLI —— 管理所有 AI 编程
 harness 的 skills / MCP servers / plugins / hooks / subagents 的唯一事实源 —— 以 agent 工具
 和斜杠命令的形式接进 dsh。
 
@@ -18,7 +18,7 @@ harness 的 skills / MCP servers / plugins / hooks / subagents 的唯一事实�
 halter 本体不随插件分发，需单独安装（Python 3.12+ / [uv](https://docs.astral.sh/uv/)）：
 
 ```bash
-uv tool install harness-config-manager
+uv tool install git+https://github.com/pengkangzhen/halter.git
 halter scan   # 自检
 ```
 

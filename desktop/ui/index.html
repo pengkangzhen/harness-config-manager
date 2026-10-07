@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Halter — Harness 配置管理器</title>
+  <script>
+    // 主题先行解析（完整逻辑在 app.js「settings & theme」节）：避免浅色用户首帧闪暗色底
+    (function () {
+      try {
+        var mode = localStorage.getItem("halter-theme");
+        if (mode !== "dark" && mode !== "light") {
+          mode = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.dataset.theme = mode;
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -33,7 +45,14 @@
         </div>
         <div>
           <div class="brand-name">halter</div>
-          <div class="brand-sub">harness config manager</div>
+          <div class="brand-sub">config manager for AI coding harnesses</div>
+        </div>
+      </div>
+      <div class="machine-scope">
+        <span class="machine-scope-label" data-i18n="mx.machineLabel">机器</span>
+        <div class="machine-scope-row">
+          <select id="global-machine-select" class="machine-select" data-i18n-title="mx.machineSelect" aria-label="machine"></select>
+          <button id="btn-machines-manage" class="btn btn-sm machines-manage" type="button" data-i18n-title="mx.machinesManage" data-i18n-aria-label="mx.machinesManage">⌗</button>
         </div>
       </div>
       <nav class="nav">
@@ -50,17 +69,58 @@
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2.5px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/></svg></span> <span data-i18n="nav.memory">记忆</span>
         </button>
         <button class="nav-item" data-view="providers">
-          <span class="nav-icon">⚡</span> <span data-i18n="nav.providers">供应商</span>
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2.5px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span> <span data-i18n="nav.providers">供应商</span>
+        </button>
+        <button class="nav-item" data-view="updates">
+          <span class="nav-icon">⇧</span> <span data-i18n="nav.updates">更新</span>
         </button>
       </nav>
       <div class="sidebar-footer">
-        <div class="lang-toggle" role="group" data-i18n-aria-label="lang.label" aria-label="语言">
-          <button id="lang-zh" type="button" class="lang-btn active">中</button>
-          <button id="lang-en" type="button" class="lang-btn">EN</button>
-        </div>
-        <div id="halter-version" class="version-pill">halter …</div>
+        <button id="btn-settings" class="settings-btn" type="button">
+          <span class="nav-icon" aria-hidden="true">⚙</span> <span data-i18n="st.button">设置</span>
+        </button>
       </div>
     </aside>
+
+    <!-- 设置浮层：语言 / 主题 / 关于（版本徽章） -->
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-row">
+        <span class="settings-label" data-i18n="lang.label">语言</span>
+        <div class="seg-toggle" role="group" data-i18n-aria-label="lang.label" aria-label="语言">
+          <button id="lang-zh" type="button" class="seg-btn active">中</button>
+          <button id="lang-en" type="button" class="seg-btn">EN</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label" data-i18n="st.theme">主题</span>
+        <div class="seg-toggle" role="group" data-i18n-aria-label="st.theme" aria-label="主题">
+          <button id="theme-auto" type="button" class="seg-btn active" data-i18n="st.themeAuto">跟随系统</button>
+          <button id="theme-dark" type="button" class="seg-btn" data-i18n="st.themeDark">深色</button>
+          <button id="theme-light" type="button" class="seg-btn" data-i18n="st.themeLight">浅色</button>
+        </div>
+      </div>
+      <div class="settings-row settings-about">
+        <span class="settings-label" data-i18n="st.about">关于</span>
+        <div id="halter-version" class="version-pill">halter …</div>
+      </div>
+    </div>
+
+    <div id="machines-panel" class="machines-panel hidden">
+      <div class="machines-panel-head">
+        <span data-i18n="mx.machinesTitle">远程机器</span>
+        <button id="btn-machines-close" class="btn btn-sm" type="button" data-i18n="mx.machinesClose">✕</button>
+      </div>
+      <div id="machines-list"></div>
+      <form id="machine-add-form" class="machine-add-form">
+        <input id="machine-name" data-i18n-placeholder="mx.machineName" placeholder="名称（如 desktop）" autocomplete="off" />
+        <input id="machine-host" data-i18n-placeholder="mx.machineHost" placeholder="ssh 主机名 / IP" autocomplete="off" />
+        <input id="machine-user" data-i18n-placeholder="mx.machineUser" placeholder="用户（可选）" autocomplete="off" />
+        <input id="machine-port" data-i18n-placeholder="mx.machinePort" placeholder="端口 22" inputmode="numeric" autocomplete="off" />
+        <input id="machine-halter-path" data-i18n-placeholder="mx.machineHalterPath" placeholder="远端 halter 路径（可选）" autocomplete="off" />
+        <button type="submit" class="btn btn-sm" data-i18n="mx.machineAdd">添加</button>
+      </form>
+      <div class="dim machines-note" data-i18n="mx.machineHint">远端需装有 halter 且 ssh 免密；连通性用 halter machines test 检查</div>
+    </div>
 
     <main class="main">
       <!-- ============ Overview ============ -->
@@ -88,8 +148,6 @@
         <header class="view-header">
           <h1 data-i18n="mx.heading">配置矩阵</h1>
           <div class="header-actions">
-            <select id="matrix-machine-select" class="machine-select" data-i18n-title="mx.machineSelect" aria-label="machine"></select>
-            <button id="btn-matrix-machines" class="btn" data-i18n="mx.machines">⌗ 机器</button>
             <label class="gap-toggle"><input type="checkbox" id="matrix-harness-only" checked /> <span data-i18n="mx.harnessOnly">仅 AI Harness</span></label>
             <label class="gap-toggle"><input type="checkbox" id="matrix-gaps-only" /> <span data-i18n="mx.gapsOnly">仅显示缺口</span></label>
             <label class="gap-toggle"><input type="checkbox" id="matrix-include-sessions" checked /> <span data-i18n="mx.syncIncludeSessions">含 sessions skill</span></label>
@@ -99,22 +157,6 @@
           </div>
         </header>
         <pre id="matrix-sync-output" class="sync-output hidden"></pre>
-        <div id="machines-panel" class="machines-panel hidden">
-          <div class="machines-panel-head">
-            <span data-i18n="mx.machinesTitle">远程机器</span>
-            <button id="btn-machines-close" class="btn btn-sm" type="button" data-i18n="mx.machinesClose">✕</button>
-          </div>
-          <div id="machines-list"></div>
-          <form id="machine-add-form" class="machine-add-form">
-            <input id="machine-name" data-i18n-placeholder="mx.machineName" placeholder="名称（如 desktop）" autocomplete="off" />
-            <input id="machine-host" data-i18n-placeholder="mx.machineHost" placeholder="ssh 主机名 / IP" autocomplete="off" />
-            <input id="machine-user" data-i18n-placeholder="mx.machineUser" placeholder="用户（可选）" autocomplete="off" />
-            <input id="machine-port" data-i18n-placeholder="mx.machinePort" placeholder="端口 22" inputmode="numeric" autocomplete="off" />
-            <input id="machine-halter-path" data-i18n-placeholder="mx.machineHalterPath" placeholder="远端 halter 路径（可选）" autocomplete="off" />
-            <button type="submit" class="btn btn-sm" data-i18n="mx.machineAdd">添加</button>
-          </form>
-          <div class="dim machines-note" data-i18n="mx.machineHint">远端需装有 halter 且 ssh 免密；连通性用 halter machines test 检查</div>
-        </div>
         <div id="matrix-error" class="error-box hidden"></div>
         <div id="matrix-loading" class="loading" data-i18n="mx.building">正在构建 Harness × 配置矩阵…</div>
         <div id="matrix-content" class="hidden">
@@ -164,26 +206,24 @@
           </div>
         </div>
         <div class="sessions-layout">
-          <div class="sessions-left">
-            <div class="list-toolbar">
-              <span id="session-sort" class="session-sort" data-i18n="ss.sortRecent">↓ 按最近更新排序</span>
-              <span class="toolbar-spacer"></span>
-              <span id="session-count" class="session-count"></span>
-              <div class="view-toggle">
-                <button id="btn-view-list" type="button" class="toggle-btn" aria-pressed="false" data-i18n="ss.list">列表</button>
-                <button id="btn-view-timeline" type="button" class="toggle-btn active" aria-pressed="true" data-i18n="ss.timeline">时间线</button>
-              </div>
+          <div class="list-toolbar">
+            <span id="session-sort" class="session-sort" data-i18n="ss.sortRecent">↓ 按最近更新排序</span>
+            <span class="toolbar-spacer"></span>
+            <span id="session-count" class="session-count"></span>
+            <div class="view-toggle">
+              <button id="btn-view-list" type="button" class="toggle-btn" aria-pressed="false" data-i18n="ss.list">列表</button>
+              <button id="btn-view-timeline" type="button" class="toggle-btn active" aria-pressed="true" data-i18n="ss.timeline">时间线</button>
             </div>
-            <div id="sessions-list" class="sessions-list timeline"></div>
           </div>
-          <div class="sessions-right">
-            <div id="session-detail" class="session-detail empty">
-              <div class="empty-state">
-                <div class="empty-icon" aria-hidden="true">⌘</div>
-                <div class="empty-title" data-i18n="ss.emptyDetailTitle">选择一个会话</div>
-                <div class="empty-sub" data-i18n="ss.emptyDetailSub">查看元信息与最近对话，可生成交接上下文</div>
-              </div>
-            </div>
+          <div id="sessions-list" class="sessions-list timeline"></div>
+        </div>
+
+        <!-- 会话详情弹层：选中左侧会话才出现，不常驻占位 -->
+        <div id="session-modal" class="session-modal hidden" role="dialog" aria-modal="true">
+          <div class="session-modal-backdrop"></div>
+          <div class="session-modal-panel">
+            <button id="session-modal-close" class="session-modal-close" type="button" title="关闭" aria-label="关闭" data-i18n-title="ss.detailClose" data-i18n-aria-label="ss.detailClose">✕</button>
+            <div id="session-detail" class="session-detail"></div>
           </div>
         </div>
       </section>
@@ -231,7 +271,7 @@
         </p>
         <div id="providers-add-panel" class="machines-panel hidden">
           <div class="machines-panel-head">
-            <span data-i18n="pv.formTitle">添加供应商</span>
+            <span id="pv-form-title" data-i18n="pv.formTitle">添加供应商</span>
             <button id="btn-providers-form-close" class="btn btn-sm" type="button" data-i18n="pv.formClose">✕</button>
           </div>
           <form id="provider-add-form" class="provider-add-form">
@@ -239,21 +279,22 @@
               <select id="pv-preset" data-i18n-title="pv.formPresetTitle">
                 <option value="" data-i18n="pv.formPresetCustom">自定义（手填端点）</option>
               </select>
-              <input id="pv-id" data-i18n-placeholder="pv.formId" placeholder="id（如 zhipu）" autocomplete="off" required />
               <select id="pv-tool">
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
               </select>
-              <input id="pv-base-url" data-i18n-placeholder="pv.formBaseUrl" placeholder="API 端点 https://…" autocomplete="off" required />
               <input id="pv-label" data-i18n-placeholder="pv.formLabel" placeholder="显示名（可选）" autocomplete="off" />
-              <input id="pv-model" data-i18n-placeholder="pv.formModel" placeholder="模型名（可选）" autocomplete="off" />
               <input id="pv-token" type="password" data-i18n-placeholder="pv.formToken" placeholder="API token（可选；只存 secrets.toml）" autocomplete="new-password" />
-              <input id="pv-reasoning-effort" data-i18n-placeholder="pv.formEffort" placeholder="推理力度（codex 可选）" autocomplete="off" />
-              <input id="pv-context-window" data-i18n-placeholder="pv.formCtx" placeholder="上下文窗口 token（codex 可选）" inputmode="numeric" autocomplete="off" />
             </div>
+            <div class="pv-def-head">
+              <span class="pv-form-h" data-i18n="pv.formSecDef">配置 JSON</span>
+              <button id="pv-def-format" type="button" class="btn btn-sm" data-i18n="pv.defFormat">格式化</button>
+            </div>
+            <textarea id="pv-def" class="pv-def" spellcheck="false" autocomplete="off"></textarea>
+            <div id="pv-def-error" class="pv-def-error hidden"></div>
             <button type="submit" class="btn btn-sm" data-i18n="pv.formSubmit">保存</button>
           </form>
-          <div class="dim machines-note" data-i18n="pv.formHint">选预设自动填端点；claude 档位映射等高级项用 CLI：halter providers add --env KEY=VAL</div>
+          <div class="dim machines-note" id="pv-form-hint" data-i18n="pv.formHint">选预设自动填端点；档位映射与托管环境变量在表单内直接编辑。</div>
         </div>
         <div id="providers-error" class="error-box hidden"></div>
         <div id="providers-loading" class="loading" data-i18n="pv.loading">正在读取供应商清单…</div>
@@ -261,6 +302,25 @@
           <div id="providers-tool-tabs" class="layer-tabs"></div>
           <div id="providers-current"></div>
           <div id="providers-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ Updates ============ -->
+      <section id="view-updates" class="view">
+        <header class="view-header">
+          <h1 data-i18n="up.heading">Harness 更新</h1>
+          <div class="header-actions">
+            <button id="btn-refresh-updates" class="btn" data-i18n="up.refresh">↻ 刷新</button>
+          </div>
+        </header>
+        <p class="sync-note" data-i18n="up.note">
+          各 npm 渠道 harness 的本机版本与 registry 最新版对比；升级用 CLI：halter update run &lt;tool&gt;；卡片底部附安装/升级命令，每条独立一行、各带复制（有官方安装脚本的脚本在前，npm 在后）。
+        </p>
+        <div id="updates-error" class="error-box hidden"></div>
+        <div id="updates-loading" class="loading" data-i18n="up.loading">正在检查 harness 版本…</div>
+        <div id="updates-content" class="hidden">
+          <div id="updates-npm-warning" class="up-npm-warning hidden" data-i18n="up.npmMissing"></div>
+          <div id="updates-grid" class="tools-grid"></div>
         </div>
       </section>
     </main>

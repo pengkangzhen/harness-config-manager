@@ -2,7 +2,7 @@
   "name": "halter-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "Harness Config Manager desktop app (Tauri + halter sidecar)",
+  "description": "Halter desktop app (Tauri + halter sidecar)",
   "scripts": {
     "tauri": "tauri",
     "dev": "npm run build:sidecar && tauri dev",

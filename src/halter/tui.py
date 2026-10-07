@@ -126,7 +126,7 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
             fields.append(("路径", str(path)))
         linked = [t for t, e in row.entries.items() if getattr(e, "linked", False)]
         if linked:
-            fields.append(("库链接", ", ".join(sorted(linked))))
+            fields.append(("已链接工具", ", ".join(sorted(linked))))
     elif layer == "agents":
         model = getattr(first, "model", None)
         fields.insert(0, ("model", model or "-"))
@@ -141,7 +141,7 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
         fields.insert(1, ("大小", f"{size}B"))
         linked = [t for t, e in row.entries.items() if getattr(e, "linked", False)]
         if linked:
-            fields.append(("库链接", ", ".join(sorted(linked))))
+            fields.append(("已链接工具", ", ".join(sorted(linked))))
     elif layer == "mcp":
         transport = getattr(first, "transport", "?")
         command = getattr(first, "command", None)
@@ -152,6 +152,9 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
     elif layer == "plugins":
         if row.merged:
             fields.insert(0, ("变体", "\n".join(sorted(row.merged))))
+        source = getattr(first, "source_url", None)
+        if source:
+            fields.append(("来源仓库", source))
     elif layer == "hooks":
         event = getattr(first, "event", "-")
         command = getattr(first, "command", None) or "-"

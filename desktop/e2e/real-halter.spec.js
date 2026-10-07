@@ -57,7 +57,8 @@ test.beforeAll(async () => {
   }
   const add = runCli(
     ["providers", "add", "demo", "--tool", "claude",
-      "--base-url", "https://example.com/api/anthropic", "--token-stdin"],
+      "--def", JSON.stringify({ ANTHROPIC_BASE_URL: "https://example.com/api/anthropic" }),
+      "--token-stdin"],
     "sk-e2e-token\n",
   );
   if (add.status !== 0) {
@@ -87,8 +88,12 @@ test.afterAll(() => {
 
 test("真通道 boot：真实版本与扫描渲染矩阵", async ({ page }) => {
   await page.goto(BASE);
+  // 版本徽章收进设置面板（侧栏底部 ⚙）
+  await page.locator("#btn-settings").click();
+  await expect(page.locator("#settings-panel")).toBeVisible();
   await expect(page.locator("#halter-version")).toHaveText(/^halter \d+\.\d+/);
   await expect(page.locator("#halter-version")).not.toHaveClass(/mismatch/);
+  await page.keyboard.press("Escape");
   // 工具检测依赖宿主 PATH，不锁定数量，只断言有种配置目录证据的 claude
   await expect(page.locator(".tool-card .tool-name").first()).toContainText(/./);
 
@@ -135,6 +140,32 @@ test("真通道 providers：切换真实写入 settings.json", async ({ page }) 
 
   const settings = JSON.parse(
     readFileSync(path.join(fakeHome, ".claude/settings.json"), "utf8"));
+  expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://example.com/api/anthropic");
+  expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-e2e-token");
+});
+
+test("真通道 providers：编辑激活供应商按新定义重写 settings.json", async ({ page }) => {
+  await page.goto(BASE);
+  await page.locator('.nav-item[data-view="providers"]').click();
+
+  const row = page.locator(".pv-row", { hasText: "demo" });
+  await row.locator("button", { hasText: "编辑" }).click();
+  // 预填来自 providers list --json（配置 JSON 整体替换）；token 留空 = 保持不变
+  expect(JSON.parse(await page.locator("#pv-def").inputValue()))
+    .toEqual({ ANTHROPIC_BASE_URL: "https://example.com/api/anthropic" });
+  await page.locator("#pv-def").fill(JSON.stringify({
+    ANTHROPIC_BASE_URL: "https://example.com/api/anthropic",
+    ANTHROPIC_MODEL: "demo-model-x",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.3",
+  }));
+  await page.locator('#provider-add-form button[type="submit"]').click();
+  await expect(page.locator("#matrix-toast")).toContainText("更新 demo");
+
+  // 上一测试已把 demo 切为激活 → 编辑后实况被重写（model 与档位映射落盘，token 原样）
+  const settings = JSON.parse(
+    readFileSync(path.join(fakeHome, ".claude/settings.json"), "utf8"));
+  expect(settings.env.ANTHROPIC_MODEL).toBe("demo-model-x");
+  expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-5.3");
   expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://example.com/api/anthropic");
   expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-e2e-token");
 });

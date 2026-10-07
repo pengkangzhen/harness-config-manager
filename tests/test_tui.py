@@ -8,15 +8,15 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from harness_config_manager.cli import app
-from harness_config_manager.model import (
+from halter.cli import app
+from halter.model import (
     McpServerInfo,
     MemoryInfo,
     PluginInfo,
     SkillInfo,
     ToolReport,
 )
-from harness_config_manager.tui import HalterTui
+from halter.tui import HalterTui
 
 runner = CliRunner()
 
@@ -127,7 +127,7 @@ def test_tui_requires_tty() -> None:
 
 
 async def _check_help_and_sort() -> None:
-    from harness_config_manager.tui import HelpScreen
+    from halter.tui import HelpScreen
 
     app_ = HalterTui(_reports())
     async with app_.run_test() as pilot:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from harness_config_manager.cli import app
+from halter.cli import app
 
 from conftest import make_skill
 
@@ -109,7 +109,7 @@ def test_memory_cell_scopes_to_one_tool(fake_home: Path) -> None:
 
 
 def test_mcp_cell_scopes_to_one_server_and_tool(fake_home: Path) -> None:
-    from harness_config_manager.mcp_manifest import McpSpec, save_manifest
+    from halter.mcp_manifest import McpSpec, save_manifest
 
     save_manifest([
         McpSpec(name="srv1", command="uvx", args=["srv1"]),
@@ -131,7 +131,7 @@ def test_mcp_cell_scopes_to_one_server_and_tool(fake_home: Path) -> None:
 
 
 def test_hooks_cell_matches_label_base(fake_home: Path) -> None:
-    from harness_config_manager.hooks_manifest import HookSpec, save_manifest
+    from halter.hooks_manifest import HookSpec, save_manifest
 
     save_manifest([
         HookSpec(id="gate", events=["PreToolUse"], command="echo gate"),

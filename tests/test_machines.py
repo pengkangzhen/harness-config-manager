@@ -7,8 +7,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from harness_config_manager.cli import app
-from harness_config_manager import machines as mach
+from halter.cli import app
+from halter import machines as mach
 
 runner = CliRunner()
 
@@ -151,6 +151,70 @@ def test_cli_add_list_remove(fake_home: Path) -> None:
 def test_cli_add_rejects_bad_name(fake_home: Path) -> None:
     r = runner.invoke(app, ["machines", "add", "my machine", "--host", "h"])
     assert r.exit_code == 2
+
+
+def test_machines_local_flag(fake_home: Path) -> None:
+    # 回环条目 = 本机：is_local 判定 + json 契约带 local 字段（下拉框据此折叠进「本机」）
+    assert mach.MachineSpec(name="a", host="127.0.0.1").is_local
+    assert mach.MachineSpec(name="b", host="LOCALHOST").is_local
+    assert mach.MachineSpec(name="c", host="::1").is_local
+    assert not mach.MachineSpec(name="d", host="10.0.0.2").is_local
+
+    mach.save_machines([
+        mach.MachineSpec(name="desktop-wsl", host="127.0.0.1", user="pk", port=2222),
+        mach.MachineSpec(name="mac", host="100.122.3.64"),
+    ])
+    r = runner.invoke(app, ["machines", "list", "--json"])
+    import json
+    data = json.loads(r.output)
+    by_name = {m["name"]: m for m in data["machines"]}
+    assert by_name["desktop-wsl"]["local"] is True
+    assert by_name["mac"]["local"] is False
+    # 表格输出对回环条目标注「即本机」
+    r = runner.invoke(app, ["machines", "list"])
+    assert "即本机" in r.output
+
+
+def test_probe_and_info_cache(fake_home: Path, monkeypatch) -> None:
+    # ssh 探测远端主机名/环境 → 缓存 → list --json 合并显示；本机信息随 list 输出
+    m = mach.MachineSpec(name="mac", host="100.122.3.64", user="pk")
+    monkeypatch.setattr(
+        mach, "run_ssh",
+        lambda mc, cmd, **kw: (0, b"MacBook-Air-3.local\nDarwin\n24.0.0\n", b""))
+    assert mach.probe_remote_info(m) == {"host_name": "MacBook-Air-3.local", "os": "macos"}
+    # WSL 内核标识 → wsl
+    monkeypatch.setattr(
+        mach, "run_ssh",
+        lambda mc, cmd, **kw: (0, b"DESKTOP-ABC\nLinux\n6.6-microsoft-standard-WSL2\n", b""))
+    assert mach.probe_remote_info(m)["os"] == "wsl"
+    # 探测失败不抛错
+    monkeypatch.setattr(mach, "run_ssh", lambda mc, cmd, **kw: (255, b"", b""))
+    assert mach.probe_remote_info(m) is None
+
+    mach.save_info_cache("mac", {"host_name": "MacBook-Air-3.local", "os": "macos"})
+    assert mach.load_info_cache()["mac"] == {"host_name": "MacBook-Air-3.local", "os": "macos"}
+    mach.save_machines([m])
+    import json
+    data = json.loads(runner.invoke(app, ["machines", "list", "--json"]).output)
+    assert data["machines"][0]["host_name"] == "MacBook-Air-3.local"
+    assert data["machines"][0]["os"] == "macos"
+    assert data["local"]["host_name"] and data["local"]["os"] in ("wsl", "linux", "macos", "windows")
+
+
+def test_cli_test_json_caches_host_info(fake_home: Path, monkeypatch) -> None:
+    # machines test --json：成功时探测远端主机名并写入缓存（UI 下拉显示名的来源）
+    mach.save_machines([mach.MachineSpec(name="mac", host="100.122.3.64")])
+    monkeypatch.setattr(mach, "probe_remote_halter",
+                        lambda m: (True, '{"version": "0.1.0"}'))
+    monkeypatch.setattr(mach, "run_ssh",
+                        lambda mc, cmd, **kw: (0, b"MacBook-Air-3.local\nDarwin\n24.0.0\n", b""))
+    r = runner.invoke(app, ["machines", "test", "mac", "--json"])
+    assert r.exit_code == 0
+    import json
+    payload = json.loads(r.output)
+    assert payload == {"ok": True, "version": "0.1.0",
+                       "host_name": "MacBook-Air-3.local", "os": "macos"}
+    assert mach.load_info_cache()["mac"]["host_name"] == "MacBook-Air-3.local"
 
 
 def test_cli_test_reports_unreachable(fake_home: Path, monkeypatch) -> None:

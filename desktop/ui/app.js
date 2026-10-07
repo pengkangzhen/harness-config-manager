@@ -82,13 +82,101 @@ function shortenPath(p) {
   return m ? "~" + m[1] : p;
 }
 
+/* ---------------- dd：自定义下拉（原生 select 的样式替代） ----------------
+   原生 select 隐藏保留为状态源（value / 表单读值 / change 事件全部不变），
+   弹层样式跨平台一致。选项动态增删由 MutationObserver 自动同步；
+   程序设值（sel.value = x）不触发事件，需补调 syncDD(sel) 刷新按钮显示；
+   底部空间不足时弹层自动向上翻转。 */
+
+const ddSync = new Map();
+
+function syncDD(sel) {
+  const fn = sel && ddSync.get(sel.id);
+  if (fn) fn();
+}
+
+function enhanceSelect(sel) {
+  if (!sel || sel.dataset.dd) return;
+  sel.dataset.dd = "1";
+  sel.classList.add("dd-native");
+  const wrap = el("div", "dd-wrap");
+  wrap.dataset.ddFor = sel.id;
+  sel.insertAdjacentElement("afterend", wrap);
+  const btn = el("button", "dd-btn");
+  btn.type = "button";
+  btn.setAttribute("aria-haspopup", "listbox");
+  const label = el("span", "dd-label");
+  btn.append(label, el("span", "dd-caret", "▾"));
+  const menu = el("div", "dd-menu");
+  menu.setAttribute("role", "listbox");
+  wrap.append(btn, menu);
+
+  const close = () => wrap.classList.remove("open", "dd-flip");
+  const syncLabel = () => {
+    const opt = sel.options[sel.selectedIndex];
+    label.textContent = opt
+      ? (opt.dataset.sub ? `${opt.text} · ${opt.dataset.sub}` : opt.text)
+      : "";
+    btn.disabled = sel.disabled;
+  };
+  const buildItems = () => {
+    menu.replaceChildren();
+    for (const opt of sel.options) {
+      const item = el("button", "dd-item" + (opt.selected ? " active" : ""));
+      item.type = "button";
+      item.dataset.value = opt.value;
+      item.setAttribute("role", "option");
+      item.append(el("span", "dd-item-main", opt.text));
+      if (opt.dataset.sub) item.append(el("span", "dd-item-sub", opt.dataset.sub));
+      item.addEventListener("click", () => {
+        sel.value = opt.value;
+        close();
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        syncLabel();
+      });
+      menu.append(item);
+    }
+  };
+  btn.addEventListener("click", () => {
+    const willOpen = !wrap.classList.contains("open");
+    document.querySelectorAll(".dd-wrap.open").forEach((w) => w.classList.remove("open"));
+    if (!willOpen) return;
+    buildItems();
+    wrap.classList.add("open");
+    // 按钮以下空间不足以容纳弹层时向上翻
+    const r = btn.getBoundingClientRect();
+    wrap.classList.toggle("dd-flip",
+      r.bottom + Math.min(menu.children.length * 32 + 12, 320) > innerHeight - 8);
+    const first = menu.querySelector(".dd-item.active") || menu.querySelector(".dd-item");
+    if (first) first.focus();
+  });
+  wrap.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); btn.focus(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const items = [...menu.querySelectorAll(".dd-item")];
+      if (!items.length) return;
+      const i = items.indexOf(document.activeElement);
+      const next = e.key === "ArrowDown" ? items[(i + 1) % items.length] : items[(i - 1 + items.length) % items.length];
+      next.focus();
+    }
+  });
+  document.addEventListener("click", (e) => { if (!wrap.contains(e.target)) close(); });
+  new MutationObserver(() => { syncLabel(); if (wrap.classList.contains("open")) buildItems(); })
+    .observe(sel, { childList: true, attributes: true, attributeFilter: ["disabled"] });
+  ddSync.set(sel.id, syncLabel);
+  syncLabel();
+}
+
+
 /* ---------------- global state ---------------- */
 
 const state = {
   scanCache: new Map(),    // machine("" = 本机) -> scan JSON
   machines: [],            // 已注册远程机器（halter machines list）
+  machinesLocal: null,     // 本机显示信息 {host_name, os}（同一次 list --json 的 local 节点）
   machinesLoaded: false,
-  machineFilter: "",       // "" = 本机；其他 = machines.toml 里的机器名
+  machine: "",       // "" = 本机；其他 = machines.toml 里的机器名
   sessionsLoaded: false,
   sessions: [],
   projects: [],
@@ -123,6 +211,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     if (btn.dataset.view === "sessions" && !state.sessionsLoaded) loadSessionsView();
     if (btn.dataset.view === "memory") loadMemory();
     if (btn.dataset.view === "providers") loadProviders();
+    if (btn.dataset.view === "updates") loadUpdates();
   });
 });
 
@@ -145,8 +234,8 @@ async function fetchScan(machine = "", force = false) {
   return data;
 }
 
-// 当前矩阵视图使用的 scan 缓存（"" = 本机）
-const scanCacheOf = (machine = state.machineFilter) => state.scanCache.get(machine) || null;
+// 当前视图使用的 scan 缓存（键 = 机器作用域，"" = 本机）
+const scanCacheOf = (machine = state.machine) => state.scanCache.get(machine) || null;
 
 async function loadOverview() {
   $("scan-error").classList.add("hidden");
@@ -154,7 +243,7 @@ async function loadOverview() {
   $("overview-content").classList.add("hidden");
   let data;
   try {
-    data = await fetchScan();
+    data = await fetchScan(state.machine);
   } catch (err) {
     $("scan-loading").classList.add("hidden");
     showError($("scan-error"), err);
@@ -218,7 +307,7 @@ function renderOverview(data) {
 }
 
 $("btn-refresh-scan").addEventListener("click", () => {
-  state.scanCache.delete("");
+  state.scanCache.delete(state.machine);
   loadOverview();
 });
 
@@ -272,8 +361,11 @@ function buildMatrix(scan, layerKey) {
     name,
     statuses: r.statuses,
     items: r.items,
-    // 预览用代表条目：优先取带 description 的（各工具同名条目内容一致）
-    item: r.items.find((x) => x.description) || r.items[0],
+    // 预览用代表条目：优先取带 description 的（各工具同名条目内容一致）；
+    // plugins 层优先取带 source_url 的（悬停卡与来源按钮取数据）
+    item: r.items.find((x) => x.description)
+      || r.items.find((x) => x.source_url)
+      || r.items[0],
     missing: tools.filter((x) => !r.statuses.has(x.tool)).length,
   }));
   list.sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
@@ -336,8 +428,8 @@ async function loadMatrix(force = false) {
   $("matrix-content").classList.add("hidden");
   let data;
   try {
-    data = await fetchScan(state.machineFilter, force);
-    if (state.machineFilter) {
+    data = await fetchScan(state.machine, force);
+    if (state.machine) {
       // 幽灵行/拉取按钮需要本机 scan 作对照；失败不阻塞远端矩阵展示
       try { await fetchScan("", force); } catch { /* 本机 scan 失败时跳过对照 */ }
     }
@@ -347,7 +439,6 @@ async function loadMatrix(force = false) {
     return;
   }
   if (!state.machinesLoaded) await loadMachines();
-  else renderMachineSelect();
   $("matrix-loading").classList.add("hidden");
   renderMatrixLayerTabs();
   renderMatrix(data);
@@ -431,6 +522,19 @@ function skillHoverBody(row) {
   return nodes;
 }
 
+function pluginHoverBody(row) {
+  const nodes = [el("div", "hc-name", row.name)];
+  const it = row.item || {};
+  const bits = [];
+  if (it.version) bits.push(`v${it.version}`);
+  if (it.marketplace) bits.push(it.marketplace);
+  if (bits.length) nodes.push(el("div", "hc-sub", bits.join(" · ")));
+  if (it.source_url) {
+    nodes.push(el("div", "hc-src", t("hv.sourceRepo", { url: it.source_url })));
+  }
+  return nodes;
+}
+
 function familyHoverBody(group) {
   const nodes = [el("div", "hc-name", t("hv.familyName", { root: group.root }))];
   nodes.push(el("div", "hc-sub", t("hv.familyCount", { n: group.members.length })));
@@ -457,7 +561,7 @@ function renderMatrix(scan) {
   const { tools, rows } = buildMatrix(scan, state.matrixLayer);
 
   // 跨机对照：远端视图下，本机行集用于「拉取」按钮与幽灵行
-  const crossCompare = state.machineFilter && PUSH_LAYERS.includes(layer.key)
+  const crossCompare = state.machine && PUSH_LAYERS.includes(layer.key)
     ? buildMatrix(scanCacheOf("") || { inventory: [] }, layer.key)
     : null;
   const localNames = crossCompare ? new Set(crossCompare.rows.map((r) => r.name)) : null;
@@ -523,11 +627,26 @@ function renderMatrix(scan) {
       nameCell.removeAttribute("title");
       attachHoverPreview(nameCell, () => skillHoverBody(row));
     }
+    if (layer.key === "plugins") {
+      nameCell.removeAttribute("title");
+      attachHoverPreview(nameCell, () => pluginHoverBody(row));
+    }
     nameCell.append(el("span", "", row.name));
+    // 来源仓库：市场清单/仓库页，点击用系统浏览器打开
+    if (layer.key === "plugins" && row.item && row.item.source_url) {
+      const src = el("button", "mx-src-btn", "↗");
+      src.title = t("mx.sourceHint", { url: row.item.source_url });
+      src.addEventListener("click", (e) => {
+        e.stopPropagation();
+        invoke("open_url", { url: row.item.source_url })
+          .catch((err) => showMatrixToast(t("mx.sourceFailed"), errorDetail(err), true));
+      });
+      nameCell.append(src);
+    }
     // 远端视图：本机没有的条目给一个「拉取到本机」入口
     if (localNames && !localNames.has(row.name)) {
       const pull = el("button", "mx-pull-btn", "↓");
-      pull.title = t("mx.pullHint", { item: row.name, machine: state.machineFilter });
+      pull.title = t("mx.pullHint", { item: row.name, machine: state.machine });
       pull.addEventListener("click", (e) => {
         e.stopPropagation();
         pullRemoteItem(row.name);
@@ -593,12 +712,12 @@ function renderMatrix(scan) {
 
   // 幽灵行：本机有、此机无的条目（远端视图专属），点击推送到当前机器
   if (ghostNames.length) {
-    const sep = el("div", "mx-ghost-sep", t("mx.ghostSection", { machine: state.machineFilter }));
+    const sep = el("div", "mx-ghost-sep", t("mx.ghostSection", { machine: state.machine }));
     sep.style.gridColumn = "1 / -1";
     grid.append(sep);
     for (const name of ghostNames) {
       const nameCell = el("div", "mx-name ghost");
-      nameCell.title = t("mx.ghostRowTitle", { item: name, machine: state.machineFilter });
+      nameCell.title = t("mx.ghostRowTitle", { item: name, machine: state.machine });
       nameCell.append(el("span", "", name));
       grid.append(nameCell);
       const cell = el("div", "mx-cell ghost-push", `→ ${t("mx.ghostPush")}`);
@@ -636,7 +755,7 @@ function attachCellSync(cell, tool, names, st) {
 }
 
 async function syncMatrixCell(cell, tool, names) {
-  const key = `sync|${state.machineFilter}|${tool}|${names.join(",")}`;
+  const key = `sync|${state.machine}|${tool}|${names.join(",")}`;
   if (syncBusyKeys.has(key)) return;
   syncBusyKeys.add(key);
   cell.classList.add("syncing");
@@ -648,7 +767,7 @@ async function syncMatrixCell(cell, tool, names) {
       layers: [state.matrixLayer],
       tool,
       items: names,
-      ...(state.machineFilter ? { machine: state.machineFilter } : {}),
+      ...(state.machine ? { machine: state.machine } : {}),
     });
   } catch (err) {
     invokeErr = err;
@@ -694,16 +813,16 @@ async function pushGhostItem(item, cell) {
   cell.classList.add("syncing");
   let result = null;
   try {
-    result = await pushEntry(state.matrixLayer, item, { to: state.machineFilter });
+    result = await pushEntry(state.matrixLayer, item, { to: state.machine });
   } catch (err) {
     cell.classList.remove("syncing");
-    showMatrixToast(t("mx.pushFailed", { item, machine: state.machineFilter }), errorDetail(err), true);
+    showMatrixToast(t("mx.pushFailed", { item, machine: state.machine }), errorDetail(err), true);
     return;
   }
   cell.classList.remove("syncing");
   const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
   showMatrixToast(
-    t(result.ok ? "mx.pushDone" : "mx.pushFailed", { item, machine: state.machineFilter }),
+    t(result.ok ? "mx.pushDone" : "mx.pushFailed", { item, machine: state.machine }),
     body || t("mx.syncNoop"),
     !result.ok,
   );
@@ -713,14 +832,14 @@ async function pushGhostItem(item, cell) {
 async function pullRemoteItem(item) {
   let result = null;
   try {
-    result = await pushEntry(state.matrixLayer, item, { from: state.machineFilter });
+    result = await pushEntry(state.matrixLayer, item, { from: state.machine });
   } catch (err) {
-    showMatrixToast(t("mx.pullFailed", { item, machine: state.machineFilter }), errorDetail(err), true);
+    showMatrixToast(t("mx.pullFailed", { item, machine: state.machine }), errorDetail(err), true);
     return;
   }
   const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
   showMatrixToast(
-    t(result.ok ? "mx.pullDone" : "mx.pullFailed", { item, machine: state.machineFilter }),
+    t(result.ok ? "mx.pullDone" : "mx.pullFailed", { item, machine: state.machine }),
     body || t("mx.syncNoop"),
     !result.ok,
   );
@@ -780,7 +899,10 @@ async function loadSessionProjects() {
   state.projectsError = null;
   let data;
   try {
-    data = await invoke("halter_sessions_projects", { project: currentProject() });
+    data = await invoke("halter_sessions_projects", {
+      project: currentProject(),
+      machine: state.machine || undefined,
+    });
   } catch (err) {
     if (requestId !== projectsRequestId) return;
     state.projectsError = errorDetail(err);
@@ -964,6 +1086,7 @@ async function loadSessions() {
       project: projectArg(),
       limit: 500,
       allProjects,
+      machine: state.machine || undefined,
     });
   } catch (err) {
     if (requestId !== sessionsRequestId) return;
@@ -1167,13 +1290,22 @@ function setViewMode(mode) {
 $("btn-view-list").addEventListener("click", () => setViewMode("list"));
 $("btn-view-timeline").addEventListener("click", () => setViewMode("timeline"));
 
-/* ---------- session detail ---------- */
+/* ---------- session detail（弹层：选中会话才出现，不常驻右栏） ---------- */
+
+function closeSessionModal() {
+  $("session-modal").classList.add("hidden");
+  const detail = $("session-detail");
+  detail.replaceChildren();
+  state.lastDetail = null;
+  document.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
+}
 
 async function selectSession(session, itemEl) {
   const requestId = ++sessionDetailRequestId;
   document.querySelectorAll(".session-item.selected").forEach((n) => n.classList.remove("selected"));
   if (itemEl) itemEl.classList.add("selected");
 
+  $("session-modal").classList.remove("hidden");
   const detail = $("session-detail");
   detail.className = "session-detail";
   detail.replaceChildren(el("div", "loading", t("ss.loadingDetail")));
@@ -1185,6 +1317,7 @@ async function selectSession(session, itemEl) {
       ref: session.ref,
       project,
       tail: 120,
+      machine: state.machine || undefined,
     });
   } catch (err) {
     if (requestId !== sessionDetailRequestId) return;
@@ -1359,6 +1492,7 @@ function renderSessionDetail(data) {
         ref: s.ref,
         project: s.project || state.projectFilter || ".",
         tail: 40,
+        machine: state.machine || undefined,
       });
       let block = detail.querySelector(".handoff-block");
       if (!block) {
@@ -1412,7 +1546,16 @@ function renderSessionDetail(data) {
   renderTraceStream(detail, messages);
 }
 
-$("btn-refresh-sessions").addEventListener("click", loadSessionsView);
+// 刷新会重扫列表，弹层里的详情会变陈旧，一并收起
+$("btn-refresh-sessions").addEventListener("click", () => {
+  closeSessionModal();
+  loadSessionsView();
+});
+$("session-modal-close").addEventListener("click", closeSessionModal);
+$("session-modal").querySelector(".session-modal-backdrop").addEventListener("click", closeSessionModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("session-modal").classList.contains("hidden")) closeSessionModal();
+});
 
 /* ---------- session search (follows project + harness filters) ---------- */
 
@@ -1431,6 +1574,7 @@ async function runSearch() {
       project: projectArg(),
       limit: 50,
       allProjects,
+      machine: state.machine || undefined,
     });
   } catch (err) {
     if (requestId !== searchRequestId) return;
@@ -1473,7 +1617,7 @@ function fullSyncLayers() {
 }
 
 async function runFullSync(apply) {
-  const key = `fullsync|${state.machineFilter}`;
+  const key = `fullsync|${state.machine}`;
   if (syncBusyKeys.has(key)) return;
   syncBusyKeys.add(key);
   const out = $("matrix-sync-output");
@@ -1485,7 +1629,7 @@ async function runFullSync(apply) {
     const result = await invoke("halter_sync", {
       apply,
       layers: fullSyncLayers(),
-      ...(state.machineFilter ? { machine: state.machineFilter } : {}),
+      ...(state.machine ? { machine: state.machine } : {}),
     });
     const parts = [];
     parts.push(`exit code: ${result.code} (${result.ok ? "ok" : "failed"})`);
@@ -1548,12 +1692,13 @@ function memToolState(t) {
 function renderMemory() {
   const snap = memoryState.snap;
   if (!snap) return;
+  const remote = !!state.machine; // 远端路径无法用本机 opener 打开
   const lib = snap.library;
   $("mem-library-path").textContent = lib.path;
   const badge = $("mem-library-badge");
   badge.textContent = lib.exists ? t("mem.badgeOk") : t("mem.badgeMissing");
   badge.classList.toggle("warn", !lib.exists);
-  $("btn-memory-open").classList.toggle("hidden", !lib.exists);
+  $("btn-memory-open").classList.toggle("hidden", !lib.exists || remote);
   $("mem-content").classList.toggle("hidden", !lib.exists);
   $("memory-editor").textContent = lib.content ?? "";
   const tools = $("mem-tools");
@@ -1567,7 +1712,7 @@ function renderMemory() {
     head.append(el("span", "mem-tool-display", item.display));
     head.append(el("span", "mem-tool-file", item.path.split("/").pop()));
     head.append(el("span", "toolbar-spacer"));
-    if (item.present) {
+    if (item.present && !remote) {
       const openBtn = el("button", "btn btn-sm", t("mem.open"));
       openBtn.addEventListener("click", () => {
         invoke("open_path", { path: item.path })
@@ -1594,7 +1739,9 @@ async function loadMemory() {
   $("memory-loading").classList.remove("hidden");
   $("memory-content").classList.add("hidden");
   try {
-    memoryState.snap = await invoke("halter_memory_show");
+    memoryState.snap = await invoke("halter_memory_show", {
+      machine: state.machine || undefined,
+    });
   } catch (err) {
     $("memory-loading").classList.add("hidden");
     showError($("memory-error"), err);
@@ -1612,41 +1759,106 @@ $("btn-memory-open").addEventListener("click", () => {
 
 $("btn-memory-refresh").addEventListener("click", () => loadMemory());
 
-/* ---------------- 机器：跨机视图的选择器与注册表管理 ---------------- */
+/* ---------------- 机器：全局作用域选择器 + 注册表管理 ---------------- */
+
+const OS_LABEL = { wsl: "WSL", macos: "macOS", linux: "Linux", windows: "Windows" };
 
 async function loadMachines() {
   try {
     const data = await invoke("halter_machines_list");
     state.machines = Array.isArray(data.machines) ? data.machines : [];
+    state.machinesLocal = data.local || null;
   } catch {
     state.machines = []; // 旧 sidecar 无此命令时静默退化为单机视图
+    state.machinesLocal = null;
   }
   state.machinesLoaded = true;
-  // 当前选中的机器可能已被删除
-  if (state.machineFilter && !state.machines.some((m) => m.name === state.machineFilter)) {
-    state.machineFilter = "";
+  // 当前选中的机器可能已被删除（local 条目不可选，等同已删除）
+  if (state.machine && !selectableMachines().some((m) => m.name === state.machine)) {
+    state.machine = "";
   }
   renderMachineSelect();
   renderMachinesPanel();
+  probeMissingHostNames();
+}
+
+// 可切换的远程机器：回环条目即本机，与「● 本机」选项重复，折叠不显示
+const selectableMachines = () => state.machines.filter((m) => !m.local);
+
+// 后台补探测：显示名缺 host_name 的机器跑一次 machines test（成功即写入后端缓存），
+// 全部完成后重拉列表刷新显示名；每台机器每次会话只探测一次，失败保持注册名。
+const machinesProbed = new Set();
+async function probeMissingHostNames() {
+  const pending = selectableMachines()
+    .filter((m) => !m.host_name && !machinesProbed.has(m.name));
+  if (!pending.length) return;
+  pending.forEach((m) => machinesProbed.add(m.name));
+  const settled = await Promise.allSettled(
+    pending.map((m) => invoke("halter_machines_test", { name: m.name })));
+  if (settled.some((r) => r.status === "fulfilled")) await loadMachines();
 }
 
 function renderMachineSelect() {
-  const sel = $("matrix-machine-select");
+  const sel = $("global-machine-select");
   if (!sel) return;
   sel.replaceChildren();
-  sel.append(new Option(t("mx.machineLocal"), ""));
-  for (const m of state.machines) sel.append(new Option(m.name, m.name));
-  sel.value = state.machineFilter;
-  sel.classList.toggle("has-remote", state.machines.length > 0);
+  const loc = state.machinesLocal;
+  const localOpt = document.createElement("option");
+  localOpt.value = "";
+  localOpt.text = loc?.host_name || t("mx.machineLocal");
+  localOpt.dataset.sub = loc
+    ? t("mx.machineLocalSub", { os: OS_LABEL[loc.os] || loc.os || "" })
+    : "";
+  sel.append(localOpt);
+  for (const m of selectableMachines()) {
+    const o = document.createElement("option");
+    o.value = m.name;
+    o.text = m.host_name || m.name;
+    o.dataset.sub = m.host_name ? m.name : "";
+    o.title = `${m.user ? `${m.user}@` : ""}${m.host}:${m.port || 22}`;
+    sel.append(o);
+  }
+  sel.value = state.machine;
+  sel.classList.toggle("has-remote", selectableMachines().length > 0);
+  syncDD(sel);
 }
 
-$("matrix-machine-select").addEventListener("change", (e) => {
-  state.machineFilter = e.target.value;
+// 切换机器作用域：所有视图的数据都在被切机器之下，快照类缓存全部作废
+// （scan 缓存按机器键保留，切回本机/远端无需重扫），然后重载当前视图。
+// 不设相等守卫：删除当前机器时 loadMachines 已把 state.machine 复位，
+// 这里仍需走完整失效路径。
+function setMachine(name) {
+  state.machine = name;
+  localStorage.setItem("halter-machine", name);
   state.expandedFamilies.clear();
-  loadMatrix();
+  state.sessionsLoaded = false;
+  state.sessions = [];
+  state.projects = [];
+  state.projectFilter = null;
+  state.toolFilters.clear();
+  memoryState.snap = null;
+  providersState.data = null;
+  updatesState.data = null;
+  renderMachineSelect();
+  reloadActiveView();
+}
+
+function reloadActiveView() {
+  const active = document.querySelector(".nav-item.active");
+  const view = active ? active.dataset.view : "overview";
+  if (view === "overview") loadOverview();
+  else if (view === "matrix") loadMatrix();
+  else if (view === "sessions") loadSessionsView();
+  else if (view === "memory") loadMemory();
+  else if (view === "providers") loadProviders();
+  else if (view === "updates") loadUpdates();
+}
+
+$("global-machine-select").addEventListener("change", (e) => {
+  setMachine(e.target.value);
 });
 
-$("btn-matrix-machines").addEventListener("click", () => {
+$("btn-machines-manage").addEventListener("click", () => {
   $("machines-panel").classList.toggle("hidden");
   renderMachinesPanel();
 });
@@ -1666,7 +1878,9 @@ function renderMachinesPanel() {
   for (const m of state.machines) {
     const row = el("div", "machine-row");
     const info = el("div", "machine-info");
-    info.append(el("span", "machine-name", m.name));
+    info.append(el("span", "machine-name", m.host_name || m.name));
+    if (m.host_name) info.append(el("span", "machine-origin dim", m.name));
+    if (m.local) info.append(el("span", "machine-origin", t("mx.machineIsLocal")));
     if (m.source === "ssh") {
       // ~/.ssh/config 自动发现：user/port 由 ssh 解析，只展示别名与解析到的账号
       info.append(el("span", "machine-host dim",
@@ -1687,11 +1901,9 @@ function renderMachinesPanel() {
         showMatrixToast(t("mx.machineRemove"), errorDetail(err), true);
         return;
       }
+      const wasCurrent = state.machine === m.name;
       await loadMachines();
-      if (state.machineFilter === m.name) {
-        state.machineFilter = "";
-        loadMatrix();
-      }
+      if (wasCurrent) setMachine("");
     });
     row.append(rm);
     listEl.append(row);
@@ -1722,16 +1934,64 @@ $("machine-add-form").addEventListener("submit", async (e) => {
   await loadMachines();
 });
 
-/* ---------------- language ---------------- */
+/* ---------------- settings：语言 / 主题 / 关于 ---------------- */
 
 $("lang-zh").addEventListener("click", () => setLang("zh"));
 $("lang-en").addEventListener("click", () => setLang("en"));
+
+// 主题三档：跟随系统 / 深色 / 浅色，持久化到 localStorage("halter-theme")；
+// index.html <head> 里有同逻辑的首帧预置，避免浅色用户加载时闪暗色底
+const THEME_MODES = ["auto", "dark", "light"];
+const themeMedia = window.matchMedia("(prefers-color-scheme: light)");
+
+function themeMode() {
+  let saved = null;
+  try { saved = localStorage.getItem("halter-theme"); } catch (e) { /* ignore */ }
+  return THEME_MODES.includes(saved) ? saved : "auto";
+}
+
+function applyTheme(mode = themeMode()) {
+  document.documentElement.dataset.theme =
+    mode === "auto" ? (themeMedia.matches ? "light" : "dark") : mode;
+  for (const m of THEME_MODES) {
+    const btn = document.getElementById(`theme-${m}`);
+    if (btn) btn.classList.toggle("active", m === mode);
+  }
+}
+
+function setTheme(mode) {
+  if (!THEME_MODES.includes(mode) || mode === themeMode()) return;
+  try { localStorage.setItem("halter-theme", mode); } catch (e) { /* ignore */ }
+  applyTheme(mode);
+}
+
+for (const mode of THEME_MODES) {
+  document.getElementById(`theme-${mode}`).addEventListener("click", () => setTheme(mode));
+}
+themeMedia.addEventListener("change", () => {
+  if (themeMode() === "auto") applyTheme("auto");
+});
+applyTheme();
+
+// 设置浮层开合：按钮切换；点面板外或 Esc 收起
+$("btn-settings").addEventListener("click", () => {
+  $("settings-panel").classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  const panel = $("settings-panel");
+  if (panel.classList.contains("hidden")) return;
+  if (panel.contains(e.target) || $("btn-settings").contains(e.target)) return;
+  panel.classList.add("hidden");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("settings-panel").classList.add("hidden");
+});
 
 // 静态文案由 i18n.js 的 applyI18n() 刷新；这里重渲染各视图的动态文案。
 // armed 的 Apply 按钮文案会被 applyI18n 覆盖，需按当前状态重设。
 document.addEventListener("halter:langchange", () => {
   if (applyArmed) $("btn-matrix-apply").textContent = t("mx.applyArmed");
-  if (state.scanCache.has("")) renderOverview(state.scanCache.get(""));
+  if (scanCacheOf()) renderOverview(scanCacheOf());
   renderMachineSelect();
   if (scanCacheOf()) {
     renderMatrixLayerTabs();
@@ -1744,6 +2004,7 @@ document.addEventListener("halter:langchange", () => {
   }
   if (memoryState.snap) renderMemory();
   if (providersState.data) renderProviders();
+  if (updatesState.data) renderUpdates();
 });
 
 /* ---------------- providers: 模型供应商切换（claude / codex） ---------------- */
@@ -1752,7 +2013,9 @@ const PV_TOOLS = [
   { key: "claude", labelKey: "pv.tabClaude" },
   { key: "codex", labelKey: "pv.tabCodex" },
 ];
-const providersState = { tool: "claude", data: null, removeArmed: null, removeTimer: null };
+
+const providersState = { tool: "claude", data: null, removeArmed: null, removeTimer: null,
+  form: { mode: "add", id: null, tool: null } };
 const pvBusy = new Set();
 
 async function loadProviders(force = false) {
@@ -1764,7 +2027,9 @@ async function loadProviders(force = false) {
   $("providers-loading").classList.remove("hidden");
   $("providers-content").classList.add("hidden");
   try {
-    providersState.data = await invoke("halter_providers_list");
+    providersState.data = await invoke("halter_providers_list", {
+      machine: state.machine || undefined,
+    });
   } catch (err) {
     showError($("providers-error"), err);
     return;
@@ -1788,13 +2053,15 @@ function renderProviders() {
   // 预设下拉（数据来自 providers list --json 的 presets 字段，单一事实源）
   const presetSel = $("pv-preset");
   const chosenPreset = presetSel.value;
-  presetSel.replaceChildren(el("option", "", t("pv.formPresetCustom")));
+  const customOpt = el("option", "", t("pv.formPresetCustom"));
+  customOpt.value = "";   // 缺 value 时 select.value 返回显示文本，会误当预设名
+  presetSel.replaceChildren(customOpt);
   for (const p of data.presets || []) {
     const opt = el("option", "", p.label ? `${p.name} · ${p.label}` : p.name);
     opt.value = p.name;
     presetSel.append(opt);
   }
-  if (chosenPreset) presetSel.value = chosenPreset;
+  if (chosenPreset) { presetSel.value = chosenPreset; syncDD(presetSel); }
 
   const tabs = $("providers-tool-tabs");
   tabs.replaceChildren();
@@ -1825,6 +2092,16 @@ function renderProviders() {
   currentCard.append(el("div", "pv-cur-label", t("pv.currentLabel")), curTitle, curMeta);
   if (cur.status === "external" && cur.detail) {
     currentCard.append(el("div", "pv-external-hint", t("pv.externalHint")));
+  }
+  if (cur.status === "external" && cur.base_url) {
+    // 外部配置不在清单里（列表无行可编辑）：双击当前卡进入收编表单——
+    // 带实况端点/模型/托管 env（claude 的 cur.env 为扁平托管键，档位映射等一并带入），
+    // 起个 id 保存即收编进清单（卡片即入口，不再放独立按钮）
+    currentCard.classList.add("adoptable");
+    currentCard.title = t("pv.externalHint");
+    currentCard.addEventListener("dblclick", () => openProviderForm("external", {
+      [tool]: { base_url: cur.base_url, model: cur.model || "", env: cur.env || {} },
+    }));
   }
   $("providers-current").replaceChildren(currentCard);
 
@@ -1857,6 +2134,11 @@ function renderProviderRow(p, tool, cur) {
   row.append(info);
 
   const actions = el("div", "pv-row-actions");
+  if (!p.builtin) {
+    const editBtn = el("button", "btn btn-sm", t("pv.edit"));
+    editBtn.addEventListener("click", () => openProviderForm("edit", p));
+    actions.append(editBtn);
+  }
   if (!isActive) {
     const switchBtn = el("button", "btn btn-sm", t("pv.switch"));
     switchBtn.addEventListener("click", () => switchProviderRow(p.id, tool));
@@ -1878,7 +2160,11 @@ async function switchProviderRow(id, tool) {
   let result = null;
   let invokeErr = null;
   try {
-    result = await invoke("halter_providers_switch", { id, tool });
+    result = await invoke("halter_providers_switch", {
+      id,
+      tool,
+      machine: state.machine || undefined,
+    });
   } catch (err) {
     invokeErr = err;
   }
@@ -1912,7 +2198,10 @@ function removeProviderRow(btn, id) {
     pvBusy.add(key);
     let result = null;
     try {
-      result = await invoke("halter_providers_remove", { id });
+      result = await invoke("halter_providers_remove", {
+        id,
+        machine: state.machine || undefined,
+      });
     } catch (err) {
       pvBusy.delete(key);
       showMatrixToast(t("pv.removeFail", { id }), errorDetail(err), true);
@@ -1942,14 +2231,157 @@ $("btn-refresh-providers").addEventListener("click", () => loadProviders(true));
 
 $("btn-providers-add").addEventListener("click", () => {
   const panel = $("providers-add-panel");
-  panel.classList.toggle("hidden");
-  if (!panel.classList.contains("hidden")) $("pv-id").focus();
+  // 新增模式已展开时按钮起开合作用；编辑/外部收编模式则切回新增表单
+  if (!panel.classList.contains("hidden") && providersState.form.mode === "add") {
+    panel.classList.add("hidden");
+    return;
+  }
+  openProviderForm("add");
 });
 $("btn-providers-form-close").addEventListener("click", () => {
   $("providers-add-panel").classList.add("hidden");
 });
 
-// 选中预设 → 自动填充端点/显示名；预设不含当前工具时切到它支持的第一个工具
+// 配置 JSON 编辑器（对标 CC Switch 的「配置JSON」）：整块定义即编辑内容，保存时
+// 整体替换——JSON 里没写的键就是没有。claude 侧即 settings.json env 的扁平托管键
+// （与 ccswitch / 手工配置同构，可整块粘贴迁移）；token 刻意不在 JSON 里（防进 argv）。
+function pvDefTemplate(tool) {
+  return tool === "claude"
+    ? { ANTHROPIC_BASE_URL: "" }
+    : { base_url: "", model: "", wire_api: "responses" };
+}
+
+// list --json 的工具块行 / external 实况 → def 对象（空值键不出现，与 CLI 校验口径一致）。
+// claude：base_url/model 映射回 ANTHROPIC_BASE_URL / ANTHROPIC_MODEL，env 扁平摊开
+//（external 的 cur.env 已含这两键，覆盖即等价）
+function pvDefFromSection(sec = {}) {
+  const def = {};
+  if (providersState.tool === "claude") {
+    if (sec.base_url) def.ANTHROPIC_BASE_URL = sec.base_url;
+    if (sec.model) def.ANTHROPIC_MODEL = sec.model;
+    Object.assign(def, sec.env || {});
+    return def;
+  }
+  if (sec.base_url) def.base_url = sec.base_url;
+  if (sec.model) def.model = sec.model;
+  if (sec.wire_api) def.wire_api = sec.wire_api;
+  if (sec.reasoning_effort) def.reasoning_effort = sec.reasoning_effort;
+  if (sec.context_window) def.context_window = sec.context_window;
+  return def;
+}
+
+function pvSetDef(obj) {
+  $("pv-def").value = JSON.stringify(obj, null, 2);
+  pvValidateDef();
+}
+
+// 实时校验：红边框 + 行内错误；JSON 合法且为对象时返回解析结果，否则 null
+function pvValidateDef() {
+  const ta = $("pv-def");
+  const errEl = $("pv-def-error");
+  let parsed = null;
+  try {
+    parsed = JSON.parse(ta.value);
+  } catch (err) {
+    ta.classList.add("invalid");
+    errEl.textContent = `${t("pv.defInvalid")} ${err.message}`;
+    errEl.classList.remove("hidden");
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    ta.classList.add("invalid");
+    errEl.textContent = t("pv.defInvalid");
+    errEl.classList.remove("hidden");
+    return null;
+  }
+  ta.classList.remove("invalid");
+  errEl.classList.add("hidden");
+  return parsed;
+}
+
+$("pv-def").addEventListener("input", pvValidateDef);
+$("pv-def-format").addEventListener("click", () => {
+  const parsed = pvValidateDef();
+  if (parsed) $("pv-def").value = JSON.stringify(parsed, null, 2);
+});
+
+// add / edit / external 共用一张表单：edit 锁定工具/预设并预填现有配置 JSON（token 留空 = 保持不变）；
+// external 带入外部实况的端点/模型，预设开放改选（保存 = 新增收编），工具锁定为实况所属页签
+function openProviderForm(mode, entry = null) {
+  const editing = mode === "edit";
+  const external = mode === "external";
+  providersState.form = editing
+    ? { mode, id: entry.id, tool: providersState.tool }
+    : { mode, id: null, tool: null };
+  $("provider-add-form").reset();
+  const title = $("pv-form-title");
+  if (editing) {
+    title.removeAttribute("data-i18n");   // 编辑标题含 id 参数，不走 data-i18n 静态应用
+    title.textContent = t("pv.formTitleEdit", { id: entry.id, tool: providersState.tool });
+  } else {
+    title.setAttribute("data-i18n", external ? "pv.formTitleExternal" : "pv.formTitle");
+    title.textContent = t(external ? "pv.formTitleExternal" : "pv.formTitle");
+  }
+  const hint = $("pv-form-hint");
+  hint.dataset.i18n = editing ? "pv.formHintEdit"
+    : external ? "pv.formHintExternal" : "pv.formHint";
+  hint.textContent = t(hint.dataset.i18n);
+  $("pv-preset").disabled = editing;
+  $("pv-tool").disabled = editing || external;
+  const tokenInput = $("pv-token");
+  tokenInput.dataset.i18nPlaceholder = editing ? "pv.formTokenKeep" : "pv.formToken";
+  tokenInput.placeholder = t(tokenInput.dataset.i18nPlaceholder);
+  $("pv-tool").value = providersState.tool;
+  syncDD($("pv-tool"));
+  if (editing || external) {
+    // 端点精确命中内置预设 → 预选之：external 一看便知是哪家厂商（仍可改选），
+    // editing 下拉已锁定、纯展示厂商归属；add 模式才由用户自选
+    const url = (entry[providersState.tool] || {}).base_url || "";
+    const hit = ((providersState.data && providersState.data.presets) || [])
+      .find((p) => p.urls && p.urls[providersState.tool] === url);
+    $("pv-preset").value = hit ? hit.name : "";
+    syncDD($("pv-preset"));
+  }
+  if (editing || external) {
+    pvSetDef(pvDefFromSection(entry[providersState.tool] || {}));
+    if (editing) {
+      $("pv-label").value = entry.label && entry.label !== entry.id ? entry.label : "";
+    }
+    $("pv-def").focus();
+  } else {
+    pvSetDef(pvDefTemplate(providersState.tool));
+    $("pv-preset").focus();
+  }
+  $("providers-add-panel").classList.remove("hidden");
+}
+
+// 新增（含收编）的供应商标识自动生成：选了预设用预设名，否则取端点域名；
+// 与清单现有条目撞名则 -2、-3 递增（保存后列表行名与 CLI switch 命令都用它）
+function pvDeriveId(tool, def) {
+  const preset = $("pv-preset").value;
+  let base = preset;
+  if (!base) {
+    const url = tool === "claude" ? def.ANTHROPIC_BASE_URL : def.base_url;
+    try {
+      base = new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      base = "provider";
+    }
+  }
+  const taken = new Set((providersState.data && providersState.data.providers || [])
+    .map((p) => p.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
+  return id;
+}
+
+// 新增模式切换工具 → 换对应模板（编辑/收编模式工具锁定）
+$("pv-tool").addEventListener("change", () => {
+  if (providersState.form.mode === "add") pvSetDef(pvDefTemplate($("pv-tool").value));
+});
+
+// 选中预设 → 端点合入配置 JSON（其余键保留，JSON 有语法错则先修复再选）；
+// 预设不含当前工具时切到它支持的第一个工具并重置为新工具的模板
 $("pv-preset").addEventListener("change", () => {
   const p = ((providersState.data && providersState.data.presets) || [])
     .find((x) => x.name === $("pv-preset").value);
@@ -1960,42 +2392,64 @@ $("pv-preset").addEventListener("change", () => {
     tool = (p.tools || [])[0];
     if (!tool) return;
     $("pv-tool").value = tool;
+    syncDD($("pv-tool"));
+    $("pv-def").value = JSON.stringify(pvDefTemplate(tool), null, 2);
     url = p.urls[tool];
   }
-  $("pv-base-url").value = url;
+  const def = pvValidateDef();
+  if (!def) return;
+  if (tool === "claude") def.ANTHROPIC_BASE_URL = url;
+  else def.base_url = url;
+  pvSetDef(def);
   if (!$("pv-label").value.trim()) $("pv-label").value = p.label || p.name;
 });
 
 $("provider-add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const id = $("pv-id").value.trim();
-  const tool = $("pv-tool").value;
-  const baseUrl = $("pv-base-url").value.trim();
-  if (!id || !baseUrl) return;
+  const editing = providersState.form.mode === "edit";
+  const tool = editing ? providersState.form.tool : $("pv-tool").value;
+  const def = pvValidateDef();
+  if (!def) {
+    $("pv-def").focus();
+    return;
+  }
+  const id = editing ? providersState.form.id : pvDeriveId(tool, def);
+  const endpointKey = tool === "claude" ? "ANTHROPIC_BASE_URL" : "base_url";
+  const errEl = $("pv-def-error");
+  if (!def[endpointKey]) {
+    $("pv-def").classList.add("invalid");
+    errEl.textContent = t("pv.defNoBaseUrl");
+    errEl.classList.remove("hidden");
+    $("pv-def").focus();
+    return;
+  }
+  // 整块粘贴的 JSON 可含 token（CLI 侧 --def 走 argv 会泄密故拒绝；UI 无此约束）：
+  // 保存前剥离出 def，经 stdin 通道进 secrets.toml——表单 token 字段非空时优先
+  let token = $("pv-token").value || null;
+  if (tool === "claude" && def.ANTHROPIC_AUTH_TOKEN) {
+    if (!token) token = def.ANTHROPIC_AUTH_TOKEN;
+    delete def.ANTHROPIC_AUTH_TOKEN;
+  }
   const args = {
     id,
     tool,
-    baseUrl,
-    label: $("pv-label").value.trim() || null,
-    model: $("pv-model").value.trim() || null,
-    token: $("pv-token").value || null,
+    def: JSON.stringify(def),
+    label: $("pv-label").value.trim() || null,   // 空 = 保持不变 / 缺省
+    token,                                       // 空 = 保持不变 / 不存
+    machine: state.machine || undefined,
   };
-  if (tool === "codex") {
-    const effort = $("pv-reasoning-effort").value.trim();
-    const ctx = Number($("pv-context-window").value.trim());
-    if (effort) args.reasoningEffort = effort;
-    if (Number.isFinite(ctx) && ctx > 0) args.contextWindow = ctx;
-  }
+  const doneKey = editing ? "pv.editDone" : "pv.addDone";
+  const failKey = editing ? "pv.editFail" : "pv.addFail";
   let result = null;
   try {
-    result = await invoke("halter_providers_add", args);
+    result = await invoke(editing ? "halter_providers_edit" : "halter_providers_add", args);
   } catch (err) {
-    showMatrixToast(t("pv.addFail", { id }), errorDetail(err), true);
+    showMatrixToast(t(failKey, { id }), errorDetail(err), true);
     return;
   }
   const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
   showMatrixToast(
-    t(result.ok ? "pv.addDone" : "pv.addFail", { id }),
+    t(result.ok ? doneKey : failKey, { id }),
     body || t("pv.noop"),
     !result.ok,
   );
@@ -2010,7 +2464,9 @@ $("provider-add-form").addEventListener("submit", async (e) => {
 $("btn-providers-adopt").addEventListener("click", async () => {
   let result = null;
   try {
-    result = await invoke("halter_providers_adopt");
+    result = await invoke("halter_providers_adopt", {
+      machine: state.machine || undefined,
+    });
   } catch (err) {
     showMatrixToast(t("pv.adoptFail"), errorDetail(err), true);
     return;
@@ -2020,9 +2476,107 @@ $("btn-providers-adopt").addEventListener("click", async () => {
   await loadProviders(true);
 });
 
+/* ---------------- updates: harness 升级面板（npm 渠道，只读状态） ---------------- */
+
+const updatesState = { data: null };
+
+function upStateMeta(upState) {
+  if (upState === "latest") return { cls: "ok", key: "up.stateLatest" };
+  if (upState === "upgradeable") return { cls: "upgradeable", key: "up.stateUpgradeable" };
+  if (upState === "ahead") return { cls: "ahead", key: "up.stateAhead", tip: "up.stateAheadTip" };
+  if (upState === "missing") return { cls: "missing", key: "up.stateMissing" };
+  return { cls: "unknown", key: "up.stateUnknown" };
+}
+
+function upRow(labelKey, value) {
+  const row = el("div", "up-row");
+  row.append(el("span", "up-row-label", t(labelKey)));
+  row.append(el("span", "up-row-value", value));
+  return row;
+}
+
+async function loadUpdates(force = false) {
+  if (updatesState.data && !force) {
+    renderUpdates();
+    return;
+  }
+  $("updates-error").classList.add("hidden");
+  $("updates-loading").classList.remove("hidden");
+  $("updates-content").classList.add("hidden");
+  try {
+    updatesState.data = await invoke("halter_update_status", {
+      machine: state.machine || undefined,
+    });
+  } catch (err) {
+    showError($("updates-error"), err);
+    return;
+  } finally {
+    $("updates-loading").classList.add("hidden");
+  }
+  $("updates-content").classList.remove("hidden");
+  renderUpdates();
+}
+
+function renderUpdates() {
+  const data = updatesState.data;
+  if (!data) return;
+  $("updates-npm-warning").classList.toggle("hidden", !!data.npm_available);
+  const grid = $("updates-grid");
+  grid.replaceChildren();
+  for (const tool of data.tools || []) {
+    grid.append(renderUpdateCard(tool));
+  }
+}
+
+function renderUpdateCard(tool) {
+  const meta = upStateMeta(tool.state);
+  // 整卡红绿着色表达状态（绿=已最新 红=待更新/超前）；名称独占整行，npm 包名在第二行
+  const card = el("div", `up-card state-${tool.state}`);
+
+  const header = el("div", "up-card-header");
+  const title = el("div", "up-title");
+  const name = el("div", "up-name");
+  const dot = el("span", "filter-dot");
+  dot.style.backgroundColor = toolColor(tool.key);
+  name.append(dot, el("span", "up-display", tool.display || tool.key));
+  title.append(name, el("div", "up-key", tool.npm_package || tool.key));
+  const stateBadge = el("span", `up-state ${meta.cls}`, t(meta.key));
+  stateBadge.title = t(meta.tip || meta.key);
+  header.append(title, stateBadge);
+  card.append(header);
+
+  const rows = el("div", "up-rows");
+  rows.append(upRow("up.platform", tool.platform || updatesState.data.platform || "-"));
+  rows.append(upRow("up.current", tool.current || "—"));
+  rows.append(upRow("up.latest", tool.latest || "—"));
+  card.append(rows);
+
+  // 手动安装 / 升级命令：逐条独立成行（官方脚本与 npm 分开），每行各带复制按钮；
+  // 卡内按钮仅此用途，升级动作仍在 CLI
+  if (Array.isArray(tool.install) && tool.install.length) {
+    const install = el("div", "up-install");
+    install.append(el("span", "up-install-label", t("up.install")));
+    const list = el("div", "up-install-list");
+    for (const cmd of tool.install) {
+      const item = el("div", "up-install-item");
+      item.append(el("code", "up-install-cmd", cmd));
+      const copy = el("button", "btn btn-sm up-copy", t("up.copy"));
+      copy.addEventListener("click", () => copyToClipboard(cmd, copy, "up.copy"));
+      item.append(copy);
+      list.append(item);
+    }
+    install.append(list);
+    card.append(install);
+  }
+  return card;
+}
+
+$("btn-refresh-updates").addEventListener("click", () => loadUpdates(true));
+
 /* ---------------- boot ---------------- */
 
 (async function boot() {
+  document.querySelectorAll("select").forEach(enhanceSelect);
   try {
     const v = await invoke("halter_version");
     const badge = $("halter-version");
@@ -2036,6 +2590,14 @@ $("btn-providers-adopt").addEventListener("click", async () => {
     // Error 的可枚举属性为空，JSON.stringify 只会得到 "{}"，取 message 才能看到原因
     $("halter-version").title =
       typeof err === "string" ? err : (err?.message ?? JSON.stringify(err));
+  }
+  // 机器作用域先行：注册表加载 + 恢复上次选择（halter-machine 持久化），
+  // 之后所有视图都在所选机器之下加载
+  await loadMachines();
+  const saved = localStorage.getItem("halter-machine");
+  if (saved && selectableMachines().some((m) => m.name === saved)) {
+    state.machine = saved;
+    renderMachineSelect();
   }
   loadOverview();
 })();

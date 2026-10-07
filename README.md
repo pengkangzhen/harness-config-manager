@@ -1,4 +1,4 @@
-# harness-config-manager (`halter`)
+# halter
 
 Detect, inventory, and distribute user-level **skills / MCP servers / plugins / hooks / subagents / global memory (CLAUDE.md, AGENTS.md…)**, and recall project-scoped **session history** across all your AI coding harnesses — from a single source of truth.
 
@@ -46,14 +46,14 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install git+https://github.com/pengkangzhen/harness-config-manager.git
+uv tool install git+https://github.com/pengkangzhen/halter.git
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/pengkangzhen/harness-config-manager.git
-uv tool install --editable ./harness-config-manager
+git clone https://github.com/pengkangzhen/halter.git
+uv tool install --editable ./halter
 ```
 
 ## Quick start
@@ -96,6 +96,9 @@ halter machines test desktop     # connectivity + remote halter check, with diag
 # Inspect and operate a remote machine exactly like the local one
 halter scan --machine desktop --json
 halter sync --machine desktop --apply
+halter sessions list --machine desktop --all-projects   # same for memory / providers
+halter memory show --machine desktop
+halter providers list --machine desktop
 
 # Move a single entry between machines (skills / agents / mcp / hooks)
 halter push skills paper-polishing --to desktop --apply
@@ -106,7 +109,7 @@ halter pull agents reviewer --from desktop --apply           # = push --from des
 
 Semantics: entries are transferred through an idempotent export/ingest pair — same name and identical content is a no-op; divergent same-name entries are reported as conflicts (skip by default, `--prefer replace` backs up the destination side first, then overwrites). On arrival the entry lands in the remote library/manifest **and** is distributed to that machine's installed tools by its own halter — dialect translation never happens twice. MCP definitions travel with `${VAR}` placeholders; real secret values only move when `--with-secrets` is given, and they merge into the remote `secrets.toml` (0600). The memory layer is deliberately not pushed — a single global memory file has merge semantics that belong to git/syncthing, not point-to-point copies.
 
-The desktop app rides on the same channel: a machine picker on the matrix toolbar switches the whole view to any registered machine, entries that exist locally but are missing remotely appear as ghost rows (click to push), and remote-only entries get a pull button.
+The desktop app rides on the same channel, machine-first: a machine picker at the top of the sidebar fixes the scope, and all five views — overview, matrix, sessions, memory, providers — load under the selected machine (remote requests are forwarded over ssh to that machine's halter). The choice persists across launches. Inside the matrix, entries that exist locally but are missing remotely appear as ghost rows (click to push), and remote-only entries get a pull button.
 
 ## Session continuity
 
@@ -142,19 +145,30 @@ halter providers adopt --apply
 # List providers + each tool's current provider (probed from the real files):
 halter providers list
 
-# Add one from a built-in preset (endpoint filled in; model is yours to pick)
-# and switch. The token goes to secrets.toml (0600), never the manifest:
+# Add one from a built-in preset (its endpoint merges under --def; the model
+# is yours to pick) and switch. For claude, --def is the flat managed env of
+# settings.json (ANTHROPIC_* / CLAUDE_CODE_*) — the same shape as CC Switch's
+# "配置JSON", so existing config blocks paste straight in. The token goes to
+# secrets.toml (0600), never the manifest — tokens are deliberately absent
+# from the def JSON (keeps secrets out of argv):
 echo "$KEY" | halter providers add zhipu --tool claude --preset zhipu \
-  --model glm-5.3 --token-stdin
+  --def '{"ANTHROPIC_MODEL": "glm-5.3", "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3[1M]"}' \
+  --token-stdin
 halter providers switch zhipu --tool claude
 
 # Back to vendor defaults:
 halter providers switch official --tool codex
+
+# Edit a provider in place (the def JSON wholly replaces the tool block —
+# keys absent from the JSON are removed; editing the active provider
+# rewrites the tool's live config from the new definition):
+halter providers edit zhipu --tool claude \
+  --def '{"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic", "ANTHROPIC_MODEL": "glm-5.3[1M]"}'
 ```
 
 Built-in presets (`halter providers presets`) currently cover zhipu (claude + codex endpoints), deepseek and moonshot — each endpoint backed by the vendor's own docs; only endpoints are pinned, model names always stay yours. Every switch first copies the target file to `~/.config/halter/backups/providers/`, so a bad switch is one file copy away from undone.
 
-What it writes — and what it never touches: claude gets only the provider-managed `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` env keys of `~/.claude/settings.json` (the rest of `env` stays yours); codex gets `model_provider` / `model` plus a `[model_providers.halter_<id>]` section while third-party sections are preserved verbatim. `doctor` flags external endpoints not in the manifest and cc-switch leftovers, so dual management can't hide. The desktop app has a Providers panel with one-click switching, an add form (with preset autofill), adoption, and removal.
+What it writes — and what it never touches: claude gets only the provider-managed `ANTHROPIC_*` / `CLAUDE_CODE_*_MODEL` env keys of `~/.claude/settings.json` (the rest of `env` stays yours); codex gets `model_provider` / `model` plus a `[model_providers.halter_<id>]` section while third-party sections are preserved verbatim. `doctor` flags external endpoints not in the manifest and cc-switch leftovers, so dual management can't hide. The desktop app has a Providers panel with one-click switching, a CC Switch-style config-JSON editor (live validation, presets merge their endpoint in), in-place editing, adoption, and removal.
 
 **Where this sits relative to CC Switch / claude-code-router**: halter is the *static configuration layer* — it writes which provider a tool points at, keeps tokens safe, and never runs a daemon. CC Switch does the same switching job as a standalone app (halter `adopt` can ingest its config). [claude-code-router](https://github.com/musistudio/claude-code-router) is a *runtime routing layer* — a resident gateway doing per-request routing, fallback and observability. The two layers compose: point a halter provider entry at a local gateway endpoint and switch to it like any other provider.
 
@@ -228,7 +242,7 @@ A community plugin **`dsh-halter`** wraps this CLI for [DeepSeek Harness](https:
 dsh plugin --profile web add dsh-halter
 ```
 
-It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list·show·context·search), plus a `/halter` slash command exposing the full CLI to the human — mutating commands (`sync --apply`, `sessions install`) are never model-callable. Source lives in [`dsh-plugin/`](dsh-plugin/); halter itself must be installed separately (`uv tool install harness-config-manager`).
+It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list·show·context·search), plus a `/halter` slash command exposing the full CLI to the human — mutating commands (`sync --apply`, `sessions install`) are never model-callable. Source lives in [`dsh-plugin/`](dsh-plugin/); halter itself must be installed separately (`uv tool install git+https://github.com/pengkangzhen/halter.git`).
 
 ## Desktop App (Tauri + halter sidecar)
 

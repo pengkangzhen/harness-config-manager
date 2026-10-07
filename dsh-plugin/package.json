@@ -7,7 +7,7 @@
   "author": "pengkangzhen",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pengkangzhen/harness-config-manager.git",
+    "url": "git+https://github.com/pengkangzhen/halter.git",
     "directory": "dsh-plugin"
   },
   "publishConfig": {
@@ -19,7 +19,7 @@
     "deepseek",
     "dsh",
     "halter",
-    "harness-config-manager",
+    "halter",
     "mcp",
     "agent-tools"
   ],

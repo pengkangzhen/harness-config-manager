@@ -27,10 +27,69 @@ def _load_json(path: Path) -> dict | None:
         return None
 
 
-def _read_installed_plugins(installed_path: Path) -> list[PluginInfo]:
+def _marketplace_repos(known_path: Path) -> dict[str, str]:
+    """known_marketplaces.json → {市场名: 仓库 URL}（仅 github 源可解析出地址）。
+    兼容两种形态：claude {name: meta} / zcode {"marketplaces": [meta]}。
+    """
+    data = _load_json(known_path)
+    if not data:
+        return {}
+    if isinstance(data.get("marketplaces"), list):
+        pairs = [(m.get("id") or m.get("name"), m)
+                 for m in data["marketplaces"] if isinstance(m, dict)]
+    else:
+        pairs = [(name, meta) for name, meta in data.items() if isinstance(meta, dict)]
+    repos: dict[str, str] = {}
+    for name, meta in pairs:
+        source = meta.get("source")
+        repo = source.get("repo") if isinstance(source, dict) else None
+        if name and isinstance(repo, str) and repo:
+            repos[name] = f"https://github.com/{repo}"
+    return repos
+
+
+def _marketplace_plugin_sources(marketplaces_dir: Path) -> dict[tuple[str, str], str]:
+    """市场清单 marketplaces/<市场>/…/marketplace.json 的条目级来源 → {(市场, 插件名): URL}。
+    git-subdir/url 型 source 的 url 即插件仓库；相对路径型（同仓库子目录）回退条目 homepage。
+    """
+    sources: dict[tuple[str, str], str] = {}
+    if not marketplaces_dir.is_dir():
+        return sources
+    for market_dir in sorted(marketplaces_dir.iterdir()):
+        manifest = market_dir / ".claude-plugin" / "marketplace.json"
+        if not manifest.is_file():
+            manifest = market_dir / "marketplace.json"
+        data = _load_json(manifest)
+        if not data or not isinstance(data.get("plugins"), list):
+            continue
+        for entry in data["plugins"]:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            source = entry.get("source")
+            url = source.get("url") if isinstance(source, dict) else None
+            if not _is_source_page(url):
+                url = entry.get("homepage")
+            if _is_source_page(url):
+                sources[(market_dir.name, entry["name"])] = url
+    return sources
+
+
+def _is_source_page(url: object) -> bool:
+    """归档下载地址（.zip/.tgz 等 CDN 分发物）不是来源页，排除。"""
+    return (isinstance(url, str)
+            and url.startswith(("http://", "https://"))
+            and not url.split("?")[0].endswith((".zip", ".tgz", ".tar.gz")))
+
+
+def _read_installed_plugins(
+    installed_path: Path,
+    plugin_sources: dict[tuple[str, str], str],
+    repo_map: dict[str, str],
+) -> list[PluginInfo]:
     """兼容两种同源形态：
     claude: {"plugins": {"<id>@<marketplace>": [{version, installPath, scope, ...}]}}
     zcode:  {"plugins": [{"id": ..., "version": ..., "marketplace": ...}]}
+    来源优先级：市场清单条目 URL > 所属市场仓库 URL。
     """
     data = _load_json(installed_path)
     if not data:
@@ -42,16 +101,34 @@ def _read_installed_plugins(installed_path: Path) -> list[PluginInfo]:
             version = None
             if isinstance(records, list) and records and isinstance(records[0], dict):
                 version = records[0].get("version")
-            result.append(PluginInfo(plugin_id=pid, version=version))
+            result.append(PluginInfo(
+                plugin_id=pid,
+                version=version,
+                marketplace=pid.rpartition("@")[2] if "@" in pid else None,
+                source_url=_resolve_source_url(pid, plugin_sources, repo_map),
+            ))
     elif isinstance(plugins_field, list):
         for p in plugins_field:
             if isinstance(p, dict):
+                pid = p.get("id", p.get("name", "?"))
                 result.append(PluginInfo(
-                    plugin_id=p.get("id", p.get("name", "?")),
+                    plugin_id=pid,
                     version=p.get("version"),
                     marketplace=p.get("marketplace"),
+                    source_url=_resolve_source_url(pid, plugin_sources, repo_map),
                 ))
     return result
+
+
+def _resolve_source_url(
+    pid: str,
+    plugin_sources: dict[tuple[str, str], str],
+    repo_map: dict[str, str],
+) -> str | None:
+    name, _, marketplace = pid.partition("@")
+    if not marketplace:
+        return None
+    return plugin_sources.get((marketplace, name)) or repo_map.get(marketplace)
 
 
 def _read_enabled_map(path: Path) -> dict[str, bool]:
@@ -66,7 +143,10 @@ def _read_enabled_map(path: Path) -> dict[str, bool]:
 
 
 def read_claude_plugins() -> list[PluginInfo]:
-    plugins = _read_installed_plugins(expand(".claude/plugins/installed_plugins.json"))
+    base = expand(".claude/plugins")
+    plugin_sources = _marketplace_plugin_sources(base / "marketplaces")
+    repo_map = _marketplace_repos(base / "known_marketplaces.json")
+    plugins = _read_installed_plugins(base / "installed_plugins.json", plugin_sources, repo_map)
     enabled = _read_enabled_map(expand(".claude/settings.json"))
     for p in plugins:
         p.enabled = enabled.get(p.plugin_id)
@@ -74,7 +154,10 @@ def read_claude_plugins() -> list[PluginInfo]:
 
 
 def read_zcode_plugins() -> list[PluginInfo]:
-    plugins = _read_installed_plugins(expand(".zcode/cli/plugins/installed_plugins.json"))
+    base = expand(".zcode/cli/plugins")
+    plugin_sources = _marketplace_plugin_sources(base / "marketplaces")
+    repo_map = _marketplace_repos(base / "known_marketplaces.json")
+    plugins = _read_installed_plugins(base / "installed_plugins.json", plugin_sources, repo_map)
     enabled = _read_enabled_map(expand(".zcode/cli/config.json"))
     for p in plugins:
         p.enabled = enabled.get(p.plugin_id)
@@ -137,7 +220,12 @@ def read_vscode_plugins() -> list[PluginInfo]:
         ext_id, _, version = line.rpartition("@")
         if not any(k in ext_id.lower() for k in AI_EXTENSION_KEYWORDS):
             continue  # 纯编辑器扩展（Python/Jupyter/Docker 等），不是 AI 编码插件
-        result.append(PluginInfo(plugin_id=ext_id, version=version))
+        # VS Code 扩展的来源即官方市场页（发布者与仓库信息都在市场页上）
+        result.append(PluginInfo(
+            plugin_id=ext_id,
+            version=version,
+            source_url=f"https://marketplace.visualstudio.com/items?itemName={ext_id}",
+        ))
     return result
 
 

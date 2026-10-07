@@ -10,7 +10,7 @@ import pytest
 
 from conftest import make_agent
 
-from harness_config_manager.agents import (
+from halter.agents import (
     AdoptPlan,
     plan_adopt,
     plan_sync,
@@ -19,8 +19,8 @@ from harness_config_manager.agents import (
     run_sync,
     scan_agents,
 )
-from harness_config_manager.model import ToolReport
-from harness_config_manager.registry import BY_KEY
+from halter.model import ToolReport
+from halter.registry import BY_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ def _mklib(fake_home: Path, names: list[str], model: str | None = None) -> Path:
 
 
 def _report(tool: str, entries: list[tuple[str, Path]]) -> ToolReport:
-    from harness_config_manager.model import AgentInfo
+    from halter.model import AgentInfo
 
     return ToolReport(tool=tool, display=tool.upper(), installed=True,
                       agents=[AgentInfo(name=n, path=p) for n, p in entries])
@@ -69,7 +69,7 @@ def test_scan_agents_basic(claude_agent_dir: Path) -> None:
 
 
 def test_resolve_agents_library_fallbacks(fake_home: Path) -> None:
-    from harness_config_manager.config import HalterConfig
+    from halter.config import HalterConfig
 
     # 1. 显式配置优先
     cfg = HalterConfig(agents_library="/tmp/explicit-agents")
@@ -88,7 +88,7 @@ def test_resolve_agents_library_fallbacks(fake_home: Path) -> None:
 
 
 def test_resolve_agents_library_migrates_legacy(fake_home: Path) -> None:
-    from harness_config_manager.config import HalterConfig
+    from halter.config import HalterConfig
 
     legacy = make_agent(fake_home / ".config/halter/library/agents", "scribe")
     tool_dir = fake_home / ".claude/agents"
@@ -104,7 +104,7 @@ def test_resolve_agents_library_migrates_legacy(fake_home: Path) -> None:
 
 
 def test_scan_json_serialization(claude_agent_dir: Path) -> None:
-    from harness_config_manager.report import to_json
+    from halter.report import to_json
 
     make_agent(claude_agent_dir, "dev-planner", model="sonnet")
     r = ToolReport(tool="claude", display="Claude Code", installed=True,
@@ -234,7 +234,7 @@ def test_relink_wrong_target(claude_agent_dir: Path, fake_home: Path) -> None:
 def test_cli_scan_detail_agents(claude_agent_dir: Path) -> None:
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     make_agent(claude_agent_dir, "code-reviewer", model="opus")
     res = CliRunner().invoke(app, ["scan", "-d", "agents", "--json"])
@@ -247,7 +247,7 @@ def test_cli_scan_detail_agents(claude_agent_dir: Path) -> None:
 def test_cli_sync_agents_layer(claude_agent_dir: Path, fake_home: Path) -> None:
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     make_agent(claude_agent_dir, "only-in-claude")
     res = CliRunner().invoke(app, ["sync"])       # dry-run 默认
@@ -261,7 +261,7 @@ def test_cli_sync_agents_layer(claude_agent_dir: Path, fake_home: Path) -> None:
 def test_cli_sync_no_agents_flag(claude_agent_dir: Path) -> None:
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     make_agent(claude_agent_dir, "only-in-claude")
     res = CliRunner().invoke(app, ["sync", "--no-agents"])

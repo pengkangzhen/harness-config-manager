@@ -134,6 +134,15 @@ fn arg(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
 }
 
+/// Append `--machine <name>` when a non-empty machine scope was passed.
+/// The CLI then reroutes the whole subcommand onto that registered machine.
+fn push_machine(args: &mut Vec<String>, machine: &Option<String>) {
+    if let Some(m) = machine.as_deref().filter(|m| !m.trim().is_empty()) {
+        args.push("--machine".into());
+        args.push(m.into());
+    }
+}
+
 #[tauri::command]
 async fn halter_version() -> Result<Value, String> {
     let mut value = run_json_args(arg(&["version", "--json"])).await?;
@@ -151,11 +160,8 @@ async fn halter_version() -> Result<Value, String> {
 #[tauri::command]
 async fn halter_scan(machine: Option<String>) -> Result<Value, String> {
     let mut parts = vec!["scan".to_string()];
-    if let Some(m) = machine.as_deref().filter(|m| !m.trim().is_empty()) {
-        parts.push("--machine".into());
-        parts.push(m.into());
-    }
-    parts.push("--json".into());
+    push_machine(&mut parts, &machine);
+    parts.push("--json".to_string());
     run_json_args(parts).await
 }
 
@@ -163,6 +169,12 @@ async fn halter_scan(machine: Option<String>) -> Result<Value, String> {
 #[tauri::command]
 async fn halter_machines_list() -> Result<Value, String> {
     run_json_args(arg(&["machines", "list", "--json"])).await
+}
+
+/// Probe one machine; on success the CLI caches its host name for display.
+#[tauri::command]
+async fn halter_machines_test(name: String) -> Result<Value, String> {
+    run_json_args(arg(&["machines", "test", name.as_str(), "--json"])).await
 }
 
 #[tauri::command]
@@ -231,8 +243,11 @@ async fn halter_push(
 
 /// Full memory snapshot: library content + per-tool content and unified diffs.
 #[tauri::command]
-async fn halter_memory_show() -> Result<Value, String> {
-    run_json_args(arg(&["memory", "show", "--json"])).await
+async fn halter_memory_show(machine: Option<String>) -> Result<Value, String> {
+    let mut args = vec!["memory".to_string(), "show".to_string()];
+    push_machine(&mut args, &machine);
+    args.push("--json".to_string());
+    run_json_args(args).await
 }
 
 /// Open a file with the system default program (Memory panel's open button).
@@ -306,18 +321,46 @@ async fn open_path(path: String) -> Result<(), String> {
         .map_err(|e| format!("sidecar task failed: {e}"))?
 }
 
+/// Open an http(s) URL with the system browser (plugin source links).
+/// Safety constraint: http/https only — file:// or other schemes are refused.
+fn open_url_sync(raw: &str) -> Result<(), String> {
+    if !raw.starts_with("http://") && !raw.starts_with("https://") {
+        return Err(format!("refusing non-http url: {raw}"));
+    }
+    let candidates: Vec<Vec<&str>> = if cfg!(target_os = "macos") {
+        vec![vec!["open"]]
+    } else if cfg!(windows) {
+        vec![vec!["cmd", "/c", "start", ""]]
+    } else {
+        vec![vec!["xdg-open"], vec!["wslview"]]
+    };
+    for argv in candidates {
+        if matches!(Command::new(argv[0]).args(&argv[1..]).arg(raw).status(), Ok(s) if s.success()) {
+            return Ok(());
+        }
+    }
+    Err(format!("no opener succeeded for {raw}"))
+}
+
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_url_sync(&url))
+        .await
+        .map_err(|e| format!("sidecar task failed: {e}"))?
+}
+
 #[tauri::command]
 async fn halter_sessions_list(
     project: String,
     limit: u32,
     all_projects: bool,
+    machine: Option<String>,
 ) -> Result<Value, String> {
     let mut parts = vec![
         "sessions".to_string(),
         "list".to_string(),
         "--limit".to_string(),
         limit.to_string(),
-        "--json".to_string(),
     ];
     if all_projects {
         parts.push("--all-projects".to_string());
@@ -325,29 +368,45 @@ async fn halter_sessions_list(
         parts.push("--project".to_string());
         parts.push(project);
     }
+    push_machine(&mut parts, &machine);
+    parts.push("--json".to_string());
     run_json_args(parts).await
 }
 
 #[tauri::command]
-async fn halter_sessions_projects(project: String) -> Result<Value, String> {
-    run_json_args(arg(&["sessions", "projects", "--project", &project, "--json"])).await
+async fn halter_sessions_projects(project: String, machine: Option<String>) -> Result<Value, String> {
+    let mut args = vec![
+        "sessions".to_string(),
+        "projects".to_string(),
+        "--project".to_string(),
+        project,
+    ];
+    push_machine(&mut args, &machine);
+    args.push("--json".to_string());
+    run_json_args(args).await
 }
 
 #[tauri::command]
-async fn halter_sessions_show(r#ref: String, project: String, tail: u32) -> Result<Value, String> {
-    run_json_args(arg(&[
-        "sessions",
-        "show",
-        "--project",
-        &project,
-        "--transcript",
-        "--tail",
-        &tail.to_string(),
-        "--json",
-        "--",
-        &r#ref,
-    ]))
-    .await
+async fn halter_sessions_show(
+    r#ref: String,
+    project: String,
+    tail: u32,
+    machine: Option<String>,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "sessions".to_string(),
+        "show".to_string(),
+        "--project".to_string(),
+        project,
+        "--transcript".to_string(),
+        "--tail".to_string(),
+        tail.to_string(),
+        "--json".to_string(),
+    ];
+    push_machine(&mut args, &machine);
+    args.push("--".to_string());
+    args.push(r#ref);
+    run_json_args(args).await
 }
 
 #[tauri::command]
@@ -356,13 +415,13 @@ async fn halter_sessions_search(
     project: String,
     limit: u32,
     all_projects: bool,
+    machine: Option<String>,
 ) -> Result<Value, String> {
     let mut parts = vec![
         "sessions".to_string(),
         "search".to_string(),
         "--limit".to_string(),
         limit.to_string(),
-        "--json".to_string(),
     ];
     if all_projects {
         parts.push("--all-projects".to_string());
@@ -370,24 +429,32 @@ async fn halter_sessions_search(
         parts.push("--project".to_string());
         parts.push(project);
     }
+    push_machine(&mut parts, &machine);
+    parts.push("--json".to_string());
     parts.push("--".to_string());
     parts.push(query);
     run_json_args(parts).await
 }
 
 #[tauri::command]
-async fn halter_sessions_context(r#ref: String, project: String, tail: u32) -> Result<String, String> {
-    run_text_args(arg(&[
-        "sessions",
-        "context",
-        "--project",
-        &project,
-        "--tail",
-        &tail.to_string(),
-        "--",
-        &r#ref,
-    ]))
-    .await
+async fn halter_sessions_context(
+    r#ref: String,
+    project: String,
+    tail: u32,
+    machine: Option<String>,
+) -> Result<String, String> {
+    let mut args = vec![
+        "sessions".to_string(),
+        "context".to_string(),
+        "--project".to_string(),
+        project,
+        "--tail".to_string(),
+        tail.to_string(),
+    ];
+    push_machine(&mut args, &machine);
+    args.push("--".to_string());
+    args.push(r#ref);
+    run_text_args(args).await
 }
 
 /// Run `halter sync`. `apply == false` is the CLI's default dry-run and performs
@@ -405,10 +472,7 @@ async fn halter_sync(
 ) -> Result<SidecarOutput, String> {
     let allowed = ["skills", "mcp", "plugins", "hooks", "agents", "memory", "sessions"];
     let mut args: Vec<String> = vec!["sync".into()];
-    if let Some(m) = machine.as_deref().filter(|m| !m.trim().is_empty()) {
-        args.push("--machine".into());
-        args.push(m.into());
-    }
+    push_machine(&mut args, &machine);
     for layer in allowed {
         if !layers.iter().any(|l| l == layer) {
             args.push(format!("--no-{layer}"));
@@ -434,68 +498,83 @@ async fn halter_sync(
 
 /// Provider manifest + per-tool current state (`halter providers list --json`).
 #[tauri::command]
-async fn halter_providers_list() -> Result<Value, String> {
-    run_json_args(arg(&["providers", "list", "--json"])).await
+async fn halter_providers_list(machine: Option<String>) -> Result<Value, String> {
+    let mut args = vec!["providers".to_string(), "list".to_string()];
+    push_machine(&mut args, &machine);
+    args.push("--json".to_string());
+    run_json_args(args).await
 }
 
 /// One-click provider switch; `official` restores vendor defaults.
 #[tauri::command]
-async fn halter_providers_switch(id: String, tool: String) -> Result<SidecarOutput, String> {
+async fn halter_providers_switch(
+    id: String,
+    tool: String,
+    machine: Option<String>,
+) -> Result<SidecarOutput, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_halter(&arg(&["providers", "switch", &id, "--tool", &tool]))
+        let mut args = vec!["providers".into(), "switch".into(), id, "--tool".into(), tool];
+        push_machine(&mut args, &machine);
+        run_halter(&args)
     })
     .await
     .map_err(|e| format!("sidecar task failed: {e}"))?
 }
 
-/// Create/extend a provider entry. `token` travels Tauri IPC -> sidecar stdin
+/// Create/extend a provider entry. `def` is the tool-block config JSON
+/// (CC Switch-style "配置JSON"); `token` travels Tauri IPC -> sidecar stdin
 /// (`--token-stdin`), never through argv.
 #[tauri::command]
 async fn halter_providers_add(
     id: String,
     tool: String,
-    base_url: String,
+    def: String,
     label: Option<String>,
-    model: Option<String>,
     token: Option<String>,
-    envs: Option<Vec<String>>,
-    wire_api: Option<String>,
-    reasoning_effort: Option<String>,
-    context_window: Option<u64>,
+    machine: Option<String>,
 ) -> Result<SidecarOutput, String> {
     let mut args = vec!["providers".into(), "add".into(), id, "--tool".into(), tool];
-    args.push("--base-url".into());
-    args.push(base_url);
+    args.push("--def".into());
+    args.push(def);
     if let Some(l) = label.as_deref().filter(|l| !l.trim().is_empty()) {
         args.push("--label".into());
         args.push(l.into());
-    }
-    if let Some(m) = model.as_deref().filter(|m| !m.trim().is_empty()) {
-        args.push("--model".into());
-        args.push(m.into());
-    }
-    if let Some(list) = envs.as_ref() {
-        for pair in list.iter().filter(|p| !p.trim().is_empty()) {
-            args.push("--env".into());
-            args.push(pair.clone());
-        }
-    }
-    if let Some(w) = wire_api.as_deref().filter(|w| !w.trim().is_empty()) {
-        args.push("--wire-api".into());
-        args.push(w.into());
-    }
-    if let Some(r) = reasoning_effort.as_deref().filter(|r| !r.trim().is_empty()) {
-        args.push("--reasoning-effort".into());
-        args.push(r.into());
-    }
-    if let Some(c) = context_window.filter(|c| *c != 0) {
-        args.push("--context-window".into());
-        args.push(c.to_string());
     }
     let token_data = token.unwrap_or_default();
     if !token_data.trim().is_empty() {
         args.push("--token-stdin".into());
     }
+    push_machine(&mut args, &machine);
+    tauri::async_runtime::spawn_blocking(move || run_halter_stdin(&args, &token_data))
+        .await
+        .map_err(|e| format!("sidecar task failed: {e}"))?
+}
+
+/// Edit a provider's tool block in place (`halter providers edit <id>`);
+/// `def` wholly replaces the block and, when that block is the active one,
+/// the tool's live config is rewritten from the new definition.
+/// Blank label/token mean "keep current" and are dropped.
+#[tauri::command]
+async fn halter_providers_edit(
+    id: String,
+    tool: String,
+    def: String,
+    label: Option<String>,
+    token: Option<String>,
+    machine: Option<String>,
+) -> Result<SidecarOutput, String> {
+    let mut args = vec!["providers".into(), "edit".into(), id, "--tool".into(), tool];
+    args.push("--def".into());
+    args.push(def);
+    if let Some(l) = label.as_deref().filter(|l| !l.trim().is_empty()) {
+        args.push("--label".into());
+        args.push(l.into());
+    }
+    let token_data = token.unwrap_or_default();
+    if !token_data.trim().is_empty() {
+        args.push("--token-stdin".into());
+    }
+    push_machine(&mut args, &machine);
     tauri::async_runtime::spawn_blocking(move || run_halter_stdin(&args, &token_data))
         .await
         .map_err(|e| format!("sidecar task failed: {e}"))?
@@ -503,9 +582,14 @@ async fn halter_providers_add(
 
 /// Remove a provider entry (manifest + its tokens; target configs untouched).
 #[tauri::command]
-async fn halter_providers_remove(id: String) -> Result<SidecarOutput, String> {
+async fn halter_providers_remove(
+    id: String,
+    machine: Option<String>,
+) -> Result<SidecarOutput, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_halter(&arg(&["providers", "remove", &id, "--apply"]))
+        let mut args = vec!["providers".into(), "remove".into(), id, "--apply".into()];
+        push_machine(&mut args, &machine);
+        run_halter(&args)
     })
     .await
     .map_err(|e| format!("sidecar task failed: {e}"))?
@@ -513,12 +597,25 @@ async fn halter_providers_remove(id: String) -> Result<SidecarOutput, String> {
 
 /// Adopt existing provider configs from claude env / codex [model_providers.*].
 #[tauri::command]
-async fn halter_providers_adopt() -> Result<SidecarOutput, String> {
+async fn halter_providers_adopt(machine: Option<String>) -> Result<SidecarOutput, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_halter(&arg(&["providers", "adopt", "--apply"]))
+        let mut args = vec!["providers".into(), "adopt".into(), "--apply".into()];
+        push_machine(&mut args, &machine);
+        run_halter(&args)
     })
     .await
     .map_err(|e| format!("sidecar task failed: {e}"))?
+}
+
+/// Per-harness version status: installed vs npm registry latest
+/// (`halter update status --json`). Read-only; upgrading is CLI-only
+/// (`halter update run <tool>`).
+#[tauri::command]
+async fn halter_update_status(machine: Option<String>) -> Result<Value, String> {
+    let mut args = vec!["update".to_string(), "status".to_string()];
+    push_machine(&mut args, &machine);
+    args.push("--json".to_string());
+    run_json_args(args).await
 }
 
 fn main() {
@@ -527,11 +624,13 @@ fn main() {
             halter_version,
             halter_scan,
             halter_machines_list,
+            halter_machines_test,
             halter_machines_add,
             halter_machines_remove,
             halter_push,
             halter_memory_show,
             open_path,
+            open_url,
             halter_sessions_list,
             halter_sessions_projects,
             halter_sessions_show,
@@ -541,8 +640,10 @@ fn main() {
             halter_providers_list,
             halter_providers_switch,
             halter_providers_add,
+            halter_providers_edit,
             halter_providers_remove,
             halter_providers_adopt,
+            halter_update_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building halter desktop");

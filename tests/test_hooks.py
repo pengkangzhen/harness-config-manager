@@ -94,7 +94,7 @@ def all_three(claude_settings: Path, zcode_config: Path, cursor_hooks: Path) -> 
 
 
 def test_read_claude_hooks(fake_home: Path, claude_settings: Path) -> None:
-    from harness_config_manager.hooks import read_claude
+    from halter.hooks import read_claude
 
     infos: list = []
     notes: list = []
@@ -112,7 +112,7 @@ def test_read_claude_hooks(fake_home: Path, claude_settings: Path) -> None:
 
 
 def test_read_zcode_hooks(zcode_config: Path) -> None:
-    from harness_config_manager.hooks import read_zcode
+    from halter.hooks import read_zcode
 
     infos: list = []
     notes: list = []
@@ -126,7 +126,7 @@ def test_read_zcode_hooks(zcode_config: Path) -> None:
 
 
 def test_read_cursor_hooks(cursor_hooks: Path) -> None:
-    from harness_config_manager.hooks import read_cursor
+    from halter.hooks import read_cursor
 
     infos: list = []
     read_cursor(infos, [])
@@ -140,9 +140,9 @@ def test_read_cursor_hooks(cursor_hooks: Path) -> None:
 
 
 def test_scan_all_includes_hooks(all_three: None) -> None:
-    from harness_config_manager.model import ToolReport
-    from harness_config_manager.report import to_json
-    from harness_config_manager.scan import scan_tool
+    from halter.model import ToolReport
+    from halter.report import to_json
+    from halter.scan import scan_tool
 
     r_claude = scan_tool("claude")
     assert isinstance(r_claude, ToolReport)
@@ -157,8 +157,8 @@ def test_scan_all_includes_hooks(all_three: None) -> None:
 
 
 def test_gen_hook_id_rules() -> None:
-    from harness_config_manager.hooks_manifest import gen_hook_id
-    from harness_config_manager.model import HookInfo
+    from halter.hooks_manifest import gen_hook_id
+    from halter.model import HookInfo
 
     assert gen_hook_id(HookInfo(event="PreToolUse", label="x",
                                 extra={"_otty": True})) == "otty"
@@ -171,7 +171,7 @@ def test_gen_hook_id_rules() -> None:
 
 
 def test_manifest_roundtrip(tmp_path: Path) -> None:
-    from harness_config_manager.hooks_manifest import HookSpec, load_manifest, save_manifest
+    from halter.hooks_manifest import HookSpec, load_manifest, save_manifest
 
     p = tmp_path / "hooks.toml"
     specs = [HookSpec(id="a", events=["PreToolUse"], matcher="Bash", command="/bin/x.sh",
@@ -184,8 +184,8 @@ def test_manifest_roundtrip(tmp_path: Path) -> None:
 
 def test_adopt_collects_third_party(fake_home: Path, claude_settings: Path,
                                     zcode_config: Path) -> None:
-    from harness_config_manager.config import DEFAULT_CONFIG_PATH
-    from harness_config_manager.hooks_manifest import adopt_hooks, load_manifest
+    from halter.config import DEFAULT_CONFIG_PATH
+    from halter.hooks_manifest import adopt_hooks, load_manifest
 
     _ = DEFAULT_CONFIG_PATH  # 展开 manifest 路径用 fake home
 
@@ -210,12 +210,12 @@ def test_adopt_collects_third_party(fake_home: Path, claude_settings: Path,
 
 def _spec(id_, events, command='"$HOME/.local/bin/gh-proxy-guard"',
           matcher=None, timeout=None):
-    from harness_config_manager.hooks_manifest import HookSpec
+    from halter.hooks_manifest import HookSpec
     return HookSpec(id=id_, events=events, command=command, matcher=matcher, timeout=timeout)
 
 
 def test_sync_dry_run_no_write(all_three: None, fake_home: Path) -> None:
-    from harness_config_manager.hooks_write import sync_hooks
+    from halter.hooks_write import sync_hooks
 
     before = {p: p.read_bytes() for p in [
         fake_home / ".claude/settings.json",
@@ -230,7 +230,7 @@ def test_sync_dry_run_no_write(all_three: None, fake_home: Path) -> None:
 
 
 def test_sync_apply_three_dialects(all_three: None, fake_home: Path) -> None:
-    from harness_config_manager.hooks_write import sync_hooks
+    from halter.hooks_write import sync_hooks
 
     sync_hooks([_spec("my-hook", ["PreToolUse", "Stop"], matcher="Bash", timeout=40)],
                installed_tools=["claude", "zcode", "cursor"], apply=True, prefer="skip")
@@ -257,7 +257,7 @@ def test_sync_apply_three_dialects(all_three: None, fake_home: Path) -> None:
 
 
 def test_sync_idempotent_and_conflict(all_three: None) -> None:
-    from harness_config_manager.hooks_write import sync_hooks
+    from halter.hooks_write import sync_hooks
 
     spec = _spec("my-hook", ["PreToolUse"], matcher="Bash", timeout=40)
     installed = ["claude", "zcode", "cursor"]
@@ -276,7 +276,7 @@ def test_sync_idempotent_and_conflict(all_three: None) -> None:
 
 
 def test_third_party_entries_untouched(all_three: None, fake_home: Path) -> None:
-    from harness_config_manager.hooks_write import sync_hooks
+    from halter.hooks_write import sync_hooks
 
     original = json.loads((fake_home / ".claude/settings.json").read_text())
     otty_before = [e for e in original["hooks"]["PreToolUse"] if e.get("_otty")]
@@ -294,7 +294,7 @@ def test_third_party_entries_untouched(all_three: None, fake_home: Path) -> None
 
 
 def test_event_asymmetry_skips(all_three: None) -> None:
-    from harness_config_manager.hooks_write import sync_hooks
+    from halter.hooks_write import sync_hooks
 
     installed = ["claude", "zcode", "cursor"]
     # cursor 独有事件：claude/zcode 行出现跳过提示，仅 cursor 计划写入
@@ -315,7 +315,7 @@ def test_cli_sync_hooks_layer(fake_home: Path, monkeypatch: pytest.MonkeyPatch,
     """CLI 集成：--no-hooks 关层不产生 hooks 输出；空清单走自动收集分支。"""
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     runner = CliRunner()
     # --no-hooks：不得出现 hooks 字样段落
@@ -325,7 +325,7 @@ def test_cli_sync_hooks_layer(fake_home: Path, monkeypatch: pytest.MonkeyPatch,
 
 
 def test_doctor_does_not_report_unexpanded_hook_paths_as_dead(fake_home: Path) -> None:
-    from harness_config_manager.doctor import run_doctor
+    from halter.doctor import run_doctor
 
     path = fake_home / ".cursor/hooks.json"
     path.parent.mkdir(parents=True)

@@ -1,4 +1,4 @@
-"""harness-config-manager (halter): 检测 + 盘点 + 分发 AI 编码工具的用户级 skills / MCP / 插件配置，并调取项目级跨助手历史会话。"""
+"""halter: 检测 + 盘点 + 分发 AI 编码工具的用户级 skills / MCP / 插件配置，并调取项目级跨助手历史会话。"""
 
 import sys
 

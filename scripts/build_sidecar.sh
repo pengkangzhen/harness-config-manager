@@ -65,7 +65,7 @@ uv run pyinstaller \
     --distpath "$WORK/dist" \
     --workpath "$WORK/build" \
     --specpath "$WORK" \
-    --copy-metadata harness-config-manager \
+    --copy-metadata halter \
     desktop/pyinstaller_entry.py
 
 # Move through a private temporary name, then record the hash only after the

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from harness_config_manager.cli import app
+from halter.cli import app
 
 runner = CliRunner()
 
@@ -45,8 +45,8 @@ def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> No
     """projects 聚合：跨助手计数 / 最近活动排序 / 当前项目标记。"""
     from datetime import datetime, timezone
 
-    from harness_config_manager import sessions as sess
-    from harness_config_manager.sessions import SessionInfo
+    from halter import sessions as sess
+    from halter.sessions import SessionInfo
 
     t = datetime(2026, 9, 18, tzinfo=timezone.utc)
     captured: list[object] = []
@@ -80,7 +80,7 @@ def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> No
 
 def test_sessions_list_all_projects(fake_home, monkeypatch, tmp_path) -> None:
     """--all-projects 时以 project=None 全量扫描。"""
-    from harness_config_manager import sessions as sess
+    from halter import sessions as sess
 
     captured: list[object] = []
 
@@ -98,9 +98,9 @@ def test_sessions_list_all_projects(fake_home, monkeypatch, tmp_path) -> None:
 
 def test_tool_category_contract(fake_home, monkeypatch) -> None:
     """矩阵默认只把独立 AI Harness 当列；编辑器宿主标记为 editor。"""
-    from harness_config_manager import cli
-    from harness_config_manager.model import Detection
-    from harness_config_manager.registry import TOOLS
+    from halter import cli
+    from halter.model import Detection
+    from halter.registry import TOOLS
 
     monkeypatch.setattr(cli, "detect_tools", lambda: [
         Detection("claude", "Claude Code", True, category="harness"),
@@ -122,8 +122,8 @@ def test_tool_category_contract(fake_home, monkeypatch) -> None:
 
 def test_sessions_projects_kind_classification(fake_home, monkeypatch, tmp_path) -> None:
     """temp/dated/virtual 目录不与真实项目混排；真实项目按存在性判定。"""
-    from harness_config_manager import sessions as sess
-    from harness_config_manager.sessions import SessionInfo
+    from halter import sessions as sess
+    from halter.sessions import SessionInfo
 
     real = tmp_path / "realproj"
     real.mkdir()
@@ -168,13 +168,15 @@ def test_providers_json_contract(fake_home: Path, monkeypatch) -> None:
     for tool in ("claude", "codex"):
         cur = payload["current"][tool]
         assert cur["status"] == "official" and set(cur) == {
-            "status", "provider", "base_url", "model", "detail"}
+            "status", "provider", "base_url", "model", "detail"} | (
+            {"env"} if tool == "claude" else set())   # claude 另带扁平托管 env（收编预填）
 
     monkeypatch.setenv("ZHIPU_TOKEN", "sk-from-env")
     r = runner.invoke(app, [
         "providers", "add", "zhipu", "--tool", "claude",
-        "--base-url", "https://open.bigmodel.cn/api/anthropic",
-        "--model", "glm-5.3[1M]", "--token-env", "ZHIPU_TOKEN"])
+        "--def", json.dumps({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                             "ANTHROPIC_MODEL": "glm-5.3[1M]"}),
+        "--token-env", "ZHIPU_TOKEN"])
     assert r.exit_code == 0
 
     result = runner.invoke(app, ["providers", "list", "--json"])
@@ -182,7 +184,7 @@ def test_providers_json_contract(fake_home: Path, monkeypatch) -> None:
     zhipu = next(p for p in payload["providers"] if p["id"] == "zhipu")
     assert zhipu["tools"] == ["claude"] and zhipu["builtin"] is False
     assert zhipu["claude"] == {"base_url": "https://open.bigmodel.cn/api/anthropic",
-                               "model": "glm-5.3[1M]"}
+                               "model": "glm-5.3[1M]", "env": {}}
     assert payload["current"]["claude"]["status"] == "official"
 
     r = runner.invoke(app, ["providers", "switch", "zhipu", "--tool", "claude"])
@@ -192,7 +194,10 @@ def test_providers_json_contract(fake_home: Path, monkeypatch) -> None:
     cur = payload["current"]["claude"]
     assert cur == {"status": "halter", "provider": "zhipu",
                    "base_url": "https://open.bigmodel.cn/api/anthropic",
-                   "model": "glm-5.3[1M]", "detail": ""}
+                   "model": "glm-5.3[1M]", "detail": "",
+                   "env": {"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                           "ANTHROPIC_MODEL": "glm-5.3[1M]",
+                           "ENABLE_TOOL_SEARCH": "true"}}   # 非托管键全量下发
     env = json.loads((fake_home / ".claude/settings.json").read_text(encoding="utf-8"))["env"]
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-from-env"
     assert env["ENABLE_TOOL_SEARCH"] == "true"
@@ -204,6 +209,7 @@ def test_machines_list_json_contract(fake_home: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["count"] == 0 and payload["machines"] == []
+    assert payload["local"]["host_name"] and payload["local"]["os"]  # 本机显示信息
 
     r = runner.invoke(app, ["machines", "add", "desktop", "--host", "10.0.0.2",
                             "--user", "pk", "--port", "2222", "--halter-path", "/usr/bin/halter"])
@@ -213,4 +219,119 @@ def test_machines_list_json_contract(fake_home: Path) -> None:
     assert payload["count"] == 1
     m = payload["machines"][0]
     assert m == {"name": "desktop", "host": "10.0.0.2", "user": "pk",
-                 "port": 2222, "halter_path": "/usr/bin/halter", "source": "manual"}
+                 "port": 2222, "halter_path": "/usr/bin/halter", "source": "manual",
+                 "local": False, "host_name": None, "os": None}  # 未探测过 → null
+
+
+def test_update_status_json_contract(fake_home, monkeypatch) -> None:
+    """desktop 更新面板数据源：npm 渠道工具的当前/最新/状态形状与比较口径。"""
+    from halter import updates as upd
+
+    monkeypatch.setattr(upd, "npm_available", lambda: True)
+    monkeypatch.setattr(upd, "tool_installed",
+                        lambda names: bool(names) and names[0] in ("claude", "codex", "pi"))
+    monkeypatch.setattr(upd, "cli_version",
+                        lambda cli: {"claude": "2.1.292", "codex": "0.158.0",
+                                     "pi": "0.83.0"}.get(cli))
+    monkeypatch.setattr(upd, "npm_latest",
+                        lambda pkg: {"@anthropic-ai/claude-code": "2.1.292",
+                                     "@openai/codex": "0.160.1",
+                                     "@earendil-works/pi-coding-agent": "0.73.1"}.get(pkg))
+
+    result = runner.invoke(app, ["update", "status", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["npm_available"] is True
+    assert payload["platform"]
+    by_key = {t["key"]: t for t in payload["tools"]}
+    assert by_key["claude"] == {"key": "claude", "display": "Claude Code",
+                                "npm_package": "@anthropic-ai/claude-code",
+                                "install": ["bash -c 'tmp=$(mktemp) && curl -fsSL"
+                                            " https://claude.ai/install.sh -o $tmp && bash $tmp;"
+                                            " status=$?; rm -f $tmp; exit $status'",
+                                            "npm install -g @anthropic-ai/claude-code@latest"],
+                                "installed": True, "current": "2.1.292",
+                                "latest": "2.1.292", "state": "latest"}
+    assert by_key["codex"]["state"] == "upgradeable"
+    # 高于 registry 最新不再判绿（pi 弃更事件教训）：单列 ahead，红色警示
+    assert by_key["pi"]["state"] == "ahead"
+    # 未安装的 npm 渠道 harness 也列出（灰卡），latest 拿不到时状态仍为 missing
+    gemini = by_key["gemini"]
+    assert gemini["installed"] is False and gemini["state"] == "missing"
+    # 2026-10 批量纳入的 npm 渠道 harness
+    assert {"kimi", "pi", "qwen", "iflow", "amp"} <= set(by_key)
+    assert by_key["kimi"]["npm_package"] == "@moonshot-ai/kimi-code"
+    assert by_key["pi"]["npm_package"] == "@earendil-works/pi-coding-agent"
+
+
+def test_update_install_commands() -> None:
+    """手动安装命令：有官方安装脚本的脚本与 npm 各一条（分行展示），其余仅 npm。"""
+    from halter.updates import NPM_PACKAGES, install_commands
+
+    for key in NPM_PACKAGES:
+        cmds = install_commands(key)
+        assert isinstance(cmds, list) and 1 <= len(cmds) <= 2, key
+        assert cmds[-1] == f"npm install -g {NPM_PACKAGES[key]}@latest", key
+        for cmd in cmds[:-1]:          # 除末条 npm 外均为 curl 安装脚本
+            assert cmd.startswith("bash -c ") and "mktemp" in cmd and "rm -f $tmp" in cmd
+    claude = install_commands("claude")
+    assert claude[0] == ("bash -c 'tmp=$(mktemp) && curl -fsSL https://claude.ai/install.sh"
+                         " -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'")
+    assert claude[1] == "npm install -g @anthropic-ai/claude-code@latest"
+    assert "https://opencode.ai/install" in install_commands("opencode")[0]
+    assert install_commands("codex") == ["npm install -g @openai/codex@latest"]
+    assert install_commands("nope") is None
+
+
+def test_update_registry_covers_npm_packages() -> None:
+    """守卫：NPM_PACKAGES 的每个 key 都必须是注册表里有 CLI 名的 ToolSpec。"""
+    from halter.registry import BY_KEY
+    from halter.updates import NPM_PACKAGES
+
+    for key in NPM_PACKAGES:
+        spec = BY_KEY.get(key)
+        assert spec is not None, f"{key} 不在 registry.TOOLS"
+        assert spec.cli_names, f"{key} 缺少 cli_names，版本探测无从执行"
+
+
+def test_update_status_npm_missing(fake_home, monkeypatch) -> None:
+    """npm 不在 PATH：latest 全空、状态 unknown，面板据此显示告警。"""
+    from halter import updates as upd
+
+    monkeypatch.setattr(upd, "npm_available", lambda: False)
+    monkeypatch.setattr(upd, "tool_installed", lambda names: True)
+    monkeypatch.setattr(upd, "cli_version", lambda cli: "1.2.3")
+    monkeypatch.setattr(upd, "npm_latest", lambda pkg: None)
+
+    result = runner.invoke(app, ["update", "status", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["npm_available"] is False
+    assert payload["tools"] and all(t["latest"] is None and t["state"] == "unknown"
+                                    for t in payload["tools"])
+
+
+def test_update_run_invokes_npm_install(fake_home, monkeypatch) -> None:
+    """update run 转发到 updates.apply_update 并透传输出；未知工具退出码 2。"""
+    from halter import updates as upd
+
+    captured: dict = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "added 1 package in 4s"
+        stderr = ""
+
+    def fake_apply(tool):
+        captured["tool"] = tool
+        return FakeProc()
+
+    monkeypatch.setattr(upd, "apply_update", fake_apply)
+    result = runner.invoke(app, ["update", "run", "claude"])
+    assert result.exit_code == 0
+    assert captured["tool"] == "claude"
+    assert "npm install -g @anthropic-ai/claude-code@latest" in result.output
+    assert "claude 已升级到最新版" in result.output
+
+    bad = runner.invoke(app, ["update", "run", "nope"])
+    assert bad.exit_code == 2

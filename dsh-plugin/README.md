@@ -1,7 +1,7 @@
 # dsh-halter
 
 A [DeepSeek Harness](https://www.deepseek.com/harness/en) plugin that exposes the
-[halter](https://github.com/pengkangzhen/harness-config-manager) CLI — one source of truth
+[halter](https://github.com/pengkangzhen/halter) CLI — one source of truth
 for skills, MCP servers, plugins, hooks and subagents across all your AI coding harnesses
 — as agent tools and a slash command inside dsh.
 
@@ -20,7 +20,7 @@ for skills, MCP servers, plugins, hooks and subagents across all your AI coding 
 halter itself is not bundled. Install it separately (Python 3.12+ / [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-uv tool install harness-config-manager
+uv tool install git+https://github.com/pengkangzhen/halter.git
 halter scan   # sanity check
 ```
 

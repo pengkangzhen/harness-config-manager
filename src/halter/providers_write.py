@@ -23,6 +23,7 @@ from .providers_manifest import (
     get_token,
     is_managed_env_key,
     load_manifest,
+    preset_label_for_url,
 )
 from .registry import expand
 
@@ -47,7 +48,7 @@ def _section_id(pid: str) -> str:
     return f"{HALTER_SECTION_PREFIX}{pid}"
 
 
-def _managed_env_values(c: ProviderClaude, token: str | None) -> dict[str, str]:
+def _claude_env_values(c: ProviderClaude, token: str | None) -> dict[str, str]:
     env: dict[str, str] = {"ANTHROPIC_BASE_URL": c.base_url}
     if token:
         env["ANTHROPIC_AUTH_TOKEN"] = token
@@ -58,7 +59,11 @@ def _managed_env_values(c: ProviderClaude, token: str | None) -> dict[str, str]:
 
 
 def write_claude(spec: ProviderSpec, token: str | None) -> list[str]:
-    """~/.claude/settings.json 的 env 读-改-写（只动托管键）。"""
+    """~/.claude/settings.json 的 env 读-改-写。
+
+    清理只针对托管键（ANTHROPIC_* / CLAUDE_CODE_*）——非托管键永不误删；
+    provider env 可含任意键（def 白名单已放开），切换时一并写入。
+    """
     path = expand(".claude/settings.json")
     data = load_json_object(path)
     if spec.id == OFFICIAL_ID or spec.claude is None:
@@ -71,7 +76,7 @@ def write_claude(spec: ProviderSpec, token: str | None) -> list[str]:
         atomic_write_json(path, data)
         return ["claude: 清空托管 env 键 → 官方默认 (~/.claude/settings.json)"]
 
-    values = _managed_env_values(spec.claude, token)
+    values = _claude_env_values(spec.claude, token)
     env = data.setdefault("env", {})
     for k in [k for k in list(env) if is_managed_env_key(k)]:
         del env[k]                       # 先清旧 provider 的托管键
@@ -158,18 +163,24 @@ def _read_codex_doc() -> dict:
 
 
 def detect_current(tool: str, specs: list[ProviderSpec] | None = None) -> dict:
-    """推断工具当前供应商：{status, provider, base_url, model, detail}。
+    """推断工具当前供应商：{status, provider, base_url, model, detail}；claude 另带 env。
 
     status: halter（清单匹配）/ external（第三方配置）/ official（无自定义端点）。
+    provider: halter = 清单 id；external = 命中内置预设时为厂商真名（如 Zhipu GLM），
+              codex 退回第三方段名，claude 未知端点为空串。
+    env（仅 claude）: 实况 settings.json 的扁平 env 全量（不含 ANTHROPIC_AUTH_TOKEN），
+              供收编表单整块带入配置 JSON（含 API_TIMEOUT_MS 等非托管键）。
     """
     if specs is None:
         specs = load_manifest()
     if tool == "claude":
         env = _read_claude_env()
         base_url = env.get("ANTHROPIC_BASE_URL", "")
+        flat = {k: v for k, v in env.items() if k != "ANTHROPIC_AUTH_TOKEN"}
         if not base_url:
             return {"status": "official", "provider": OFFICIAL_ID, "base_url": "",
-                    "model": env.get("ANTHROPIC_MODEL", ""), "detail": "无自定义端点"}
+                    "model": env.get("ANTHROPIC_MODEL", ""), "detail": "无自定义端点",
+                    "env": flat}
         token = env.get("ANTHROPIC_AUTH_TOKEN", "")
         for s in specs:
             if s.claude is None:
@@ -178,10 +189,12 @@ def detect_current(tool: str, specs: list[ProviderSpec] | None = None) -> dict:
             same_token = (not pid_token and not token) or (pid_token and pid_token == token)
             if s.claude.base_url == base_url and same_token:
                 return {"status": "halter", "provider": s.id, "base_url": base_url,
-                        "model": env.get("ANTHROPIC_MODEL", ""), "detail": ""}
-        return {"status": "external", "provider": "", "base_url": base_url,
+                        "model": env.get("ANTHROPIC_MODEL", ""), "detail": "", "env": flat}
+        return {"status": "external", "provider": preset_label_for_url(base_url) or "",
+                "base_url": base_url,
                 "model": env.get("ANTHROPIC_MODEL", ""),
-                "detail": "端点不在 halter 清单中（halter providers adopt 可收编）"}
+                "detail": "端点不在 halter 清单中（halter providers adopt 可收编）",
+                "env": flat}
     if tool == "codex":
         doc = _read_codex_doc()
         pid = doc.get("model_provider")
@@ -195,8 +208,10 @@ def detect_current(tool: str, specs: list[ProviderSpec] | None = None) -> dict:
                         "base_url": str(section.get("base_url", "")),
                         "model": str(doc.get("model", "") or ""), "detail": ""}
         section = (doc.get("model_providers") or {}).get(pid, {})
-        return {"status": "external", "provider": pid,
-                "base_url": str(section.get("base_url", "")),
+        base_url = str(section.get("base_url", ""))
+        return {"status": "external",
+                "provider": preset_label_for_url(base_url) or pid,
+                "base_url": base_url,
                 "model": str(doc.get("model", "") or ""),
                 "detail": f"第三方段 [{pid}]"}
     return {"status": "official", "provider": "", "base_url": "", "model": "", "detail": "未知工具"}

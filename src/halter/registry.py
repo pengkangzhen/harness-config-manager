@@ -83,6 +83,36 @@ TOOLS: tuple[ToolSpec, ...] = (
         notes="CLI 内置能力，无用户级 skills/MCP/插件配置可管理",
     ),
     ToolSpec(
+        key="kimi",
+        display="Kimi Code",
+        cli_names=("kimi",),
+        notes="npm @moonshot-ai/kimi-code 分发；暂未接管其配置层，仅更新面板纳管版本对比",
+    ),
+    ToolSpec(
+        key="pi",
+        display="Pi",
+        cli_names=("pi",),
+        notes="npm @earendil-works/pi-coding-agent 分发（仓库 earendil-works/pi，旧 @mariozechner scope 已弃更）；仅更新面板纳管版本对比",
+    ),
+    ToolSpec(
+        key="qwen",
+        display="Qwen Code",
+        cli_names=("qwen",),
+        notes="npm @qwen-code/qwen-code 分发（gemini-cli 同源分支）；仅更新面板纳管版本对比",
+    ),
+    ToolSpec(
+        key="iflow",
+        display="iFlow CLI",
+        cli_names=("iflow",),
+        notes="npm @iflow-ai/iflow-cli 分发；仅更新面板纳管版本对比",
+    ),
+    ToolSpec(
+        key="amp",
+        display="Amp",
+        cli_names=("amp",),
+        notes="npm @ampcode/cli 分发（Sourcegraph）；仅更新面板纳管版本对比",
+    ),
+    ToolSpec(
         key="continue",
         display="Continue",
         config_dirs=(".continue",),

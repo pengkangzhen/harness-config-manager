@@ -44,15 +44,16 @@ def _short_ref(ref: str, keep: int = 8) -> str:
     return f"{tool}:{session_id[:keep]}…" if sep and len(session_id) > keep else ref
 
 
-def _run_on_machine(machine: str, args: list[str], timeout: int = 180) -> None:
-    """在远程机器上执行 halter 子命令并转发输出（scan/sync --machine 的通道）。"""
+def _run_on_machine(machine: str, args: list[str], timeout: int = 180,
+                    input_bytes: bytes | None = None) -> None:
+    """在远程机器上执行 halter 子命令并转发输出（--machine 通道）。"""
     from .machines import get_machine, run_remote
 
     m = get_machine(machine)
     if m is None:
         console.print(f"[red]机器 {machine} 不存在（halter machines list 查看）[/red]")
         raise typer.Exit(2)
-    rc, out, err = run_remote(m, args, timeout=timeout)
+    rc, out, err = run_remote(m, args, input_bytes=input_bytes, timeout=timeout)
     if rc is None:
         console.print(f"[red]{err}[/red]")
         raise typer.Exit(1)
@@ -79,6 +80,9 @@ app.add_typer(machines_app, name="machines")
 providers_app = typer.Typer(help="管理模型供应商并一键切换 claude / codex 的端点与模型（本机独立，不参与多机同步）。")
 app.add_typer(providers_app, name="providers")
 
+update_app = typer.Typer(help="管理 harness 升级：npm 渠道版本对比与一键升级（desktop 更新面板的数据源）。")
+app.add_typer(update_app, name="update")
+
 @app.callback()
 def _root() -> None:
     """agent-config-manager: AI 编码工具的用户级 skills / MCP / 插件 统一检测、盘点、分发，并支持项目级跨助手历史会话。"""
@@ -90,6 +94,7 @@ def _root() -> None:
 
 @sessions_app.command("list")
 def sessions_list(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     project: Path = typer.Option(Path("."), "--project", "-p", help="项目路径，默认当前目录"),
     tool: list[str] = typer.Option([], "--tool", "-t", help="按来源工具过滤，可多选"),
     limit: int = typer.Option(30, "--limit", "-n", min=1, help="最多显示条数"),
@@ -100,6 +105,16 @@ def sessions_list(
     """列出当前项目（或所有项目）在本地 AI 编码助手中的历史会话。"""
     from .sessions import scan_sessions, session_to_dict
 
+    if machine is not None:
+        # 项目路径按原样转发（远端路径在本机不存在，解析交给远端 halter）
+        fwd = ["sessions", "list", "--limit", str(limit)]
+        if all_sessions:
+            fwd.append("--all")
+        fwd += (["--all-projects"] if all_projects else ["--project", str(project)])
+        fwd += [x for t2 in tool if t2 for x in ("--tool", t2)]
+        fwd += ["--json"] if json_out else []
+        _run_on_machine(machine, fwd)
+        return
     project = project.expanduser().resolve(strict=False)
     items = scan_sessions(None if all_projects else project, tools=tool or None)
     if not all_sessions:
@@ -136,6 +151,7 @@ def sessions_list(
 @sessions_app.command()
 def show(
     ref: str = typer.Argument(help="会话引用，形如 tool:session-id"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     project: Path = typer.Option(Path("."), "--project", "-p"),
     transcript: bool = typer.Option(False, "--transcript", help="显式读取并输出会话文本"),
     tail: int = typer.Option(80, "--tail", min=1, help="仅输出最后 N 条消息"),
@@ -145,6 +161,16 @@ def show(
     """查看一个历史会话的 metadata，或显式读取其 transcript。"""
     from .sessions import find_session, format_transcript, read_session, session_to_dict
 
+    if machine is not None:
+        fwd = ["sessions", "show", "--project", str(project), "--tail", str(tail)]
+        if transcript:
+            fwd.append("--transcript")
+        if include_tools:
+            fwd.append("--include-tools")
+        fwd += ["--json"] if json_out else []
+        fwd += ["--", ref]
+        _run_on_machine(machine, fwd)
+        return
     project = project.expanduser().resolve(strict=False)
     try:
         info = find_session(ref, project)
@@ -177,6 +203,7 @@ def show(
 @sessions_app.command()
 def search(
     query: str = typer.Argument(help="关键词，大小写不敏感"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     project: Path = typer.Option(Path("."), "--project", "-p"),
     tool: list[str] = typer.Option([], "--tool", "-t"),
     limit: int = typer.Option(20, "--limit", "-n", min=1),
@@ -186,6 +213,14 @@ def search(
     """在当前项目（或所有项目）的历史会话文本中搜索。"""
     from .sessions import read_session, scan_sessions
 
+    if machine is not None:
+        fwd = ["sessions", "search", "--limit", str(limit)]
+        fwd += (["--all-projects"] if all_projects else ["--project", str(project)])
+        fwd += [x for t2 in tool if t2 for x in ("--tool", t2)]
+        fwd += ["--json"] if json_out else []
+        fwd += ["--", query]
+        _run_on_machine(machine, fwd, timeout=300)
+        return
     project = project.expanduser().resolve(strict=False)
     needle = query.casefold()
     hits: list[tuple[object, str]] = []
@@ -226,6 +261,7 @@ def search(
 @sessions_app.command()
 def context(
     ref: str = typer.Argument(help="会话引用，形如 tool:session-id"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     project: Path = typer.Option(Path("."), "--project", "-p"),
     tail: int = typer.Option(40, "--tail", min=1),
     output: Path = typer.Option(None, "--output", "-o", help="写入 handoff Markdown 文件"),
@@ -233,6 +269,13 @@ def context(
     """从指定历史会话生成确定性、脱敏的交接上下文。"""
     from .sessions import build_context
 
+    if machine is not None:
+        fwd = ["sessions", "context", "--project", str(project), "--tail", str(tail)]
+        if output is not None:
+            fwd += ["--output", str(output)]
+        fwd += ["--", ref]
+        _run_on_machine(machine, fwd)
+        return
     project = project.expanduser().resolve(strict=False)
     try:
         text = build_context(ref, project, tail)
@@ -276,7 +319,7 @@ def version(
     from importlib.metadata import PackageNotFoundError, version as pkg_version
 
     try:
-        v = pkg_version("harness-config-manager")
+        v = pkg_version("halter")
     except PackageNotFoundError:
         v = "0.0.0+dev"
     if json_out:
@@ -291,6 +334,7 @@ def version(
 
 @sessions_app.command("projects")
 def sessions_projects(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     project: Path = typer.Option(Path("."), "--project", "-p", help="用于标记当前项目"),
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
 ) -> None:
@@ -298,6 +342,12 @@ def sessions_projects(
     from datetime import datetime, timezone
 
     from .sessions import _iso, scan_sessions
+
+    if machine is not None:
+        _run_on_machine(machine, [
+            "sessions", "projects", "--project", str(project)]
+            + (["--json"] if json_out else []))
+        return
 
     def _same_path(a: str, b: Path) -> bool:
         if not a:
@@ -836,11 +886,17 @@ def sync(
 
 
 @memory_app.command("show")
-def memory_show(json_out: bool = typer.Option(False, "--json", help="以 JSON 输出")) -> None:
+def memory_show(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
     """查看记忆事实源与各工具侧的内容、状态与差异。"""
     from .config import load_config
     from .memory import memory_snapshot
 
+    if machine is not None:
+        _run_on_machine(machine, ["memory", "show"] + (["--json"] if json_out else []))
+        return
     snap = memory_snapshot(load_config())
     if json_out:
         emit_json(_json.dumps(snap, ensure_ascii=False))
@@ -1019,9 +1075,15 @@ def machines_list(json_out: bool = typer.Option(False, "--json", help="以 JSON 
 
     machines = list_machines()
     if json_out:
+        from .machines import load_info_cache, local_machine_info
+
+        info = load_info_cache()
         emit_json(_json.dumps({
             "count": len(machines),
-            "machines": [m.__dict__ for m in machines],
+            "local": local_machine_info(),
+            "machines": [{**m.__dict__, "local": m.is_local,
+                          "host_name": info.get(m.name, {}).get("host_name"),
+                          "os": info.get(m.name, {}).get("os")} for m in machines],
         }, ensure_ascii=False))
         return
     if not machines:
@@ -1036,7 +1098,8 @@ def machines_list(json_out: bool = typer.Option(False, "--json", help="以 JSON 
     table.add_column("来源", style="dim")
     for m in machines:
         origin = "~/.ssh/config" if m.source == "ssh" else "machines.toml"
-        table.add_row(m.name, m.destination, m.halter_path, origin)
+        name = f"{m.name}（即本机）" if m.is_local else m.name
+        table.add_row(name, m.destination, m.halter_path, origin)
     console.print(table)
     console.print("[dim]连通性检查：halter machines test <name>；单条目跨机同步：halter push <layer> <item> --to <name>[/dim]")
 
@@ -1091,29 +1154,46 @@ def remove(name: str = typer.Argument(help="机器别名")) -> None:
 
 
 @machines_app.command()
-def test(name: str = typer.Argument(help="机器别名")) -> None:
-    """检查与远程机器的连通性及远端 halter 可用性。"""
+def test(
+    name: str = typer.Argument(help="机器别名"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """检查与远程机器的连通性及远端 halter 可用性；成功时缓存远端主机名。"""
     import json as _j
 
-    from .machines import get_machine, probe_remote_halter
+    from .machines import get_machine, probe_remote_halter, probe_remote_info, save_info_cache
 
     machine = get_machine(name)
     if machine is None:
         console.print(f"[red]机器 {name} 不存在（halter machines list 查看）[/red]")
         raise typer.Exit(2)
-    console.print(f"连接 [cyan]{machine.destination}:{machine.port}[/cyan]（halter: {machine.halter_path}）…")
+    if not json_out:
+        console.print(f"连接 [cyan]{machine.destination}:{machine.port}[/cyan]（halter: {machine.halter_path}）…")
     ok, detail = probe_remote_halter(machine)
+    host_name = os_name = None
     if ok:
         try:
             version = _j.loads(detail).get("version", "?")
         except _j.JSONDecodeError:
             version = "?"
-        console.print(f"[green]● 通[/green] 远端 halter {version}")
+        host_info = probe_remote_info(machine)
+        if host_info:
+            host_name, os_name = host_info["host_name"], host_info["os"]
+            save_info_cache(name, host_info)
+        if json_out:
+            emit_json(_json.dumps({"ok": True, "version": version,
+                                   "host_name": host_name, "os": os_name}, ensure_ascii=False))
+            return
+        suffix = f" · {host_name}（{os_name}）" if host_name else ""
+        console.print(f"[green]● 通[/green] 远端 halter {version}{suffix}")
         console.print(f"[dim]跨机同步示例：halter push skills <item> --to {name}[/dim]")
+        return
+    if json_out:
+        emit_json(_json.dumps({"ok": False, "detail": detail}, ensure_ascii=False))
     else:
         console.print(f"[red]✕ 不通[/red] {detail}")
         console.print("[dim]检查项：ssh 免密（公钥/ssh-agent）、--halter-path 绝对路径、远端 halter 已安装[/dim]")
-        raise typer.Exit(1)
+    raise typer.Exit(1)
 
 
 @machines_app.command()
@@ -1177,14 +1257,20 @@ def _provider_row(spec) -> dict:
 
     row = {"id": spec.id, "label": spec.label or spec.id, "tools": spec.tools(), "builtin": False}
     if spec.claude is not None:
-        row["claude"] = {"base_url": spec.claude.base_url, "model": spec.claude.model or ""}
+        # env 全是档位映射等非密钥托管键，随行下发供编辑表单预填
+        row["claude"] = {"base_url": spec.claude.base_url, "model": spec.claude.model or "",
+                         "env": dict(spec.claude.env)}
     if spec.codex is not None:
-        row["codex"] = {"base_url": spec.codex.base_url, "model": spec.codex.model or ""}
+        row["codex"] = {"base_url": spec.codex.base_url, "model": spec.codex.model or "",
+                        "wire_api": spec.codex.wire_api,
+                        "reasoning_effort": spec.codex.reasoning_effort or "",
+                        "context_window": spec.codex.context_window}
     return row
 
 
 @providers_app.command("list")
 def providers_list(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     tool: str = typer.Option(None, "--tool", help="过滤工具：claude / codex"),
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
 ) -> None:
@@ -1192,6 +1278,13 @@ def providers_list(
     from .providers_manifest import OFFICIAL_ID, PROVIDER_CAPABLE, load_manifest
     from .providers_write import detect_current
 
+    if machine is not None:
+        fwd = ["providers", "list"]
+        if tool is not None:
+            fwd += ["--tool", tool]
+        fwd += ["--json"] if json_out else []
+        _run_on_machine(machine, fwd)
+        return
     if tool is not None and tool not in PROVIDER_CAPABLE:
         console.print(f"[red]--tool 仅支持：{' / '.join(PROVIDER_CAPABLE)}[/red]")
         raise typer.Exit(2)
@@ -1256,37 +1349,24 @@ def show(
         _json.dumps(detail, ensure_ascii=False, indent=2), title=f"provider {pid}"))
 
 
-@providers_app.command()
-def add(
-    pid: str = typer.Argument(help="provider id（字母数字._-；再次 add 同 id 可补充另一工具块）"),
-    tool: str = typer.Option(..., "--tool", help="claude / codex"),
-    base_url: str = typer.Option(None, "--base-url", help="该工具协议的 API 端点（或用 --preset）"),
-    preset: str = typer.Option(None, "--preset", help="内置预设名，自动填充端点（halter providers presets 查看）"),
-    label: str = typer.Option("", "--label", help="显示名，缺省 = 预设名或 id"),
-    model: str = typer.Option(None, "--model", help="主模型名（claude → ANTHROPIC_MODEL / codex → model）"),
-    token_stdin: bool = typer.Option(False, "--token-stdin", help="从 stdin 读 token（不进 shell 历史）"),
-    token_env: str = typer.Option(None, "--token-env", help="从该环境变量读 token"),
-    env: list[str] = typer.Option([], "--env", help="claude 额外托管 env，KEY=VAL，可多选"),
-    wire_api: str = typer.Option("responses", "--wire-api", help="codex：responses / chat"),
-    reasoning_effort: str = typer.Option(None, "--reasoning-effort", help="codex：模型推理力度"),
-    context_window: int = typer.Option(None, "--context-window", help="codex：上下文窗口 token 数"),
-) -> None:
-    """新增（或补充）供应商定义；token 只入 secrets.toml（0600），不进清单。"""
-    import re
-    import sys
+def _load_block_def(def_json: str, tool: str, preset: str | None = None):
+    """--def 配置 JSON（对标 CC Switch 的「配置JSON」）→ 工具块。
 
-    from .providers_manifest import (PRESETS, ProviderClaude, ProviderCodex,
-                                     ProviderSpec, is_managed_env_key,
-                                     load_manifest, save_manifest,
-                                     set_token, token_secret_key)
+    @file 从文件读；preset 作底模板（端点等键可被 --def 覆盖）。
+    token 刻意不在此 JSON 中——密钥与配置分离，token 走 --token-stdin/--token-env。
+    """
+    import json as _json
+    from pathlib import Path
 
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", pid) or pid == "official":
-        console.print("[red]id 只能含字母数字._- 且不能是 official[/red]")
+    from .providers_manifest import PRESETS, parse_block_def
+
+    raw = Path(def_json[1:]).read_text(encoding="utf-8") if def_json.startswith("@") else def_json
+    try:
+        override = _json.loads(raw)
+    except _json.JSONDecodeError as e:
+        console.print(f"[red]--def JSON 语法错误：{e.msg}（第 {e.lineno} 行第 {e.colno} 列）[/red]")
         raise typer.Exit(2)
-    if tool not in ("claude", "codex"):
-        console.print("[red]--tool 仅支持：claude / codex[/red]")
-        raise typer.Exit(2)
-
+    base: dict = {}
     if preset is not None:
         tpl = PRESETS.get(preset)
         if tpl is None:
@@ -1296,25 +1376,63 @@ def add(
             console.print(f"[red]预设 {preset} 不含 {tool} 块（可选工具："
                           f"{' / '.join(k for k in tpl if k in ('claude', 'codex'))}）[/red]")
             raise typer.Exit(2)
-        if base_url is not None:
-            console.print("[red]--preset 与 --base-url 只能选一个[/red]")
-            raise typer.Exit(2)
-        base_url = tpl[tool]["base_url"]
-        if not label:
-            label = tpl.get("label", "")
-        if tool == "codex" and tpl[tool].get("wire_api") and wire_api == "responses":
-            wire_api = tpl[tool]["wire_api"]
-    elif base_url is None:
-        console.print("[red]--base-url 与 --preset 必须提供其一[/red]")
+        base = ({"ANTHROPIC_BASE_URL": tpl[tool]["base_url"]} if tool == "claude"
+                else {"base_url": tpl[tool]["base_url"]})
+        if tool == "codex" and tpl[tool].get("wire_api"):
+            base["wire_api"] = tpl[tool]["wire_api"]
+    merged = {**base, **override} if isinstance(override, dict) else override
+    try:
+        return parse_block_def(tool, merged)
+    except ValueError as e:
+        console.print(f"[red]--def {e}[/red]")
         raise typer.Exit(2)
 
-    extra_env: dict[str, str] = {}
-    for item in env:
-        key, sep, value = item.partition("=")
-        if tool != "claude" or not sep or not is_managed_env_key(key):
-            console.print(f"[red]--env 仅用于 claude 的托管键（ANTHROPIC_*/CLAUDE_CODE_*）：{item}[/red]")
-            raise typer.Exit(2)
-        extra_env[key] = value
+
+@providers_app.command()
+def add(
+    pid: str = typer.Argument(help="provider id（字母数字._-；再次 add 同 id 可补充另一工具块）"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+    tool: str = typer.Option(..., "--tool", help="claude / codex"),
+    def_json: str = typer.Option(..., "--def", help="工具块配置 JSON，对标 CC Switch「配置JSON」（@file 从文件读）"),
+    preset: str = typer.Option(None, "--preset", help="内置预设作底模板，其端点等键可被 --def 覆盖（halter providers presets 查看）"),
+    label: str = typer.Option("", "--label", help="显示名，缺省 = 预设名或 id"),
+    token_stdin: bool = typer.Option(False, "--token-stdin", help="从 stdin 读 token（不进 shell 历史）"),
+    token_env: str = typer.Option(None, "--token-env", help="从该环境变量读 token"),
+) -> None:
+    """新增（或补充）供应商定义；token 只入 secrets.toml（0600），不进清单。"""
+    import re
+    import sys
+
+    from .providers_manifest import (PRESETS, ProviderSpec, load_manifest,
+                                     save_manifest, set_token,
+                                     token_secret_key)
+
+    if machine is not None:
+        # 校验与解析都发生在远端；token 先读本地 stdin，再经 ssh stdin 转发，
+        # 全程不进本机 argv（process list）
+        token_bytes = sys.stdin.buffer.read() if token_stdin else None
+        fwd = ["providers", "add", pid, "--tool", tool, "--def", def_json]
+        if preset is not None:
+            fwd += ["--preset", preset]
+        if label:
+            fwd += ["--label", label]
+        if token_stdin:
+            fwd.append("--token-stdin")
+        if token_env is not None:
+            fwd += ["--token-env", token_env]
+        _run_on_machine(machine, fwd, input_bytes=token_bytes)
+        return
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", pid) or pid == "official":
+        console.print("[red]id 只能含字母数字._- 且不能是 official[/red]")
+        raise typer.Exit(2)
+    if tool not in ("claude", "codex"):
+        console.print("[red]--tool 仅支持：claude / codex[/red]")
+        raise typer.Exit(2)
+
+    block = _load_block_def(def_json, tool, preset)
+    if preset is not None and not label:
+        label = PRESETS[preset].get("label", "")
 
     token = None
     if token_stdin:
@@ -1341,17 +1459,85 @@ def add(
             spec.label = label
         action = f"补充 {pid} 的 {tool} 块"
     if tool == "claude":
-        spec.claude = ProviderClaude(base_url=base_url, model=model, env=extra_env)
+        spec.claude = block
     else:
-        spec.codex = ProviderCodex(base_url=base_url, model=model, wire_api=wire_api,
-                                   reasoning_effort=reasoning_effort,
-                                   context_window=context_window)
+        spec.codex = block
     save_manifest(specs)
     if token:
         set_token(pid, tool, token)
     secret_note = f"，token → secrets.toml [{token_secret_key(pid, tool)}]" if token else ""
     console.print(f"[green]{action}{secret_note}[/green]")
     console.print(f"[dim]激活：halter providers switch {pid} --tool {tool}[/dim]")
+
+
+@providers_app.command()
+def edit(
+    pid: str = typer.Argument(help="provider id（须已存在于清单）"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+    tool: str = typer.Option(..., "--tool", help="claude / codex"),
+    def_json: str = typer.Option(..., "--def", help="工具块配置 JSON，整体替换该块（@file 从文件读）"),
+    label: str = typer.Option("", "--label", help="显示名；缺省保持不变"),
+    token_stdin: bool = typer.Option(False, "--token-stdin", help="从 stdin 读 token（不进 shell 历史）"),
+    token_env: str = typer.Option(None, "--token-env", help="从该环境变量读 token"),
+) -> None:
+    """就地编辑供应商的某工具块（配置 JSON 整体替换）；该块恰为当前激活时同步重写实况配置。"""
+    import sys
+
+    from .providers_manifest import (load_manifest, save_manifest,
+                                     set_token, token_secret_key)
+    from .providers_write import detect_current, switch_provider
+
+    if machine is not None:
+        # token 经 ssh stdin 转发，全程不进本机 argv（与 add 同策略）
+        token_bytes = sys.stdin.buffer.read() if token_stdin else None
+        fwd = ["providers", "edit", pid, "--tool", tool, "--def", def_json]
+        if label:
+            fwd += ["--label", label]
+        if token_stdin:
+            fwd.append("--token-stdin")
+        if token_env is not None:
+            fwd += ["--token-env", token_env]
+        _run_on_machine(machine, fwd, input_bytes=token_bytes)
+        return
+
+    if tool not in ("claude", "codex"):
+        console.print("[red]--tool 仅支持：claude / codex[/red]")
+        raise typer.Exit(2)
+    specs = load_manifest()
+    spec = next((s for s in specs if s.id == pid), None)
+    if spec is None:
+        console.print(f"[red]未找到 provider '{pid}'（halter providers list 查看）[/red]")
+        raise typer.Exit(2)
+
+    block = _load_block_def(def_json, tool)
+
+    token = None
+    if token_stdin:
+        token = sys.stdin.read().strip() or None
+    elif token_env:
+        import os
+
+        token = os.environ.get(token_env) or None
+
+    # 编辑前实况：恰为当前激活供应商时，保存后按新定义重写该工具配置，避免清单与实况漂移
+    cur_before = detect_current(tool, specs)
+    was_active = cur_before["status"] == "halter" and cur_before["provider"] == pid
+    action = f"更新 {pid} 的 {tool} 块" if tool in spec.tools() else f"补充 {pid} 的 {tool} 块"
+    if label:
+        spec.label = label
+    if tool == "claude":
+        spec.claude = block
+    else:
+        spec.codex = block
+    save_manifest(specs)
+    if token:
+        set_token(pid, tool, token)
+    secret_note = f"，token → secrets.toml [{token_secret_key(pid, tool)}]" if token else ""
+    console.print(f"[green]{action}{secret_note}[/green]")
+    if was_active:
+        for line in switch_provider(pid, tool):
+            console.print(line)
+        console.print("[dim]已按新定义重写激活配置[/dim]")
 
 
 @providers_app.command("presets")
@@ -1377,17 +1563,27 @@ def providers_presets(json_out: bool = typer.Option(False, "--json", help="以 J
         urls = "  ".join(f"{k}:{tpl[k]['base_url']}" for k in tools)
         table.add_row(name, ",".join(tools), urls, tpl.get("note", ""))
     console.print(table)
-    console.print("[dim]使用：halter providers add <id> --tool <t> --preset <name> --token-stdin[/dim]")
+    console.print("[dim]使用：halter providers add <id> --tool <t> --preset <name> "
+                  "--def '{\"model\": \"…\"}' --token-stdin（预设端点为底，--def 键覆盖）[/dim]")
 
 
 @providers_app.command()
 def adopt(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     name: str = typer.Option(None, "--name", help="覆盖自动命名的 id（恰好收编出一个 provider 时生效）"),
     apply: bool = typer.Option(False, "--apply", help="实际写入（默认 dry-run）"),
 ) -> None:
     """收编 claude env / codex [model_providers.*] 中的现有供应商为清单条目。"""
     from .providers_manifest import adopt_providers
 
+    if machine is not None:
+        fwd = ["providers", "adopt"]
+        if name is not None:
+            fwd += ["--name", name]
+        if apply:
+            fwd.append("--apply")
+        _run_on_machine(machine, fwd)
+        return
     for line in adopt_providers(apply=apply, name=name):
         console.print(line)
 
@@ -1395,11 +1591,15 @@ def adopt(
 @providers_app.command()
 def switch(
     pid: str = typer.Argument(help="provider id（official = 切回官方默认端点）"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     tool: str = typer.Option(..., "--tool", help="claude / codex"),
 ) -> None:
     """切换工具的激活供应商（直接写目标配置；token 缺失时只写非密钥键）。"""
     from .providers_write import switch_provider
 
+    if machine is not None:
+        _run_on_machine(machine, ["providers", "switch", pid, "--tool", tool])
+        return
     for line in switch_provider(pid, tool):
         if "[red]" in line:
             console.print(line)
@@ -1410,12 +1610,19 @@ def switch(
 @providers_app.command()
 def remove(
     pid: str = typer.Argument(help="provider id"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
 ) -> None:
     """删除清单条目与对应 token（目标工具的配置文件不动，必要时先 switch）。"""
     from .providers_manifest import load_manifest, load_tokens, save_manifest, save_tokens
     from .providers_write import detect_current
 
+    if machine is not None:
+        fwd = ["providers", "remove", pid]
+        if apply:
+            fwd.append("--apply")
+        _run_on_machine(machine, fwd)
+        return
     specs = load_manifest()
     spec = next((s for s in specs if s.id == pid), None)
     if spec is None:
@@ -1440,3 +1647,78 @@ def remove(
 
         SECRETS_FILE().unlink(missing_ok=True)
     console.print(f"[green]已删除 {pid}（清单 + token）[/green]\n{warn}", style=None)
+
+
+# ---------------------------------------------------------------------------
+# update：npm 渠道 harness 的版本对比与一键升级（desktop 更新面板）
+
+
+@update_app.command("status")
+def update_status(
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+    json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
+) -> None:
+    """各 npm 渠道 harness 的当前版本 / registry 最新版本 / 升级状态。"""
+    from .updates import collect_status
+
+    if machine is not None:
+        fwd = ["update", "status"]
+        fwd += ["--json"] if json_out else []
+        _run_on_machine(machine, fwd)
+        return
+    payload = collect_status()
+    if json_out:
+        emit_json(_json.dumps(payload, ensure_ascii=False))
+        return
+    state_text = {
+        "latest": "[green]已就绪[/green]",
+        "upgradeable": "[yellow]可升级[/yellow]",
+        "ahead": "[red]高于最新[/red]",
+        "missing": "[dim]未安装[/dim]",
+        "unknown": "[dim]未知[/dim]",
+    }
+    table = Table(title=f"Harness updates — {payload['platform']}")
+    table.add_column("Tool", style="cyan", no_wrap=True)
+    table.add_column("npm 包", no_wrap=True)
+    table.add_column("当前版本", no_wrap=True)
+    table.add_column("最新版本", no_wrap=True)
+    table.add_column("状态", no_wrap=True)
+    for tool in payload["tools"]:
+        table.add_row(tool["display"], tool["npm_package"],
+                      tool["current"] or "-", tool["latest"] or "-",
+                      state_text[tool["state"]])
+    console.print(table)
+    if not payload["npm_available"]:
+        console.print("[yellow]未找到 npm — 无法获取最新版本，也无法执行升级[/yellow]")
+    console.print("[dim]升级：halter update run <tool>（tool 为 status 中的 npm 渠道 harness）[/dim]")
+
+
+@update_app.command("run")
+def update_run(
+    tool: str = typer.Argument(help="registry 工具 key（halter update status 查看）"),
+    machine: str = typer.Option(None, "--machine", help="在远程机器上执行本命令（halter machines list 查看）"),
+) -> None:
+    """把指定 harness 升级到 npm registry 最新版（npm install -g <pkg>@latest）。"""
+    import subprocess
+
+    from . import updates
+
+    if machine is not None:
+        _run_on_machine(machine, ["update", "run", tool])
+        return
+    if tool not in updates.NPM_PACKAGES:
+        console.print(f"[red]不支持升级 {tool}（可选：{' / '.join(updates.NPM_PACKAGES)}）[/red]")
+        raise typer.Exit(2)
+    console.print(f"[cyan]npm install -g {updates.NPM_PACKAGES[tool]}@latest[/cyan]")
+    try:
+        proc = updates.apply_update(tool)
+    except (OSError, subprocess.SubprocessError) as exc:
+        console.print(f"[red]升级 {tool} 失败: {exc}[/red]")
+        raise typer.Exit(1)
+    if (proc.stdout or "").strip():
+        console.print(proc.stdout.strip())
+    if (proc.stderr or "").strip():
+        console.print(proc.stderr.strip(), style="yellow")
+    if proc.returncode != 0:
+        raise typer.Exit(proc.returncode if 0 < proc.returncode < 256 else 1)
+    console.print(f"[green]{tool} 已升级到最新版[/green]")

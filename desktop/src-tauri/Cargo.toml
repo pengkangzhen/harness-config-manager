@@ -1,10 +1,10 @@
 [package]
 name = "halter-desktop"
 version = "0.1.0"
-description = "Harness Config Manager desktop app"
+description = "Halter desktop app"
 authors = ["pengkangzhen"]
 license = "MIT"
-repository = "https://github.com/pengkangzhen/harness-config-manager"
+repository = "https://github.com/pengkangzhen/halter"
 edition = "2021"
 rust-version = "1.77.2"
 

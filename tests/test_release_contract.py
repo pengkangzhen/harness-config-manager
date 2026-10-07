@@ -33,7 +33,7 @@ def test_version_numbers_agree_across_manifests() -> None:
 
 def test_halter_version_json_matches_pyproject() -> None:
     """`halter version --json` 必须报告 pyproject 声明的版本(release 不带旧 runtime)。"""
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     result = CliRunner().invoke(app, ["version", "--json"])
     assert result.exit_code == 0, result.output

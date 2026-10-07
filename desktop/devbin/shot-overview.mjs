@@ -20,7 +20,9 @@ await page.waitForSelector(".tool-card", { timeout: 20000 });
 await page.waitForTimeout(3000); // 等 halter CLI 扫描 + doctor 渲染完成
 await page.screenshot({ path: OUT_ZH });
 
+await page.click("#btn-settings");
 await page.click("#lang-en");
+await page.keyboard.press("Escape"); // 收起设置面板再截图
 await page.waitForTimeout(300);
 await page.screenshot({ path: OUT_EN });
 

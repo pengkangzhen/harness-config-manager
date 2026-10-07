@@ -13,6 +13,8 @@ machines.toml 只存 host / user / port / halter_path，绝不存密码或密钥
 
 from __future__ import annotations
 
+import json as _json
+import platform
 import re
 import shutil
 import subprocess
@@ -42,6 +44,11 @@ class MachineSpec:
     @property
     def destination(self) -> str:
         return f"{self.user}@{self.host}" if self.user else self.host
+
+    @property
+    def is_local(self) -> bool:
+        """host 为回环地址 —— 条目即本机，与本地操作重复（UI 应折叠进「本机」）。"""
+        return self.host.strip().lower() in {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
 def load_machines(path: Path | None = None) -> list[MachineSpec]:
@@ -240,7 +247,7 @@ def probe_remote_halter(machine: MachineSpec) -> tuple[bool, str]:
     hint = err.strip() or f"halter 退出码 {rc}"
     rc2, out2, _ = run_ssh(
         machine,
-        ["sh", "-lc", "command -v halter || command -v harness-config-manager"],
+        ["sh", "-lc", "command -v halter"],
         timeout=30,
     )
     if rc2 == 0:
@@ -248,3 +255,46 @@ def probe_remote_halter(machine: MachineSpec) -> tuple[bool, str]:
         if found:
             hint += f"；login shell 找到 {found[-1]}，可用 --halter-path 指定"
     return False, hint
+
+
+MACHINES_INFO = lambda: expand(".config/halter/machines-info.json")  # noqa: E731
+# 探测到的远端显示信息缓存（name -> {host_name, os}），test 成功时写入
+
+
+def local_machine_info() -> dict:
+    """本机显示信息：主机名 + 运行环境（wsl / macos / linux / windows）。"""
+    system = platform.system()
+    if system == "Linux" and "microsoft" in platform.release().lower():
+        os_name = "wsl"
+    else:
+        os_name = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(system, system.lower())
+    return {"host_name": platform.node() or "localhost", "os": os_name}
+
+
+def probe_remote_info(machine: MachineSpec) -> dict | None:
+    """一次 ssh 取远端 hostname 与内核标识，用于显示名；失败返回 None 不抛错。"""
+    rc, out, _ = run_ssh(machine, ["sh", "-c", "hostname; uname -s; uname -r"], timeout=15)
+    if rc != 0:
+        return None
+    lines = [ln.strip() for ln in out.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        return None
+    kernel = " ".join(lines[1:]).lower()
+    os_name = "macos" if "darwin" in kernel else ("wsl" if "microsoft" in kernel else "linux")
+    return {"host_name": lines[0], "os": os_name}
+
+
+def load_info_cache(path: Path | None = None) -> dict:
+    path = path or MACHINES_INFO()
+    try:
+        return _json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_info_cache(name: str, info: dict, path: Path | None = None) -> None:
+    path = path or MACHINES_INFO()
+    cache = load_info_cache(path)
+    cache[name] = info
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, _json.dumps(cache, ensure_ascii=False, indent=2) + "\n")

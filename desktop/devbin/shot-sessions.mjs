@@ -27,6 +27,7 @@ await page.waitForTimeout(300);
 await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-list.png" });
 
 await page.click(".session-item");
+await page.waitForSelector("#session-modal:not(.hidden) #session-detail .detail-header", { timeout: 20000 });
 await page.waitForTimeout(3000);
 await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-detail.png" });
 
@@ -43,6 +44,7 @@ await page.click('#session-detail .view-toggle .toggle-btn:nth-child(2)');
 await page.waitForTimeout(300);
 await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-detail-raw.png" });
 await page.click('#session-detail .view-toggle .toggle-btn:nth-child(1)'); // 切回对话视图
+await page.keyboard.press("Escape"); // 收起详情弹层，才能操作底下的列表/工具栏
 
 // —— 搜索命中词在 transcript 内高亮（容忍零命中）——
 await page.fill("#search-input", "的");
@@ -52,6 +54,7 @@ if (await page.locator("#sessions-list .session-item").count()) {
   await page.click("#sessions-list .session-item >> nth=0");
   await page.waitForTimeout(3000);
   await page.screenshot({ path: "/tmp/halter-ui-shots/sessions-search-highlight.png" });
+  await page.keyboard.press("Escape"); // 收起弹层，回到时间线切换
 } else {
   console.log("search '的': no hits, skip highlight shot");
 }
@@ -61,7 +64,7 @@ const pickSession = async () => {
   const items = page.locator("#sessions-list .session-item");
   const count = await items.count();
   await items.nth(Math.min(1, count - 1)).click();
-  await page.waitForSelector("#session-detail:not(.empty)", { timeout: 20000 });
+  await page.waitForSelector("#session-modal:not(.hidden) #session-detail .detail-header", { timeout: 20000 });
   await page.waitForTimeout(600);
 };
 
@@ -70,8 +73,11 @@ await page.click("#btn-view-timeline");
 await page.waitForTimeout(300);
 await pickSession();
 await page.screenshot({ path: OUT_ZH });
+await page.keyboard.press("Escape"); // 弹层盖住整个视口，收起才能点设置按钮
 
+await page.click("#btn-settings");
 await page.click("#lang-en");
+await page.keyboard.press("Escape"); // 收起设置面板再截图
 await page.waitForFunction(() =>
   document.querySelector('.nav-item[data-view="overview"]').textContent.includes("Overview"));
 await page.waitForTimeout(300);

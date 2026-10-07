@@ -168,6 +168,20 @@ async function openInSystem(rawPath) {
   return { opened: resolved };
 }
 
+// 用系统浏览器打开 http(s) 链接（插件来源仓库）。
+// 安全约束：仅 http/https，其他协议一律拒绝。
+async function openUrlInSystem(rawUrl) {
+  const url = String(rawUrl);
+  if (!/^https?:\/\//.test(url)) throw new Error(`refusing non-http url: ${url}`);
+  const entries = (OPENERS[process.platform] ?? OPENERS.linux)
+    .map((argv) => ({ argv: [...argv, url], okCodes: [0] }));
+  await openWith(entries);
+  return { opened: url };
+}
+
+// 与 main.rs push_machine() 同义：机器作用域非空时追加 --machine。
+const machineArgs = (machine) => (machine ? ["--machine", String(machine)] : []);
+
 const COMMANDS = {
   halter_version: async () => {
     const value = await runJson(["version", "--json"]);
@@ -175,8 +189,10 @@ const COMMANDS = {
     return value;
   },
   halter_scan: ({ machine } = {}) =>
-    runJson(["scan", "--json", ...(machine ? ["--machine", String(machine)] : [])]),
+    runJson(["scan", ...machineArgs(machine), "--json"]),
   halter_machines_list: () => runJson(["machines", "list", "--json"]),
+  halter_machines_test: ({ name }) =>
+    runJson(["machines", "test", String(name), "--json"]),
   halter_machines_add: ({ name, host, user, port, halterPath }) => {
     const args = ["machines", "add", String(name), "--host", String(host)];
     if (user) args.push("--user", String(user));
@@ -194,22 +210,25 @@ const COMMANDS = {
     args.push("--apply");
     return runHalter(args);
   },
-  halter_memory_show: () => runJson(["memory", "show", "--json"]),
+  halter_memory_show: ({ machine } = {}) =>
+    runJson(["memory", "show", ...machineArgs(machine), "--json"]),
   open_path: ({ path: target }) => openInSystem(target),
-  halter_sessions_list: ({ project, limit, allProjects }) =>
+  open_url: ({ url }) => openUrlInSystem(url),
+  halter_sessions_list: ({ project, limit, allProjects, machine }) =>
     runJson([
       "sessions",
       "list",
       "--limit",
       String(limit),
-      "--json",
       ...(allProjects
         ? ["--all-projects"]
         : ["--project", String(project)]),
+      ...machineArgs(machine),
+      "--json",
     ]),
-  halter_sessions_projects: ({ project }) =>
-    runJson(["sessions", "projects", "--project", String(project), "--json"]),
-  halter_sessions_show: ({ ref, project, tail }) =>
+  halter_sessions_projects: ({ project, machine }) =>
+    runJson(["sessions", "projects", "--project", String(project), ...machineArgs(machine), "--json"]),
+  halter_sessions_show: ({ ref, project, tail, machine }) =>
     runJson([
       "sessions",
       "show",
@@ -219,23 +238,25 @@ const COMMANDS = {
       "--tail",
       String(tail),
       "--json",
+      ...machineArgs(machine),
       "--",
       String(ref),
     ]),
-  halter_sessions_search: ({ query, project, limit, allProjects }) =>
+  halter_sessions_search: ({ query, project, limit, allProjects, machine }) =>
     runJson([
       "sessions",
       "search",
       "--limit",
       String(limit),
-      "--json",
       ...(allProjects
         ? ["--all-projects"]
         : ["--project", String(project)]),
+      ...machineArgs(machine),
+      "--json",
       "--",
       String(query),
     ]),
-  halter_sessions_context: ({ ref, project, tail }) =>
+  halter_sessions_context: ({ ref, project, tail, machine }) =>
     runText([
       "sessions",
       "context",
@@ -243,6 +264,7 @@ const COMMANDS = {
       String(project),
       "--tail",
       String(tail),
+      ...machineArgs(machine),
       "--",
       String(ref),
     ]),
@@ -261,26 +283,38 @@ const COMMANDS = {
     if (apply) args.push("--apply");
     return runHalter(args);
   },
-  // providers：与 main.rs 的 5 条命令 1:1 对应。
-  halter_providers_list: () => runJson(["providers", "list", "--json"]),
-  halter_providers_switch: ({ id, tool }) =>
-    runHalter(["providers", "switch", String(id), "--tool", String(tool)]),
-  halter_providers_add: ({ id, tool, baseUrl, label, model, token, envs, wireApi, reasoningEffort, contextWindow }) => {
+  // providers：与 main.rs 的 6 条命令 1:1 对应；machine 把执行路由到注册机器。
+  halter_providers_list: ({ machine } = {}) =>
+    runJson(["providers", "list", ...machineArgs(machine), "--json"]),
+  halter_providers_switch: ({ id, tool, machine }) =>
+    runHalter(["providers", "switch", String(id), "--tool", String(tool), ...machineArgs(machine)]),
+  // add/edit 共用 --def 通道：def 为工具块配置 JSON（CC Switch 式「配置JSON」），
+  // edit 侧整体替换该块；label / token 空则省略（= 保持不变）。
+  halter_providers_add: ({ id, tool, def, label, token, machine }) => {
     const args = ["providers", "add", String(id), "--tool", String(tool),
-      "--base-url", String(baseUrl)];
+      "--def", String(def)];
     if (label) args.push("--label", String(label));
-    if (model) args.push("--model", String(model));
-    for (const pair of envs || []) args.push("--env", String(pair));
-    if (wireApi) args.push("--wire-api", String(wireApi));
-    if (reasoningEffort) args.push("--reasoning-effort", String(reasoningEffort));
-    if (contextWindow) args.push("--context-window", String(contextWindow));
     const tokenData = String(token || "");
     if (tokenData.trim()) args.push("--token-stdin");
+    args.push(...machineArgs(machine));
     return runHalterStdin(args, tokenData);
   },
-  halter_providers_remove: ({ id }) =>
-    runHalter(["providers", "remove", String(id), "--apply"]),
-  halter_providers_adopt: () => runHalter(["providers", "adopt", "--apply"]),
+  halter_providers_edit: ({ id, tool, def, label, token, machine }) => {
+    const args = ["providers", "edit", String(id), "--tool", String(tool),
+      "--def", String(def)];
+    if (label) args.push("--label", String(label));
+    const tokenData = String(token || "");
+    if (tokenData.trim()) args.push("--token-stdin");
+    args.push(...machineArgs(machine));
+    return runHalterStdin(args, tokenData);
+  },
+  halter_providers_remove: ({ id, machine }) =>
+    runHalter(["providers", "remove", String(id), "--apply", ...machineArgs(machine)]),
+  halter_providers_adopt: ({ machine } = {}) =>
+    runHalter(["providers", "adopt", "--apply", ...machineArgs(machine)]),
+  // updates：harness 更新面板（npm 渠道，只读状态；升级走 CLI halter update run）。
+  halter_update_status: ({ machine } = {}) =>
+    runJson(["update", "status", ...machineArgs(machine), "--json"]),
 };
 
 const MIME = {

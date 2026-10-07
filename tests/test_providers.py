@@ -58,7 +58,7 @@ def codex_config(fake_home: Path) -> Path:
 
 
 def _spec(pid: str = "zhipu"):
-    from harness_config_manager.providers_manifest import ProviderClaude, ProviderCodex, ProviderSpec
+    from halter.providers_manifest import ProviderClaude, ProviderCodex, ProviderSpec
 
     return ProviderSpec(
         id=pid,
@@ -83,7 +83,7 @@ def _spec(pid: str = "zhipu"):
 
 
 def test_manifest_roundtrip(fake_home: Path) -> None:
-    from harness_config_manager.providers_manifest import load_manifest, save_manifest
+    from halter.providers_manifest import load_manifest, save_manifest
 
     save_manifest([_spec()])
     path = fake_home / ".config/halter/providers.toml"
@@ -101,7 +101,7 @@ def test_manifest_roundtrip(fake_home: Path) -> None:
 
 
 def test_managed_env_key_predicate() -> None:
-    from harness_config_manager.providers_manifest import is_managed_env_key
+    from halter.providers_manifest import is_managed_env_key
 
     assert is_managed_env_key("ANTHROPIC_BASE_URL")
     assert is_managed_env_key("ANTHROPIC_DEFAULT_OPUS_MODEL")
@@ -118,7 +118,7 @@ def test_managed_env_key_predicate() -> None:
 
 
 def test_write_claude_preserves_unmanaged(fake_home: Path, claude_settings: Path) -> None:
-    from harness_config_manager.providers_write import write_claude
+    from halter.providers_write import write_claude
 
     write_claude(_spec(), "sk-new-token")
     data = json.loads(claude_settings.read_text(encoding="utf-8"))
@@ -134,7 +134,7 @@ def test_write_claude_preserves_unmanaged(fake_home: Path, claude_settings: Path
 
 
 def test_write_claude_creates_missing_settings(fake_home: Path) -> None:
-    from harness_config_manager.providers_write import write_claude
+    from halter.providers_write import write_claude
 
     write_claude(_spec(), "tok")
     path = fake_home / ".claude/settings.json"
@@ -145,8 +145,8 @@ def test_write_claude_creates_missing_settings(fake_home: Path) -> None:
 
 def test_write_claude_official_clears_managed_only(
         fake_home: Path, claude_settings: Path) -> None:
-    from harness_config_manager.providers_manifest import OFFICIAL_ID, ProviderSpec
-    from harness_config_manager.providers_write import write_claude
+    from halter.providers_manifest import OFFICIAL_ID, ProviderSpec
+    from halter.providers_write import write_claude
 
     write_claude(ProviderSpec(id=OFFICIAL_ID), None)
     data = json.loads(claude_settings.read_text(encoding="utf-8"))
@@ -160,7 +160,7 @@ def test_write_claude_official_clears_managed_only(
 
 def test_write_codex_preserves_comments_and_third_party(
         fake_home: Path, codex_config: Path) -> None:
-    from harness_config_manager.providers_write import write_codex
+    from halter.providers_write import write_codex
 
     write_codex(_spec(), "codex-tok")
     text = codex_config.read_text(encoding="utf-8")
@@ -177,7 +177,7 @@ def test_write_codex_preserves_comments_and_third_party(
 
 
 def test_write_codex_removes_stale_halter_sections(fake_home: Path, codex_config: Path) -> None:
-    from harness_config_manager.providers_write import write_codex
+    from halter.providers_write import write_codex
 
     write_codex(_spec("a"), "ta")
     write_codex(_spec("b"), "tb")
@@ -188,8 +188,8 @@ def test_write_codex_removes_stale_halter_sections(fake_home: Path, codex_config
 
 
 def test_write_codex_official(fake_home: Path, codex_config: Path) -> None:
-    from harness_config_manager.providers_manifest import OFFICIAL_ID, ProviderSpec
-    from harness_config_manager.providers_write import write_codex
+    from halter.providers_manifest import OFFICIAL_ID, ProviderSpec
+    from halter.providers_write import write_codex
 
     write_codex(_spec("a"), "ta")
     write_codex(ProviderSpec(id=OFFICIAL_ID), None)
@@ -205,8 +205,8 @@ def test_write_codex_official(fake_home: Path, codex_config: Path) -> None:
 
 
 def test_detect_claude_states(fake_home: Path, claude_settings: Path) -> None:
-    from harness_config_manager.providers_manifest import save_manifest, set_token
-    from harness_config_manager.providers_write import detect_current
+    from halter.providers_manifest import save_manifest, set_token
+    from halter.providers_write import detect_current
 
     spec = _spec()
     spec.claude.base_url = "https://relay.example.com/api"
@@ -219,14 +219,21 @@ def test_detect_claude_states(fake_home: Path, claude_settings: Path) -> None:
     data["env"]["ANTHROPIC_BASE_URL"] = "https://relay.example.com/api"
     claude_settings.write_text(json.dumps(data), encoding="utf-8")
     assert got["status"] == "external"                  # 改文件前的状态
+    assert got["provider"] == "Zhipu GLM"               # 外部端点命中内置预设 -> 厂商真名
     got = detect_current("claude")
     assert got == {"status": "halter", "provider": "zhipu",
                    "base_url": "https://relay.example.com/api",
-                   "model": "glm-5.3-flash[1M]", "detail": ""}
+                   "model": "glm-5.3-flash[1M]", "detail": "",
+                   "env": {"ANTHROPIC_BASE_URL": "https://relay.example.com/api",
+                           "ANTHROPIC_MODEL": "glm-5.3-flash[1M]",
+                           "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1M]",
+                           "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash[1M]",
+                           "ENABLE_TOOL_SEARCH": "true"}}   # 非托管键全量下发（收编整块带入）
     # 端点相同但 token 不同 -> external（同端点不同账号）
     data["env"]["ANTHROPIC_AUTH_TOKEN"] = "sk-other"
     claude_settings.write_text(json.dumps(data), encoding="utf-8")
-    assert detect_current("claude")["status"] == "external"
+    got = detect_current("claude")
+    assert got["status"] == "external" and got["provider"] == ""   # 未知端点无真名可显示
     # 无自定义端点 -> official
     del data["env"]["ANTHROPIC_BASE_URL"]
     claude_settings.write_text(json.dumps(data), encoding="utf-8")
@@ -234,15 +241,22 @@ def test_detect_claude_states(fake_home: Path, claude_settings: Path) -> None:
 
 
 def test_detect_codex_states(fake_home: Path, codex_config: Path) -> None:
-    from harness_config_manager.providers_manifest import save_manifest
-    from harness_config_manager.providers_write import detect_current
+    from halter.providers_manifest import save_manifest
+    from halter.providers_write import detect_current
 
     save_manifest([_spec()])
     assert detect_current("codex")["status"] == "external"
-    assert detect_current("codex")["provider"] == "ZAI"
+    assert detect_current("codex")["provider"] == "ZAI"          # 未知端点退回段名
+
+    # 第三方段端点命中内置预设 -> 厂商真名（段名可能是 CC Switch 起的代号）
+    codex_config.write_text(codex_config.read_text(encoding="utf-8").replace(
+        'base_url = "http://127.0.0.1:8787/api/v1"',
+        'base_url = "https://open.bigmodel.cn/api/codex"'), encoding="utf-8")
+    got = detect_current("codex")
+    assert got["status"] == "external" and got["provider"] == "Zhipu GLM"
 
     import tomllib
-    from harness_config_manager.providers_write import write_codex
+    from halter.providers_write import write_codex
     write_codex(_spec(), "codex-tok")
     got = detect_current("codex")
     assert got["status"] == "halter" and got["provider"] == "zhipu"
@@ -255,7 +269,7 @@ def test_detect_codex_states(fake_home: Path, codex_config: Path) -> None:
 
 def test_adopt_two_distinct_hosts(fake_home: Path, claude_settings: Path,
                                   codex_config: Path) -> None:
-    from harness_config_manager.providers_manifest import (
+    from halter.providers_manifest import (
         PROVIDER_MANIFEST, adopt_providers, load_manifest, load_tokens,
     )
 
@@ -286,7 +300,7 @@ def test_adopt_two_distinct_hosts(fake_home: Path, claude_settings: Path,
 
 
 def test_adopt_same_host_merges(fake_home: Path, claude_settings: Path) -> None:
-    from harness_config_manager.providers_manifest import adopt_providers, load_manifest
+    from halter.providers_manifest import adopt_providers, load_manifest
 
     # codex 端点与 claude 同注册域 -> 合并为一个 provider
     d = fake_home / ".codex"
@@ -303,7 +317,7 @@ def test_adopt_same_host_merges(fake_home: Path, claude_settings: Path) -> None:
 
 
 def test_adopt_nothing(fake_home: Path) -> None:
-    from harness_config_manager.providers_manifest import adopt_providers
+    from halter.providers_manifest import adopt_providers
 
     lines = adopt_providers(apply=True)
     assert len(lines) == 1 and "未发现" in lines[0]
@@ -314,11 +328,11 @@ def test_adopt_nothing(fake_home: Path) -> None:
 
 
 def test_presets_shape_and_add_preset(fake_home: Path) -> None:
-    """预设只固化端点；--preset 填充 base_url/label，--model 仍需自填。"""
+    """预设只固化端点；--preset 作底模板与 --def 合并，模型名仍需自填。"""
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
-    from harness_config_manager.providers_manifest import PRESETS, load_manifest
+    from halter.cli import app
+    from halter.providers_manifest import PRESETS, load_manifest
 
     assert PRESETS["zhipu"]["codex"]["base_url"].endswith("/codex")
     assert "base_url" in PRESETS["deepseek"]["claude"]
@@ -333,28 +347,155 @@ def test_presets_shape_and_add_preset(fake_home: Path) -> None:
 
     r = runner.invoke(app, [
         "providers", "add", "zhipu", "--tool", "claude", "--preset", "zhipu",
-        "--model", "glm-5.3", "--token-env", "NOPE", ])
+        "--def", '{"ANTHROPIC_MODEL": "glm-5.3"}', "--token-env", "NOPE", ])
     assert r.exit_code == 0
     spec = load_manifest()[0]
     assert spec.id == "zhipu" and spec.label == "Zhipu GLM"
     assert spec.claude.base_url == "https://open.bigmodel.cn/api/anthropic"
     assert spec.claude.model == "glm-5.3"
 
-    # 预设与 base-url 互斥；未知预设 / 不含该工具块均退出码 2
+    # --def 覆盖预设键：端点被显式值替换
+    r = runner.invoke(app, [
+        "providers", "add", "relay", "--tool", "claude", "--preset", "zhipu",
+        "--def", '{"ANTHROPIC_BASE_URL": "https://relay.example/api"}'])
+    assert r.exit_code == 0
+    assert load_manifest()[1].claude.base_url == "https://relay.example/api"
+
+    # 无预设时 --def 自带端点（扁平 env 键，同 settings.json / ccswitch 配置JSON，
+    # 白名单已放开：API_TIMEOUT_MS 等非托管键一并收进 env）；@file 读文件
+    deffile = fake_home / "def.json"
+    deffile.write_text(json.dumps({
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_MODEL": "deepseek-chat",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+        "API_TIMEOUT_MS": "3000000"}),
+        encoding="utf-8")
+    r = runner.invoke(app, ["providers", "add", "deepseek", "--tool", "claude",
+                            "--def", f"@{deffile}"])
+    assert r.exit_code == 0
+    spec = next(s for s in load_manifest() if s.id == "deepseek")
+    assert spec.claude.base_url == "https://api.deepseek.com/anthropic"
+    assert spec.claude.model == "deepseek-chat"
+    assert spec.claude.env == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+                               "API_TIMEOUT_MS": "3000000"}
+
+    # 未知预设 / 不含该工具块 / 坏 JSON / 端点缺失 / token 入 def 均退出码 2
     assert runner.invoke(app, [
-        "providers", "add", "x", "--tool", "claude", "--preset", "zhipu",
-        "--base-url", "u"]).exit_code == 2
+        "providers", "add", "x", "--tool", "claude", "--preset", "nope",
+        "--def", "{}"]).exit_code == 2
     assert runner.invoke(app, [
-        "providers", "add", "x", "--tool", "claude", "--preset", "nope"]).exit_code == 2
+        "providers", "add", "x", "--tool", "codex", "--preset", "moonshot",
+        "--def", "{}"]).exit_code == 2
     assert runner.invoke(app, [
-        "providers", "add", "x", "--tool", "codex", "--preset", "moonshot"]).exit_code == 2
+        "providers", "add", "x", "--tool", "claude", "--def", "{oops"]).exit_code == 2
+    assert runner.invoke(app, [
+        "providers", "add", "x", "--tool", "claude",
+        "--def", '{"ANTHROPIC_MODEL": "m"}']).exit_code == 2
+    assert runner.invoke(app, [
+        "providers", "add", "x", "--tool", "claude",
+        "--def", '{"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "sk-x"}']).exit_code == 2
+
+
+def test_edit_updates_block_and_keeps_token(fake_home: Path) -> None:
+    """providers edit：--def 整体替换工具块、token 不给则保留；缺失块可补充。"""
+    from typer.testing import CliRunner
+
+    from halter.cli import app
+    from halter.providers_manifest import get_token, load_manifest
+
+    runner = CliRunner()
+    runner.invoke(app, [
+        "providers", "add", "zhipu", "--tool", "claude", "--preset", "zhipu",
+        "--def", '{"ANTHROPIC_MODEL": "glm-5.3"}', "--token-stdin",
+    ], input="sk-keep\n")
+
+    r = runner.invoke(app, [
+        "providers", "edit", "zhipu", "--tool", "claude",
+        "--def", json.dumps({
+            "ANTHROPIC_BASE_URL": "https://relay.example/api",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1M]"}),
+    ])
+    assert r.exit_code == 0 and "更新 zhipu 的 claude 块" in r.output
+    spec = load_manifest()[0]
+    assert spec.claude.base_url == "https://relay.example/api"
+    assert spec.claude.model is None                              # 整体替换：没写的键就是没有
+    assert spec.claude.env == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1M]"}
+    assert spec.label == "Zhipu GLM"                              # 未给 --label 保持不变
+    assert get_token("zhipu", "claude") == "sk-keep"              # 未给 token 保留
+
+    # codex 块缺失 → edit 补充；list --json 行带 effort/ctx 供编辑表单预填
+    r = runner.invoke(app, [
+        "providers", "edit", "zhipu", "--tool", "codex",
+        "--def", json.dumps({"base_url": "https://open.bigmodel.cn/api/codex",
+                             "reasoning_effort": "high", "context_window": 200000}),
+    ])
+    assert r.exit_code == 0 and "补充 zhipu 的 codex 块" in r.output
+    spec = load_manifest()[0]
+    assert spec.codex.reasoning_effort == "high" and spec.codex.context_window == 200000
+    # 再 edit claude：整体替换，旧 env 键消失
+    r = runner.invoke(app, [
+        "providers", "edit", "zhipu", "--tool", "claude",
+        "--def", json.dumps({"ANTHROPIC_BASE_URL": "https://relay.example/api",
+                             "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3"}),
+    ])
+    assert r.exit_code == 0
+    assert load_manifest()[0].claude.env == {"ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3"}
+    payload = json.loads(runner.invoke(app, ["providers", "list", "--json"]).output)
+    zhipu = next(p for p in payload["providers"] if p["id"] == "zhipu")
+    assert zhipu["claude"]["env"] == {"ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3"}
+    assert zhipu["codex"]["reasoning_effort"] == "high"
+    assert zhipu["codex"]["context_window"] == 200000
+    assert zhipu["codex"]["wire_api"] == "responses"
+
+    # 校验口径：未知 pid / 坏工具 / 坏 JSON / token 入 def 均退出码 2
+    assert runner.invoke(app, ["providers", "edit", "nope", "--tool", "claude",
+                               "--def", '{"ANTHROPIC_BASE_URL": "u"}']).exit_code == 2
+    assert runner.invoke(app, ["providers", "edit", "zhipu", "--tool", "x",
+                               "--def", '{"ANTHROPIC_BASE_URL": "u"}']).exit_code == 2
+    assert runner.invoke(app, ["providers", "edit", "zhipu", "--tool", "claude",
+                               "--def", "{oops"]).exit_code == 2
+    assert runner.invoke(app, ["providers", "edit", "zhipu", "--tool", "claude",
+                               "--def", '{"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "sk"}']).exit_code == 2
+    # 非托管键合法（白名单已放开）：edit 带入 env
+    r = runner.invoke(app, ["providers", "edit", "zhipu", "--tool", "claude",
+                            "--def", '{"ANTHROPIC_BASE_URL": "u", "FOO": "bar"}'])
+    assert r.exit_code == 0
+    assert load_manifest()[0].claude.env == {"FOO": "bar"}
+
+
+def test_edit_active_provider_rewrites_live(fake_home: Path, claude_settings: Path) -> None:
+    """编辑当前激活的供应商：清单保存后按新定义重写 ~/.claude/settings.json（非托管键不动）。"""
+    from typer.testing import CliRunner
+
+    from halter.cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, [
+        "providers", "add", "zhipu", "--tool", "claude",
+        "--def", json.dumps({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                             "ANTHROPIC_MODEL": "glm-5.3-flash[1M]"}),
+        "--token-stdin",
+    ], input="sk-live-secret\n")
+
+    r = runner.invoke(app, [
+        "providers", "edit", "zhipu", "--tool", "claude",
+        "--def", json.dumps({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                             "ANTHROPIC_MODEL": "glm-5.4[1M]"}),
+    ])
+    assert r.exit_code == 0
+    assert "已按新定义重写激活配置" in r.output
+    env = json.loads(claude_settings.read_text(encoding="utf-8"))["env"]
+    assert env["ANTHROPIC_MODEL"] == "glm-5.4[1M]"
+    assert env["ANTHROPIC_BASE_URL"] == "https://open.bigmodel.cn/api/anthropic"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-live-secret"
+    assert env["ENABLE_TOOL_SEARCH"] == "true"          # 非托管 env 键原样保留
 
 
 def test_list_bad_manifest_toml_fails_readably(fake_home: Path) -> None:
     """清单 TOML 语法坏时给一行可读错误，绝不吐裸 traceback（S4-1）。"""
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     manifest = fake_home / ".config/halter/providers.toml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -371,8 +512,8 @@ def test_list_bad_manifest_toml_fails_readably(fake_home: Path) -> None:
 def test_switch_backs_up_target_configs(fake_home: Path, claude_settings: Path,
                                         codex_config: Path) -> None:
     """切换前把目标文件副本存入 backups/providers/（CC Switch 式安全垫）。"""
-    from harness_config_manager.providers_manifest import save_manifest
-    from harness_config_manager.providers_write import switch_provider
+    from halter.providers_manifest import save_manifest
+    from halter.providers_write import switch_provider
 
     save_manifest([_spec("a"), _spec("b")])
     switch_provider("a", "claude")
@@ -393,8 +534,8 @@ def test_switch_backs_up_target_configs(fake_home: Path, claude_settings: Path,
 
 def test_switch_provider_end_to_end(fake_home: Path, claude_settings: Path,
                                     codex_config: Path) -> None:
-    from harness_config_manager.providers_manifest import save_manifest, set_token
-    from harness_config_manager.providers_write import detect_current, switch_provider
+    from halter.providers_manifest import save_manifest, set_token
+    from halter.providers_write import detect_current, switch_provider
 
     save_manifest([_spec()])
     set_token("zhipu", "claude", "sk-live-secret")
@@ -405,7 +546,11 @@ def test_switch_provider_end_to_end(fake_home: Path, claude_settings: Path,
     assert detect_current("claude") == {
         "status": "halter", "provider": "zhipu",
         "base_url": "https://open.bigmodel.cn/api/anthropic",
-        "model": "glm-5.3[1M]", "detail": ""}
+        "model": "glm-5.3[1M]", "detail": "",
+        "env": {"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                "ANTHROPIC_MODEL": "glm-5.3[1M]",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1M]",
+                "ENABLE_TOOL_SEARCH": "true"}}
 
     switch_provider("zhipu", "codex")
     assert detect_current("codex")["provider"] == "zhipu"

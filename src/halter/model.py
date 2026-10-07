@@ -116,6 +116,8 @@ class PluginInfo:
     version: str | None = None
     enabled: bool | None = None
     marketplace: str | None = None
+    # 来源仓库/市场页 URL：插件自身 repository/homepage 优先，回退所属市场仓库
+    source_url: str | None = None
 
 
 @dataclass

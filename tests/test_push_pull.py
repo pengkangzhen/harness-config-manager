@@ -8,9 +8,9 @@ from pathlib import Path
 import tarfile
 from typer.testing import CliRunner
 
-from harness_config_manager import transfer
-from harness_config_manager.cli import app
-from harness_config_manager import machines as mach
+from halter import transfer
+from halter.cli import app
+from halter import machines as mach
 
 from conftest import make_agent, make_skill
 
@@ -95,7 +95,7 @@ def test_agent_roundtrip(fake_home: Path, tmp_path: Path, monkeypatch) -> None:
 
 
 def test_mcp_roundtrip_merges_manifest_and_secrets(fake_home: Path, tmp_path: Path, monkeypatch) -> None:
-    from harness_config_manager.mcp_manifest import (McpSpec, _load_secrets,
+    from halter.mcp_manifest import (McpSpec, _load_secrets,
                                                      load_manifest, save_manifest, save_secrets)
 
     save_manifest([
@@ -131,7 +131,7 @@ def test_mcp_roundtrip_merges_manifest_and_secrets(fake_home: Path, tmp_path: Pa
 
 
 def test_hooks_base_name_matches_family(fake_home: Path, tmp_path: Path, monkeypatch) -> None:
-    from harness_config_manager.hooks_manifest import HookSpec, load_manifest, save_manifest
+    from halter.hooks_manifest import HookSpec, load_manifest, save_manifest
 
     save_manifest([
         HookSpec(id="gate", events=["PreToolUse"], command="python3 /home/me/gate.py"),
@@ -239,12 +239,81 @@ def test_cli_sync_machine_forwards_flags(fake_home: Path, monkeypatch) -> None:
                                 "--no-sessions", "--apply", "--tool", "claude", "--item", "x"]
 
 
+def test_cli_sessions_memory_providers_machine_forwards(fake_home: Path, monkeypatch) -> None:
+    """机器优先导航的 CLI 通道：memory / sessions / providers 子命令 --machine 转发远端。"""
+    runner.invoke(app, ["machines", "add", "d", "--host", "h"])
+    calls: list[tuple[list[str], bytes | None]] = []
+
+    def fake_run(machine, args, input_bytes=None, timeout=120):
+        calls.append((args, input_bytes))
+        return 0, json.dumps({"ok": True}).encode(), ""
+
+    monkeypatch.setattr(mach, "run_remote", fake_run)
+
+    r = runner.invoke(app, ["sessions", "list", "--machine", "d", "--all-projects", "--json"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["sessions", "list", "--limit", "30", "--all-projects", "--json"]
+
+    r = runner.invoke(app, ["sessions", "projects", "--machine", "d",
+                            "--project", "/remote/p", "--json"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["sessions", "projects", "--project", "/remote/p", "--json"]
+
+    r = runner.invoke(app, ["sessions", "search", "--machine", "d", "--all-projects",
+                            "--json", "--", "needle"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["sessions", "search", "--limit", "20",
+                            "--all-projects", "--json", "--", "needle"]
+
+    r = runner.invoke(app, ["sessions", "show", "--machine", "d", "--project", "/r/p",
+                            "--transcript", "--tail", "50", "--json", "--", "claude:abc"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["sessions", "show", "--project", "/r/p", "--tail", "50",
+                            "--transcript", "--json", "--", "claude:abc"]
+
+    r = runner.invoke(app, ["sessions", "context", "--machine", "d", "--project", "/r/p",
+                            "--tail", "20", "--", "claude:abc"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["sessions", "context", "--project", "/r/p",
+                            "--tail", "20", "--", "claude:abc"]
+
+    r = runner.invoke(app, ["memory", "show", "--machine", "d", "--json"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["memory", "show", "--json"]
+
+    r = runner.invoke(app, ["providers", "list", "--machine", "d", "--json"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["providers", "list", "--json"]
+
+    r = runner.invoke(app, ["providers", "switch", "zhipu", "--machine", "d", "--tool", "claude"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["providers", "switch", "zhipu", "--tool", "claude"]
+
+    r = runner.invoke(app, ["providers", "remove", "zhipu", "--machine", "d", "--apply"])
+    assert r.exit_code == 0
+    assert calls[-1][0] == ["providers", "remove", "zhipu", "--apply"]
+
+
+def test_cli_providers_add_machine_forwards_token_via_stdin(fake_home: Path, monkeypatch) -> None:
+    """""--machine 时 token 先读本机 stdin，再经 ssh stdin 到远端，全程不进 argv。"""
+    runner.invoke(app, ["machines", "add", "d", "--host", "h"])
+    captured = _fake_remote(monkeypatch)
+
+    r = runner.invoke(app, ["providers", "add", "zhipu", "--machine", "d", "--tool", "claude",
+                            "--def", '{"ANTHROPIC_BASE_URL": "https://x.example"}', "--token-stdin"],
+                      input="sk-secret\n")
+    assert r.exit_code == 0
+    assert captured["args"] == ["providers", "add", "zhipu", "--tool", "claude",
+                                "--def", '{"ANTHROPIC_BASE_URL": "https://x.example"}', "--token-stdin"]
+    assert captured["input"] == b"sk-secret\n"
+
+
 def test_cli_ingest_reads_stdin_toml(fake_home: Path) -> None:
     payload = ('[[server]]\nname = "zotero"\ntransport = "stdio"\n'
                'command = "uvx"\nargs = ["zotero-mcp"]\n').encode("utf-8")
     r = runner.invoke(app, ["machines", "ingest", "mcp", "zotero", "--apply"], input=payload)
     assert r.exit_code == 0 and "add" in r.output
-    from harness_config_manager.mcp_manifest import load_manifest
+    from halter.mcp_manifest import load_manifest
     assert [s.name for s in load_manifest()] == ["zotero"]
 
 

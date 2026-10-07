@@ -8,7 +8,7 @@ from pathlib import Path
 import tomlkit
 import pytest
 
-from harness_config_manager.plugin_sync import (
+from halter.plugin_sync import (
     PluginSpec,
     _install_codex,
     _install_zcode,
@@ -97,12 +97,12 @@ def test_sync_plugins_plan_and_skip_installed(fake_home: Path) -> None:
 
 
 def test_auto_plugin_source_default(fake_home: Path) -> None:
-    from harness_config_manager.plugin_sync import auto_plugin_source
+    from halter.plugin_sync import auto_plugin_source
     assert auto_plugin_source() == "claude"  # 无配置时默认 claude
 
 
 def test_vscode_only_ai_extensions(fake_home: Path, monkeypatch) -> None:
-    from harness_config_manager import plugins as pl
+    from halter import plugins as pl
 
     class FakeProc:
         returncode = 0
@@ -119,8 +119,75 @@ def test_vscode_only_ai_extensions(fake_home: Path, monkeypatch) -> None:
                    "ms-vscode.vscode-websearchforcopilot"}
 
 
+def test_plugin_source_resolution(fake_home: Path) -> None:
+    """来源优先级：市场清单条目 URL > 所属市场仓库 URL；归档地址不作来源。"""
+    from halter import plugins as pl
+
+    manifest_dir = fake_home / ".claude/plugins/marketplaces/demo-market/.claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "marketplace.json").write_text(json.dumps({
+        "plugins": [
+            {"name": "demo", "source": {"source": "git-subdir",
+                                        "url": "https://github.com/foo/demo-plugin.git"}},
+            {"name": "zipped", "source": {"source": "url",
+                                          "url": "https://cdn.example.com/zipped/1.0.zip"}},
+            {"name": "relative", "source": "./plugins/relative"},
+        ]
+    }), encoding="utf-8")
+    (fake_home / ".claude/plugins/known_marketplaces.json").write_text(json.dumps({
+        "demo-market": {"source": {"source": "github", "repo": "anthropics/demo-market"}},
+    }), encoding="utf-8")
+    (fake_home / ".claude/plugins/installed_plugins.json").write_text(json.dumps({
+        "plugins": {
+            "demo@demo-market": [{"version": "1.0.0"}],
+            "zipped@demo-market": [{"version": "1.0.0"}],
+            "relative@demo-market": [{"version": "1.0.0"}],
+            "unknown@demo-market": [{"version": "1.0.0"}],
+        }
+    }), encoding="utf-8")
+
+    got = {p.plugin_id: p.source_url for p in pl.read_claude_plugins()}
+    market_repo = "https://github.com/anthropics/demo-market"
+    assert got["demo@demo-market"] == "https://github.com/foo/demo-plugin.git"
+    assert got["zipped@demo-market"] == market_repo       # 归档被过滤 → 市场回退
+    assert got["relative@demo-market"] == market_repo     # 相对 source → 市场回退
+    assert got["unknown@demo-market"] == market_repo
+
+
+def test_zcode_list_form_marketplace_repo(fake_home: Path) -> None:
+    """zcode 数组形态 installed + 数组形态 known_marketplaces 的市场仓库回退。"""
+    from halter import plugins as pl
+
+    zdir = fake_home / ".zcode/cli/plugins"
+    zdir.mkdir(parents=True)
+    (zdir / "installed_plugins.json").write_text(json.dumps(
+        {"plugins": [{"id": "plug@demo-market", "version": "0.1.0", "marketplace": "demo-market"}]}))
+    (zdir / "known_marketplaces.json").write_text(json.dumps(
+        {"version": 1, "marketplaces": [
+            {"id": "demo-market", "source": {"source": "github", "repo": "octocat/demo"}},
+            {"id": "cdn-market", "source": {"source": "url", "url": "https://cdn.example.com/m.json"}},
+        ]}))
+
+    got = pl.read_zcode_plugins()
+    assert got[0].source_url == "https://github.com/octocat/demo"
+
+
+def test_vscode_source_is_marketplace_page(fake_home: Path, monkeypatch) -> None:
+    from halter import plugins as pl
+
+    class FakeProc:
+        returncode = 0
+        stdout = "openai.chatgpt@1.2.3\n"
+        stderr = ""
+
+    monkeypatch.setattr(pl.subprocess, "run", lambda *a, **kw: FakeProc())
+    got = pl.read_vscode_plugins()
+    assert got[0].source_url == \
+        "https://marketplace.visualstudio.com/items?itemName=openai.chatgpt"
+
+
 def test_zcode_plugin_invalid_config_is_not_reset(fake_home: Path) -> None:
-    from harness_config_manager.plugin_sync import PluginSpec, _install_zcode
+    from halter.plugin_sync import PluginSpec, _install_zcode
 
     path = fake_home / ".zcode/cli/config.json"
     path.parent.mkdir(parents=True)

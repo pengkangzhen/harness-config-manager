@@ -5,8 +5,8 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
-from harness_config_manager.config import HalterConfig
-from harness_config_manager.memory import (
+from halter.config import HalterConfig
+from halter.memory import (
     DEFAULT_MEMORY_FILE,
     memory_target,
     pick_adopt_source,
@@ -17,8 +17,8 @@ from harness_config_manager.memory import (
     run_sync_memory,
     scan_memory,
 )
-from harness_config_manager.model import MemoryInfo, ToolReport
-from harness_config_manager.registry import BY_KEY
+from halter.model import MemoryInfo, ToolReport
+from halter.registry import BY_KEY
 
 
 def make_tool_dir(home: Path, key: str, memory: str | None = None) -> ToolReport:
@@ -195,7 +195,7 @@ def test_plan_sync_skips_tool_side_library(fake_home: Path):
 def test_memory_cli_end_to_end(fake_home: Path):
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     runner = CliRunner()
     off = ["--no-skills", "--no-agents", "--no-mcp", "--no-plugins",
@@ -238,7 +238,7 @@ def test_memory_cli_end_to_end(fake_home: Path):
 def test_memory_show_json_contract(fake_home: Path):
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     make_library(fake_home, "LIB v1\n")
     make_tool_dir(fake_home, "claude", "TOOL v1\n")   # 分歧 → 带 diff
@@ -258,7 +258,7 @@ def test_memory_show_json_contract(fake_home: Path):
 def test_memory_show_library_missing(fake_home: Path):
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     make_tool_dir(fake_home, "claude", "TOOL only\n")
     runner = CliRunner()
@@ -272,7 +272,7 @@ def test_memory_show_library_missing(fake_home: Path):
 def test_memory_write_stdin_backs_up(fake_home: Path):
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     lib = make_library(fake_home, "OLD\n")
     runner = CliRunner()
@@ -288,7 +288,7 @@ def test_memory_write_stdin_backs_up(fake_home: Path):
 def test_memory_write_creates_missing_library(fake_home: Path):
     from typer.testing import CliRunner
 
-    from harness_config_manager.cli import app
+    from halter.cli import app
 
     lib = fake_home / DEFAULT_MEMORY_FILE
     runner = CliRunner()

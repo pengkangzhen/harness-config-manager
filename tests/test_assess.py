@@ -6,8 +6,8 @@ from pathlib import Path
 
 from conftest import make_agent, make_skill
 
-from harness_config_manager.assess import assess_all, profile_project
-from harness_config_manager.model import (
+from halter.assess import assess_all, profile_project
+from halter.model import (
     AgentInfo,
     HookInfo,
     McpServerInfo,

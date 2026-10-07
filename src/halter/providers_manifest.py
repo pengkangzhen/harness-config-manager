@@ -43,6 +43,18 @@ PRESETS: dict[str, dict] = {
 }
 
 
+def preset_label_for_url(base_url: str) -> str | None:
+    """内置预设端点精确匹配 -> 厂商真名（detect_current 给外部配置显示真身用）。"""
+    url = base_url.rstrip("/")
+    if not url:
+        return None
+    for name, tbl in PRESETS.items():
+        for tool in ("claude", "codex"):
+            if tbl.get(tool, {}).get("base_url", "").rstrip("/") == url:
+                return tbl.get("label") or name
+    return None
+
+
 # ---------------------------------------------------------------------------
 # claude settings.json env 托管键：halter 在 env 中唯一负责读写的键集合
 
@@ -96,6 +108,69 @@ class ProviderSpec:
         if self.codex is not None:
             out.append("codex")
         return out
+
+
+# `--def` 配置 JSON（对标 CC Switch 的「配置JSON」）允许的键。
+# claude 侧即 settings.json env 的扁平托管键（ANTHROPIC_* / CLAUDE_CODE_*，与
+# ccswitch / 手工配置同构，可整块粘贴迁移）；codex 侧对应 config.toml 段结构。
+# 刻意不含 token：密钥与配置分离，token 只走 --token-stdin/--token-env 进 secrets.toml
+# （def 经 argv 传递，写 token 会泄进 process list）。
+_DEF_CODEX_KEYS = {"base_url", "model", "name", "wire_api", "reasoning_effort", "context_window"}
+
+
+def parse_block_def(tool: str, doc: dict) -> ProviderClaude | ProviderCodex:
+    """把 --def 解析出的 JSON 对象校验为工具块（add/edit 的唯一数据通道）。
+
+    严格校验——非对象、非法键、类型不符、codex wire_api 非法值一律 ValueError，
+    防止拼写错误被静默丢弃。整体替换语义：JSON 里没写的键就是没有。
+    """
+    if not isinstance(doc, dict):
+        raise ValueError("配置 JSON 必须是对象 {…}")
+
+    if tool == "claude":
+        if "ANTHROPIC_AUTH_TOKEN" in doc:
+            # CLI 的 --def 经 argv 传递（process list 可见），token 写入即泄露；
+            # 桌面端不受此限：UI 保存前剥离 token 转 stdin 通道
+            raise ValueError("ANTHROPIC_AUTH_TOKEN 不能写在 --def（argv 会泄密），"
+                             "token 走 --token-stdin / --token-env；"
+                             "桌面端可直接粘贴含 token 的整块 JSON，保存时自动剥离")
+        for k, v in doc.items():
+            if not isinstance(v, str) or not v:
+                raise ValueError(f"{k} 必须是非空字符串")
+        base_url = doc.get("ANTHROPIC_BASE_URL", "")
+        if not base_url:
+            raise ValueError("ANTHROPIC_BASE_URL 必填且不能为空")
+        env = {k: v for k, v in doc.items()
+               if k not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")}
+        return ProviderClaude(base_url=base_url,
+                              model=doc.get("ANTHROPIC_MODEL") or None, env=env)
+
+    unknown = set(doc) - _DEF_CODEX_KEYS
+    if unknown:
+        raise ValueError(f"未知键 {', '.join(sorted(unknown))}（codex 允许："
+                         f"{', '.join(sorted(_DEF_CODEX_KEYS))}）")
+
+    def opt_str(key: str) -> str | None:
+        v = doc.get(key)
+        if v is None or v == "":
+            return None
+        if not isinstance(v, str):
+            raise ValueError(f"{key} 必须是字符串")
+        return v
+
+    base_url = opt_str("base_url")
+    if not base_url:
+        raise ValueError("base_url 必填且不能为空")
+    model = opt_str("model")
+    wire_api = opt_str("wire_api") or "responses"
+    if wire_api not in ("responses", "chat"):
+        raise ValueError("wire_api 仅支持：responses / chat")
+    cw = doc.get("context_window")
+    if cw is not None and (not isinstance(cw, int) or isinstance(cw, bool) or cw <= 0):
+        raise ValueError("context_window 必须是正整数")
+    return ProviderCodex(base_url=base_url, model=model, name=opt_str("name"),
+                         wire_api=wire_api, reasoning_effort=opt_str("reasoning_effort"),
+                         context_window=cw)
 
 
 def _claude_from_table(tbl) -> ProviderClaude:

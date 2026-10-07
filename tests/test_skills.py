@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from harness_config_manager.config import HalterConfig
-from harness_config_manager.model import SkillInfo, ToolReport
-from harness_config_manager.skills import (
+from halter.config import HalterConfig
+from halter.model import SkillInfo, ToolReport
+from halter.skills import (
     plan_adopt,
     scan_skills,
     plan_sync,
@@ -56,7 +56,7 @@ def test_library_migrates_legacy_self_managed(fake_home: Path) -> None:
 
 
 def test_scan_skills_extracts_description(fake_home: Path) -> None:
-    from harness_config_manager.registry import BY_KEY
+    from halter.registry import BY_KEY
 
     make_skill(fake_home / ".claude/skills", "single", body=(
         "---\nname: single\ndescription: 一句话描述\n---\n# skill\n"))
