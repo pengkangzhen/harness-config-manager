@@ -121,6 +121,18 @@ def _mklib(fake_home: Path, names: list[str]) -> Path:
     return lib
 
 
+def test_sync_creates_missing_tool_skills_dir(fake_home: Path) -> None:
+    # 工具已装（report 在列）但 skills 目录从未建：首个原生目录应被自动铺设
+    lib = _mklib(fake_home, ["alpha"])
+    reports = [ToolReport(tool="opencode", display="OpenCode", installed=True, skills=[])]
+    actions = plan_sync(lib, reports, [])
+    assert [(a.kind, a.skill) for a in actions] == [("link", "alpha")]
+    assert actions[0].path == fake_home / ".config/opencode/skills/alpha"
+    run_sync(actions, lib, apply=True)
+    target = fake_home / ".config/opencode/skills/alpha"
+    assert target.is_symlink() and target.resolve() == (lib / "alpha").resolve()
+
+
 def test_sync_links_missing(fake_home: Path) -> None:
     lib = _mklib(fake_home, ["alpha", "beta"])
     tool_dir = fake_home / "t1skills"

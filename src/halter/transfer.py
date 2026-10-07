@@ -1,13 +1,16 @@
 """跨机器条目传输：encode（本机条目 -> 传输字节）/ apply（传输字节 -> 本机库/清单）。
 
 传输格式由层约定：skills / agents 为 tar 流（arcname = 条目名），
-mcp / hooks 为 TOML 文档（[[server]] / [[hook]] 与清单同构，可选 [secrets] 平板）。
+mcp / hooks 为 TOML 文档（[[server]] / [[hook]] 与清单同构，可选 [secrets] 平板），
+statusline 为 tar 流（fragment.json + 脚本本体；command 已是 {script} 占位，
+天然跨机器可移植）。
 幂等语义：同名同内容 -> ok；同名不同内容 -> conflict（--prefer replace 备份后覆盖）。
 """
 
 from __future__ import annotations
 
 import io
+import json
 import re
 import shutil
 import tarfile
@@ -20,7 +23,7 @@ import tomlkit
 from .config import load_config
 from .registry import expand
 
-LAYERS = ("skills", "agents", "mcp", "hooks")
+LAYERS = ("skills", "agents", "mcp", "hooks", "statusline")
 
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -102,7 +105,40 @@ def encode_entry(layer: str, name: str, with_secrets: bool = False) -> tuple[byt
         doc["hook"] = aot
         return tomlkit.dumps(doc).encode("utf-8"), warnings
 
+    if layer == "statusline":
+        from .statusline import library_script, load_manifest, resolve_statusline_library
+
+        lib = resolve_statusline_library(load_config())
+        fragment = load_manifest(lib).get(name)
+        if fragment is None:
+            raise LookupError(f"本机 statusline 库没有 {name} 的片段")
+        warnings = []
+        command = (fragment.get("statusLine") or {}).get("command")
+        if isinstance(command, str) and ("/home/" in command or command.startswith("~")):
+            warnings.append(f"statusline {name} 的 command 含本机路径（应为 {{script}} 占位），"
+                            f"目标机器可能不可用：{command}")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            _tar_add_bytes(tf, "fragment.json",
+                           json.dumps({"tool": name, "fragment": fragment},
+                                      ensure_ascii=False, indent=2).encode("utf-8"))
+            script = library_script(lib, name, fragment)
+            if script is not None and script.is_file():
+                _tar_add_bytes(tf, script.name, script.read_bytes(), executable=True)
+        return buf.getvalue(), warnings
+
     raise ValueError(f"未知层 {layer}（可选 {', '.join(LAYERS)}）")
+
+
+def _tar_add_bytes(tf: tarfile.TarFile, arcname: str, data: bytes,
+                   executable: bool = False) -> None:
+    info = tarfile.TarInfo(arcname)
+    info.size = len(data)
+    info.mode = 0o755 if executable else 0o644
+    import time
+
+    info.mtime = int(time.time())
+    tf.addfile(info, io.BytesIO(data))
 
 
 def _tar(src: Path) -> bytes:
@@ -133,6 +169,8 @@ def apply_entry(layer: str, name: str, payload: bytes, prefer: str = "skip",
         return _apply_mcp(name, payload, prefer, with_secrets, apply)
     if layer == "hooks":
         return _apply_hooks(name, payload, prefer, apply)
+    if layer == "statusline":
+        return _apply_statusline(name, payload, prefer, apply, cfg)
     raise ValueError(f"未知层 {layer}（可选 {', '.join(LAYERS)}）")
 
 
@@ -265,6 +303,59 @@ def _apply_hooks(name: str, payload: bytes, prefer: str, apply: bool) -> list[st
     return lines
 
 
+def _apply_statusline(name: str, payload: bytes, prefer: str, apply: bool, cfg) -> list[str]:
+    """statusline 片段入库：manifest.json 合并写入该工具片段 + 脚本落位。
+
+    其它工具的片段与脚本永不触碰；manifest 替换前整体备份。
+    """
+    from .statusline import library_script, load_manifest, resolve_statusline_library
+
+    with tempfile.TemporaryDirectory() as tmp:
+        staging = Path(tmp)
+        _untar(payload, staging)
+        frag_file = staging / "fragment.json"
+        if not frag_file.is_file():
+            raise ValueError("传输内容不是合法 statusline 片段（缺 fragment.json）")
+        bundle = json.loads(frag_file.read_text(encoding="utf-8"))
+        if bundle.get("tool") != name:
+            raise ValueError(f"传输内容条目名 {bundle.get('tool')} 与 --name {name} 不符")
+        fragment = bundle.get("fragment")
+        if not isinstance(fragment, dict):
+            raise ValueError("传输内容的 fragment 不是对象")
+        script_name = fragment.get("script")
+        script_src = staging / script_name if script_name else None
+        if script_name and not script_src.is_file():
+            raise ValueError(f"传输内容缺脚本本体 {script_name}")
+
+        lib = resolve_statusline_library(cfg, create=apply)
+        existing = load_manifest(lib).get(name)
+        dest_script = library_script(lib, name, fragment)
+        same_fragment = existing == fragment
+        same_script = (dest_script is None or not dest_script.exists()) \
+            if script_src is None else \
+            (dest_script is not None and dest_script.is_file()
+             and dest_script.read_bytes() == script_src.read_bytes())
+        if existing is not None and same_fragment and same_script:
+            return [f"ok     statusline:{name}（片段一致）"]
+        if existing is not None and prefer != "replace":
+            return [f"conflict statusline:{name} → 跳过（--prefer replace 可覆盖）"]
+        verb = "replace" if existing is not None else "add"
+        if apply:
+            manifest_path = lib / "manifest.json"
+            if existing is not None and manifest_path.is_file():
+                shutil.copy2(manifest_path, _backup_file(manifest_path, "statusline"))
+            if dest_script is not None and script_src is not None:
+                dest_script.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(script_src, dest_script)
+            manifest = load_manifest(lib)
+            manifest[name] = fragment
+            from .io_utils import atomic_write_json
+
+            atomic_write_json(manifest_path, manifest)
+            return [f"{verb}    statusline:{name}" + ("（旧清单已备份）" if existing else "")]
+        return [f"{verb}    statusline:{name}"]
+
+
 # ---------------------------------------------------------------------------
 # distribute：ingest 落盘后，把该条目分发到本机所有已装工具
 
@@ -305,5 +396,12 @@ def distribute_item(layer: str, name: str, apply: bool) -> list[str]:
 
         specs = [s for s in load_manifest() if s.id == name or s.id.startswith(name + "-")]
         return sync_hooks(specs, installed, apply, "skip")
+
+    if layer == "statusline":
+        from .statusline import plan_sync_statusline, resolve_statusline_library, run_sync_statusline
+
+        lib = resolve_statusline_library(cfg)
+        actions = [a for a in plan_sync_statusline(lib, reports) if a.tool == name]
+        return run_sync_statusline(actions, lib, apply, "skip")
 
     raise ValueError(f"未知层 {layer}（可选 {', '.join(LAYERS)}）")

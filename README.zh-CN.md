@@ -45,6 +45,7 @@ halter sync --tool zcode --item paper-polishing --apply   # 收窄到一个矩�
 
 halter push skills paper-polishing --to desktop --apply   # 单条目：本机 -> 另一台机器
 halter pull mcp zotero --from lab --apply                 # 反方向同理
+halter push statusline claude --to desktop --apply        # 某工具的 statusline 片段 + 脚本，同理
 
 halter sessions list          # 列出当前项目在所有本地 AI 编码助手中的历史会话
 halter sessions install       # 分发 halter-sessions 查询 skill（默认 dry-run）
@@ -100,7 +101,7 @@ halter sessions context claude:<session-id> --output .halter/HANDOFF.md
 halter sessions search "authentication migration" --project .
 ```
 
-原生 metadata 读取器覆盖 Claude Code、ZCode、Codex CLI、OpenCode。如果安装并初始化了 [ctx](https://ctx.rs)，`halter sessions list` 还会纳入 ctx 已索引的 Cursor、Gemini CLI、Copilot CLI、Continue 等更多来源，并与原生结果去重。ctx 是可选依赖；halter 只调用其只读的 `list events` / `show session` 接口。
+原生 metadata 读取器覆盖 Claude Code、ZCode、Codex CLI、OpenCode、Pi。如果安装并初始化了 [ctx](https://ctx.rs)，`halter sessions list` 还会纳入 ctx 已索引的 Cursor、Gemini CLI、Copilot CLI、Continue 等更多来源，并与原生结果去重。ctx 是可选依赖；halter 只调用其只读的 `list events` / `show session` 接口。
 
 内置 `halter-sessions` skill 会教所有已检测助手同一套查询流程。`halter sync --sessions`（默认开启）或 `halter sessions install --apply` 通过正常 skills library 分发。只有显式使用 `--transcript`、`search` 或 `context` 时才读取 transcript；明显凭据会脱敏，历史命令只作为证据展示，不作为可执行指令。
 
@@ -139,14 +140,15 @@ halter providers edit zhipu --tool claude \
 
 **与 CC Switch / claude-code-router 的分工**：halter 是*静态配置层*——写的是「工具指向哪个供应商」，管密钥安全，不驻留进程。CC Switch 做同样的切换（独立 App 形态），halter 的 `adopt` 可直接收编它的配置；[claude-code-router](https://github.com/musistudio/claude-code-router) 是*运行时路由层*——常驻网关做逐请求路由、fallback 与可观测性。两层可组合：把本地网关端点注册为 halter 的一个普通 provider，像切换其它供应商一样切换到它。
 
-## 六个配置层
+## 七个配置层
 
 | 层 | 事实源 | 分发方式 |
 |---|---|---|
 | skills | skills 库目录（默认 `~/.agents/skills`；可用配置 `library` 覆盖；旧自管库 `~/.config/halter/library/skills` 首次解析时自动迁移） | 条目级 symlink；同名冲突默认跳过，`--prefer library` 备份后覆盖 |
 | subagents | subagents 库目录（默认 `~/.agents/agents`；可用配置 `agents_library` 覆盖；旧路径自动迁移） | 条目级 symlink（每代理一个 `.md` 文件）；冲突语义与 skills 相同；frontmatter 字段（如 `model: opus`）原样分发，Claude 系别名在其它工具可能无效 |
-| memory | 单一记忆文件（默认 `~/.agents/memory/MEMORY.md`；可用配置 `memory_file` 覆盖） | symlink 到各工具的用户级记忆文件（claude `~/.claude/CLAUDE.md`、zcode/codex/opencode `AGENTS.md`、gemini `GEMINI.md`）；在任一工具侧编辑即改库文件，天然保持一致；库缺失时自动从工具侧收养（各工具内容不一致需 `--from <tool>` 裁决）；冲突语义与 skills 相同 |
-| MCP | `~/.config/halter/mcp.toml`（canonical：stdio/http、env、headers） | 六方言转换写入：claude（`.claude.json` 读改写）、zcode、codex（TOML 保注释）、cursor、vscode（`servers` 键）、gemini、opencode（command 数组）；http 类型只分发支持的工具 |
+| memory | 单一记忆文件（默认 `~/.agents/memory/MEMORY.md`；可用配置 `memory_file` 覆盖） | symlink 到各工具的用户级记忆文件（claude `~/.claude/CLAUDE.md`、zcode/codex/opencode `AGENTS.md`、pi `~/.pi/agent/AGENTS.md`、gemini `GEMINI.md`）；在任一工具侧编辑即改库文件，天然保持一致；库缺失时自动从工具侧收养（各工具内容不一致需 `--from <tool>` 裁决）；冲突语义与 skills 相同 |
+| statusline | statusline 库目录（默认 `~/.agents/statusline`；可用配置 `statusline_library` 覆盖）：`manifest.json` 存**每工具一个片段**（各工具形态不同构、无法互译）+ 按工具分目录的脚本——claude/zcode/cursor `{"statusLine": {…command 里脚本路径写为 `{script}` 占位…}, "script": "statusline.py"}`，qwen 同构但嵌在 `ui` 下，codex `{"tui": {"status_line": […], "status_line_use_colors": 布尔}}`，gemini `{"footer": {"items": […]}}`，kimi `{"status_line": {"items": […], "command": "… {script} …"}}` | 脚本家族（claude / zcode / cursor / qwen）：脚本 symlink 到工具配置目录，`statusLine` 区域按本机路径渲染后读-改-写（写入前整文件备份）——command 里嵌的本机绝对路径正是跨机器漂移的根源，占位符渲染即解法；声明式家族：codex `[tui]` 托管键（`status_line` / `status_line_use_colors`）tomlkit 保注释读-改-写（theme/pet/keymap 永不碰），gemini 只动 `ui.footer` 区域，kimi `[status_line]` 混合（items + command）；片段按工具独立收养（各自唯一来源，无跨工具冲突）；工具侧脚本内容分歧时 conflict（默认跳过，`--prefer library` 覆盖）；不引用本地脚本的命令（`npx ccstatusline`）只同步 settings 键 |
+| MCP | `~/.config/halter/mcp.toml`（canonical：stdio/http、env、headers） | 八方言转换写入：claude（`.claude.json` 读改写）、zcode、codex（TOML 保注释）、cursor、vscode（`servers` 键）、gemini、opencode（command 数组）、pi（`~/.pi/agent/mcp.json`）；http 类型只分发支持的工具 |
 | 插件 | `~/.config/halter/plugins.toml`（family: claude / codex / vscode） | claude 用 `claude plugin install -y`；zcode 镜像 claude 缓存 + 登记同源清单；codex 写 TOML 开关；vscode 用 `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml`（每条注册：id、事件列表、matcher、命令、超时秒） | 三方言转换写入：claude（`settings.json` 顶层 `hooks`）、zcode（`cli/config.json` 的 `hooks.events`，超时自动换算毫秒）、cursor（`hooks.json` 扁平结构）；写入条目带 `"halter": "<id>"` 归属标记，**只增删改自家电位，第三方注入的无标记条目一律不碰**；仅 cursor 支持的事件（如 `beforeShellExecution`）或 claude 独有事件（如 `PermissionRequest`）分发到无此事件的工具时跳过并提示 |
 
@@ -169,6 +171,7 @@ exclude_hooks = []               # 不分发的 hook id 名单（id 见 hooks.to
 agents_library = ""              # subagents 事实源；缺省为 ~/.agents/agents
 exclude_agents = []              # 不分发的 subagent 名单
 memory_file = ""                 # 用户级记忆事实源；缺省为 ~/.agents/memory/MEMORY.md
+statusline_library = ""          # statusline 事实源目录；缺省为 ~/.agents/statusline
 ```
 
 ## v1 边界
@@ -180,17 +183,18 @@ memory_file = ""                 # 用户级记忆事实源；缺省为 ~/.agent
 - hooks 层仅 claude / zcode / cursor 三家支持（Codex 只有弱 notify 回调，其余工具暂无对等机制）；Cursor 的 prompt 型 hook 仅随 cursor 目标分发。
 - subagents 层仅 claude / zcode / cursor 三家支持；frontmatter 里的 `model: opus` 等是 Claude 系别名，原样分发（在其它工具可能不生效）。
 - memory 层仅覆盖有单一用户级 Markdown 指令文件的工具（claude / zcode / codex / gemini / opencode）；Cursor 的 rules 需 `.mdc` frontmatter、Windsurf / VS Code Copilot 的全局规则路径随版本变动，暂未接入。
+- statusline 层覆盖七工具五方言：claude / zcode / cursor CLI（根级 `statusLine` 键 + 脚本；zcode 支持该键为同源推断，写入无害）、qwen（`ui.statusLine`，刻意嵌套——直接粘贴 Claude Code 的根级配置不生效）、codex（`[tui] status_line` 声明式条目，即 TUI 里 `/statusline` 的设置项）、gemini（`ui.footer.items`，即 `/footer` 的设置项）、kimi（`tui.toml [status_line]`，items 声明式 + command 脚本并存）。Copilot CLI 的机制分两层（`footer.*` 布尔官方文档化，但脚本 `statusLine` 键仅 issue/社区级证据且有 macOS 已知 bug）——待官方文档化后接入；OpenCode 暂无 statusline 配置键（官方脚本命令 PR 未合并）、Pi 需写 TypeScript 扩展、Amp 仅实验性插件 API、iFlow 无此机制且项目已于 2026-04 停运。与 memory 一样不进桌面矩阵的跨机推送 UI（单行汇总视图的行名不映射到可推送条目），但直接走 CLI 通道：`halter push statusline claude --to <机器> --apply` / `halter pull statusline claude --from <机器> --apply`——`{script}` 占位让片段天然跨机器可移植，目标机器的库收下片段与脚本后，由它自己的 `halter sync` 分发到该机的工具。
 - Session 连续性原生覆盖 Claude Code / ZCode / Codex / OpenCode；如需更多 provider，可安装可选 ctx。halter 自身暂未实现 Gemini / Cursor 原生 transcript parser。
 - hook command 的死配置检测是保守的：仅对「单一脚本路径」形式的命令判定存在性，复合 shell 表达式不误报也不检查。
 
 ## 支持新工具
 
-在 `registry.py` 的 `TOOLS` 中追加一条 `ToolSpec`（CLI 命令名、配置目录、skills 目录），检测与 skills 层即刻生效；MCP / 插件层需在 `mcp.py` / `mcp_write.py` / `plugins.py` / `plugin_sync.py` 中补充该工具的方言读写器；hooks 层同理见 `hooks.py` / `hooks_write.py`；subagents 只需加 `agents_dirs` 条目；memory 只需加 `memory_files` 条目。
+在 `registry.py` 的 `TOOLS` 中追加一条 `ToolSpec`（CLI 命令名、配置目录、skills 目录），检测与 skills 层即刻生效；MCP / 插件层需在 `mcp.py` / `mcp_write.py` / `plugins.py` / `plugin_sync.py` 中补充该工具的方言读写器；hooks 层同理见 `hooks.py` / `hooks_write.py`；subagents 只需加 `agents_dirs` 条目；memory 只需加 `memory_files` 条目；statusline 需在 `statusline.py` 的 `DIALECTS` 表中登记方言（配置路径 + 托管区域 + 是否脚本式）。
 
 ## 测试
 
 ```bash
-uv run pytest               # 151 项单测，全部使用假 HOME，绝不触碰真实配置
+uv run pytest               # 219 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
 
 ## 在 DeepSeek Harness（dsh）中使用
@@ -207,11 +211,11 @@ dsh plugin --profile web add dsh-halter
 
 `desktop/` 内置一个 Tauri v2 桌面应用：
 
-- **总览仪表盘**：检测到的工具、六层配置（skills / subagents / memory / MCP / 插件 / hooks）计数、健康检查问题
+- **总览仪表盘**：检测到的工具、各层配置（skills / subagents / memory / statusline / MCP / 插件 / hooks）计数、健康检查问题
 - **记忆面板**：查看并编辑记忆事实源，逐工具展示副本状态与差异（unified diff），保存自动备份旧文件
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义
-- **多机视图**：矩阵工具栏机器下拉——`~/.ssh/config` 的 Host 别名自动出现（零注册），也可经 `halter machines add` 或应用内面板手动注册；切到远端机器后，本机有而远端缺的条目显示为幽灵行（点击推送），远端独有条目带拉取按钮
+- **多机视图**：矩阵工具栏机器下拉——`~/.ssh/config` 的 Host 别名自动出现（零注册），也可经 `halter machines add` 手动注册；切到远端机器后，本机有而远端缺的条目显示为幽灵行（点击推送），远端独有条目带拉取按钮
 - **中英双语界面**：侧边栏一键切换，选择按设备记忆
 
 前端为纯静态文件（无构建步骤），通过 Tauri IPC 调用 Rust 命令；Rust 侧以 sidecar 方式执行 `halter --json`。sidecar 解析顺序：`HALTER_BINARY` 环境变量 → 应用旁打包的 `halter` 可执行文件 → PATH 上的 `halter`。

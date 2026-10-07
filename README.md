@@ -21,7 +21,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 |---|---|---|---|---|---|
 | Core model | single source of truth → all tools, repeatable | point-to-point copy `--from A --to B` | symlink sync | single `.agentsmesh` dir convention | install from GitHub repos |
 | Scope | **user-level** global config | project-level files (`CLAUDE.md`, `.cursorrules`…) | user-level | user-level | user-level |
-| Layers | skills + MCP + plugins + hooks + **subagents** + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
+| Layers | skills + MCP + plugins + hooks + **subagents** + memory + statusline + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
 | Detection / inventory / health checks | ✅ (13 tools, coverage matrices, doctor) | ❌ | ❌ | ❌ | ❌ |
 | Multi-machine | ✅ ssh: auto-discover ~/.ssh/config hosts, remote scan/sync, per-entry push/pull | ❌ | ❌ | ❌ | ❌ |
 | Secret handling | `${VAR}` placeholders + 0600 secrets file, redacted output | ❌ | ❌ | ❌ | ❌ |
@@ -75,6 +75,7 @@ halter sync --tool zcode --item paper-polishing --apply   # narrow to one matrix
 
 halter push skills paper-polishing --to desktop --apply   # one entry, this machine -> another machine
 halter pull mcp zotero --from lab --apply                 # ...or the other way round
+halter push statusline claude --to desktop --apply        # a tool's statusline fragment + script, ditto
 
 halter sessions list          # current project's sessions across local AI coding assistants
 halter sessions install       # distribute the halter-sessions lookup skill (dry-run)
@@ -130,7 +131,7 @@ halter sessions context claude:<session-id> --output .halter/HANDOFF.md
 halter sessions search "authentication migration" --project .
 ```
 
-Native metadata readers cover Claude Code, ZCode, Codex CLI, and OpenCode. If [ctx](https://ctx.rs) is installed and initialized, `halter sessions list` also includes ctx-indexed providers (Cursor, Gemini CLI, Copilot CLI, Continue, and many more) without duplicating native entries. `ctx` is optional; halter invokes only its read-only `list events` and `show session` surfaces.
+Native metadata readers cover Claude Code, ZCode, Codex CLI, OpenCode, and Pi. If [ctx](https://ctx.rs) is installed and initialized, `halter sessions list` also includes ctx-indexed providers (Cursor, Gemini CLI, Copilot CLI, Continue, and many more) without duplicating native entries. `ctx` is optional; halter invokes only its read-only `list events` and `show session` surfaces.
 
 The built-in `halter-sessions` skill teaches every detected assistant the same lookup workflow. `halter sync --sessions` (on by default) or `halter sessions install --apply` distributes it through the normal skills library. Transcripts are read only when `--transcript`, `search`, or `context` is explicitly requested; obvious credentials are redacted, and prior commands are presented as historical evidence rather than executable instructions.
 
@@ -172,14 +173,15 @@ Write scope: on the claude side, cleanup only targets the managed `ANTHROPIC_*` 
 
 **Where this sits relative to CC Switch / claude-code-router**: halter is the *static configuration layer* — it writes which provider a tool points at, keeps tokens safe, and never runs a daemon. CC Switch does the same switching job as a standalone app (halter `adopt` can ingest its config). [claude-code-router](https://github.com/musistudio/claude-code-router) is a *runtime routing layer* — a resident gateway doing per-request routing, fallback and observability. The two layers compose: point a halter provider entry at a local gateway endpoint and switch to it like any other provider.
 
-## The six managed config layers
+## The seven managed config layers
 
 | Layer | Source of truth | Distribution |
 |---|---|---|
 | skills | skills library dir (default `~/.agents/skills`; config `library` overrides; legacy `~/.config/halter/library/skills` is auto-migrated once) | per-entry symlinks; same-name conflicts skipped by default, `--prefer library` to override |
 | subagents | subagents library dir (default `~/.agents/agents`; config `agents_library` overrides; legacy path auto-migrated once) | per-entry symlinks (each agent is one `.md` file); same conflict semantics as skills; frontmatter (`model: opus`, …) is distributed as-is — aliases may not resolve in non-Claude-family tools |
-| memory | one memory file (default `~/.agents/memory/MEMORY.md`; config `memory_file` overrides) | symlinked to each tool's user-level memory file (claude `~/.claude/CLAUDE.md`, zcode/codex/opencode `AGENTS.md`, gemini `GEMINI.md`); editing on any tool side edits the library, so copies can't drift; an empty library is auto-adopted from tool side (divergent copies need `--from <tool>`); same conflict semantics as skills |
-| MCP | `~/.config/halter/mcp.toml` (canonical: stdio/http, env, headers) | six dialect writers: claude (read-modify-write of `~/.claude.json`), zcode, codex (TOML, comments preserved), cursor, vscode (`servers` key), gemini, opencode (array-style command); http-type servers only go to tools that support them |
+| memory | one memory file (default `~/.agents/memory/MEMORY.md`; config `memory_file` overrides) | symlinked to each tool's user-level memory file (claude `~/.claude/CLAUDE.md`, zcode/codex/opencode `AGENTS.md`, pi `~/.pi/agent/AGENTS.md`, gemini `GEMINI.md`); editing on any tool side edits the library, so copies can't drift; an empty library is auto-adopted from tool side (divergent copies need `--from <tool>`); same conflict semantics as skills |
+| statusline | statusline library dir (default `~/.agents/statusline`; config `statusline_library` overrides): `manifest.json` holds one **fragment per tool** (the shapes are not inter-translatable), plus per-tool script dirs — claude/zcode/cursor `{"statusLine": {...command path as a `{script}` placeholder...}, "script": "statusline.py"}`, qwen the same nested under `ui`, codex `{"tui": {"status_line": [...], "status_line_use_colors": bool}}`, gemini `{"footer": {"items": [...]}}`, kimi `{"status_line": {"items": [...], "command": "… {script} …"}}` | script families (claude / zcode / cursor / qwen): script symlinked into the tool's config dir and the `statusLine` region rendered with that per-machine absolute path (read-modify-write, whole file backed up first) — the embedded absolute path is exactly why statuslines drift between machines, and the placeholder rendering is what fixes it; declarative families: codex `[tui]` managed keys (`status_line` / `status_line_use_colors`) via tomlkit read-modify-write (theme/pet/keymap never touched), gemini `ui.footer` region only, kimi `[status_line]` mixed (items + command); fragments are adopted per tool (single source each, no cross-tool conflict); a divergent tool-side script conflicts (skip by default, `--prefer library` to override); commands with no local script (`npx ccstatusline`) sync the settings key only |
+| MCP | `~/.config/halter/mcp.toml` (canonical: stdio/http, env, headers) | eight dialect writers: claude (read-modify-write of `~/.claude.json`), zcode, codex (TOML, comments preserved), cursor, vscode (`servers` key), gemini, opencode (array-style command), pi (`~/.pi/agent/mcp.json`); http-type servers only go to tools that support them |
 | plugins | `~/.config/halter/plugins.toml` (families: claude / codex / vscode) | claude via `claude plugin install -y`; zcode mirrors the claude-side cache + registers the same-origin manifest; codex via TOML toggle; vscode via `code --install-extension` |
 | hooks | `~/.config/halter/hooks.toml` (per registration: id, events, matcher, command, timeout in seconds) | three dialect writers: claude (top-level `hooks` of `settings.json`), zcode (`hooks.events` in `cli/config.json`, timeouts converted ms→s), cursor (flat two-level `hooks.json`); every entry halter writes carries an `"halter": "<id>"` ownership tag — **entries without it (injected by Otty, Orca, …) are never touched**; tool-unsupported events (cursor-only like `beforeShellExecution`, claude-only like `PermissionRequest`) are skipped with a note |
 
@@ -202,13 +204,14 @@ exclude_hooks = []               # hook ids to never distribute (see hooks.toml 
 agents_library = ""              # subagents source of truth; defaults to ~/.agents/agents
 exclude_agents = []              # agent names to never distribute
 memory_file = ""                 # user-level memory source of truth; defaults to ~/.agents/memory/MEMORY.md
+statusline_library = ""          # statusline source of truth; defaults to ~/.agents/statusline
 ```
 
 ## Supported tools
 
 Claude Code · ZCode · OpenAI Codex · Cursor · VS Code (Copilot) · Gemini CLI · OpenCode · GitHub Copilot CLI · Continue · Cline · Trae · Aider Desktop · Windsurf
 
-Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer work immediately); MCP/plugin support needs the tool's dialect reader/writer; hooks likewise live in `hooks.py` / `hooks_write.py`; subagents need just an `agents_dirs` entry, memory a `memory_files` entry.
+Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer work immediately); MCP/plugin support needs the tool's dialect reader/writer; hooks likewise live in `hooks.py` / `hooks_write.py`; subagents need just an `agents_dirs` entry, memory a `memory_files` entry, statusline an entry in the `DIALECTS` table (`statusline.py`).
 
 ## Limitations (v1)
 
@@ -219,6 +222,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 - The hooks layer covers claude / zcode / cursor only (Codex has just a weak `notify` callback; the other tools have no equivalent); Cursor's prompt-type hooks distribute to cursor only.
 - The subagents layer covers claude / zcode / cursor only; frontmatter fields like `model: opus` are Claude-family aliases and are distributed as-is (they may not resolve elsewhere).
 - The memory layer covers tools with a single user-level Markdown instructions file (claude / zcode / codex / gemini / opencode); Cursor's rules need `.mdc` frontmatter and Windsurf / VS Code Copilot global-rule paths move between versions, so they are not wired up yet.
+- The statusline layer covers seven tools in five dialect shapes: claude / zcode / cursor CLI (root `statusLine` key + script; zcode's support of the key is a same-origin inference — writing it is harmless), qwen (`ui.statusLine`, deliberately nested — root-level paste from Claude Code does not work there), codex (`[tui] status_line` declarative items, the `/statusline` TUI setting), gemini (`ui.footer.items`, the `/footer` setting), kimi (`tui.toml [status_line]`, items + command mixed). Copilot CLI has a two-layer mechanism (`footer.*` booleans documented, but the script `statusLine` key exists only in issues/community docs with a known macOS bug) — deferred until officially documented; OpenCode has no statusline key yet (official script-command PR pending), Pi customizes via TypeScript extensions, Amp only an experimental plugin API, iFlow has none (project shut down 2026-04). Like memory it stays out of the desktop matrix's cross-machine push UI (its single summary row doesn't map to a pushable item), but rides the CLI channel directly: `halter push statusline claude --to <machine> --apply` / `halter pull statusline claude --from <machine> --apply` — the `{script}` placeholder makes each fragment machine-portable, the target machine's library gets the fragment + script, and its own `halter sync` distributes to that machine's tools.
 - Session continuity natively covers Claude Code, ZCode, Codex CLI, and OpenCode; install optional ctx for broader provider coverage. halter itself does not yet implement native Gemini or Cursor transcript parsers.
 - Dead-hook detection is conservative: existence is only checked for commands that are a single script path; compound shell expressions are neither checked nor false-positived.
 - MCP servers injected by a harness at runtime for its own plugins (e.g. ZCode's `node_repl` via browser-use) rely on a small built-in mapping table.
@@ -227,7 +231,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 151 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 219 tests, all against a fake $HOME — never touches your real config
 ```
 
 ## License
@@ -248,11 +252,11 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 
 `desktop/` ships a Tauri v2 desktop app:
 
-- **Overview dashboard**: detected tools, six-layer counts (skills / subagents / memory / MCP / plugins / hooks), doctor issues
+- **Overview dashboard**: detected tools, per-layer counts (skills / subagents / memory / statusline / MCP / plugins / hooks), doctor issues
 - **Memory panel**: view and edit the global memory source of truth, inspect each tool-side copy with a unified diff, save with automatic backup
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics
-- **Multiple machines**: machine picker on the matrix toolbar — `~/.ssh/config` Host aliases appear automatically (zero registration), manual registration also available; ghost rows push local-only entries over, remote-only entries get a pull button
+- **Multiple machines**: machine picker on the matrix toolbar — `~/.ssh/config` Host aliases appear automatically (zero registration), manual registration via `halter machines add`; ghost rows push local-only entries over, remote-only entries get a pull button
 - **Bilingual UI**: zh / EN switch in the sidebar, remembered per device
 
 The frontend is plain static files (no build step) talking to Rust commands over Tauri IPC; the Rust side executes `halter --json` as a sidecar. Sidecar resolution order: `HALTER_BINARY` env var → bundled `halter` executable next to the app → `halter` on PATH.

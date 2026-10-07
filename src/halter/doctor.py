@@ -14,10 +14,12 @@ from pathlib import Path
 import tomlkit
 
 from .config import load_config
+from .io_utils import load_json_object
 from .mcp_manifest import _load_secrets, load_manifest
 from .memory import resolve_memory_file
 from .registry import TOOLS, expand
 from .skills import resolve_library
+from .statusline import DIALECTS as STATUSLINE_DIALECTS, load_manifest as load_statusline_manifest, resolve_statusline_library
 
 CHECKABLE_FILES = [
     ("claude", ".claude.json"),
@@ -41,6 +43,8 @@ ZH_TEXT = {
     "library_missing": "不存在（首次 sync --apply 时创建）",
     "memory_library_ok": "{n}B",
     "memory_library_missing": "不存在（首次 sync --apply 时收养/创建）",
+    "statusline_library_ok": "{n} 个工具片段",
+    "statusline_library_missing": "不存在（首次 sync --apply 时收养/创建）",
     "mcp_secret_missing": "密钥变量未定义: {vars}",
     "dead_command": "command 指向的 {command} 不存在（死配置，建议删除）",
     "provider_external": "自定义端点 {url} 不在 providers 清单（halter providers adopt 可收编）",
@@ -126,6 +130,38 @@ def run_doctor() -> list[dict]:
                 add("error", f"{spec.key}: memory {target.name}", "broken_link",
                     target=str(target.resolve(strict=False)))
 
+    # 2b. statusline 死配置：command 中的绝对路径 token 断链 / 不存在
+    #     （仅 command 驱动家族；statusLine.command 常见形态
+    #      "python3 /abs/path/statusline.py"，裸命令名跳过，同 MCP 死配置规则；
+    #      声明式家族（codex / gemini）的条目数组无外部引用，无需检查）
+    import shlex as _shlex
+
+    for tool_key, d in STATUSLINE_DIALECTS.items():
+        if not d.get("script") or d.get("toml"):
+            continue
+        settings = expand(d["path"])
+        if not settings.is_file():
+            continue
+        try:
+            sl = load_json_object(settings).get("statusLine")
+        except ValueError:
+            continue  # 解析失败已由 CHECKABLE_FILES 段报告
+        if not isinstance(sl, dict) or not isinstance(sl.get("command"), str):
+            continue
+        try:
+            tokens = _shlex.split(sl["command"])
+        except ValueError:
+            continue
+        for token in tokens:
+            p = Path(token).expanduser()
+            if not p.is_absolute():
+                continue
+            if p.is_symlink() and not p.exists():
+                add("error", f"{tool_key}: statusline {p.name}", "broken_link",
+                    target=str(p.resolve(strict=False)))
+            elif not p.exists():
+                add("error", f"{tool_key}: statusline", "dead_command", command=token)
+
     # 3. 库状态
     cfg = load_config()
     library = resolve_library(cfg)
@@ -139,6 +175,13 @@ def run_doctor() -> list[dict]:
         add("ok", f"memory 库: {memory_lib}", "memory_library_ok", n=memory_lib.stat().st_size)
     else:
         add("warn", f"memory 库: {memory_lib}", "memory_library_missing")
+    statusline_lib = resolve_statusline_library(cfg)
+    sl_manifest = load_statusline_manifest(statusline_lib)
+    if sl_manifest:
+        add("ok", f"statusline 库: {statusline_lib}", "statusline_library_ok",
+            n=len(sl_manifest))
+    else:
+        add("warn", f"statusline 库: {statusline_lib}", "statusline_library_missing")
 
     # 4. MCP 清单密钥占位可解析
     import os

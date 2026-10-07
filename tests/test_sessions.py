@@ -119,6 +119,21 @@ def make_zcode_session(home: Path, project: Path, sid: str = "sess_zcode") -> No
     conn.close()
 
 
+def make_pi_session(home: Path, project: Path, sid: str = "pi-sid") -> Path:
+    encoded = "--" + str(project)[1:].replace("/", "-") + "--"
+    path = home / ".pi/agent/sessions" / encoded / f"2026-09-18T04-00-00-000Z_{sid}.jsonl"
+    return _write_jsonl(path, [
+        {"type": "session", "version": 3, "id": sid,
+         "timestamp": "2026-09-18T04:00:00.000Z", "cwd": str(project)},
+        {"type": "model_change", "timestamp": "2026-09-18T04:00:01.000Z",
+         "provider": "zai", "modelId": "glm-5.1"},
+        {"type": "message", "timestamp": "2026-09-18T04:00:02.000Z", "message": {
+            "role": "user", "content": [{"type": "text", "text": "Pi task"}]}},
+        {"type": "message", "timestamp": "2026-09-18T04:00:03.000Z", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "On it."}]}},
+    ])
+
+
 def test_project_scoped_cross_tool_session_list(fake_home: Path, tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -126,6 +141,7 @@ def test_project_scoped_cross_tool_session_list(fake_home: Path, tmp_path: Path)
     make_codex_session(fake_home, project)
     make_opencode_session(fake_home, project)
     make_zcode_session(fake_home, project)
+    make_pi_session(fake_home, project)
     _write_jsonl(fake_home / ".claude/projects/-tmp-other/other.jsonl", [
         {"type": "user", "timestamp": "2026-09-18T03:00:00Z", "cwd": "/tmp/other",
          "message": {"content": "different project"}}
@@ -137,8 +153,25 @@ def test_project_scoped_cross_tool_session_list(fake_home: Path, tmp_path: Path)
         ("codex", 2, "api_key = <REDACTED>"),
         ("opencode", 1, "OpenCode task"),
         ("zcode", 1, "ZCode task"),
+        ("pi", 2, "Pi task"),
     }
     assert all(s.project == project.resolve() for s in sessions)
+
+
+def test_pi_session_metadata_and_project_filter(fake_home: Path, tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    path = make_pi_session(fake_home, project)
+    make_pi_session(fake_home, tmp_path / "other", sid="pi-other")
+
+    sessions = scan_sessions(project)
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert (s.tool, s.session_id, s.message_count, s.title, s.model) == (
+        "pi", "pi-sid", 2, "Pi task", "glm-5.1")
+    assert s.path == path
+    assert s.started_at is not None and s.updated_at is not None
+    assert s.updated_at > s.started_at  # 尾条目时间戳生效，而非文件 mtime
 
 
 def test_transcript_is_explicit_and_redacted(fake_home: Path, tmp_path: Path) -> None:

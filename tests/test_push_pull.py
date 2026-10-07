@@ -236,7 +236,8 @@ def test_cli_sync_machine_forwards_flags(fake_home: Path, monkeypatch) -> None:
     assert r.exit_code == 0
     assert captured["args"] == ["sync", "--skills", "--no-mcp", "--no-plugins",
                                 "--no-hooks", "--no-agents", "--no-memory",
-                                "--no-sessions", "--apply", "--tool", "claude", "--item", "x"]
+                                "--statusline", "--no-sessions", "--apply",
+                                "--tool", "claude", "--item", "x"]
 
 
 def test_cli_sessions_memory_providers_machine_forwards(fake_home: Path, monkeypatch) -> None:
@@ -321,3 +322,100 @@ def test_cli_ingest_rejects_name_mismatch(fake_home: Path) -> None:
     payload = b'[[server]]\nname = "other"\ncommand = "uvx"\n'
     r = runner.invoke(app, ["machines", "ingest", "mcp", "zotero"], input=payload)
     assert r.exit_code == 1 and "不符" in r.output
+
+
+# ---------------------------------------------------------------------------
+# statusline：片段 + 脚本跨机往返、幂等、冲突与分发
+
+
+def _make_statusline_library(home: Path, body: str = "# sl v1\n") -> None:
+    lib = home / ".agents/statusline"
+    (lib / "claude").mkdir(parents=True)
+    (lib / "claude/statusline.py").write_text(body, encoding="utf-8")
+    (lib / "manifest.json").write_text(json.dumps({
+        "claude": {"statusLine": {"type": "command",
+                                  "command": "python3 {script}", "padding": 0},
+                   "script": "statusline.py"}}), encoding="utf-8")
+
+
+def test_statusline_roundtrip_idempotent_and_conflict(fake_home: Path, tmp_path: Path, monkeypatch) -> None:
+    _make_statusline_library(fake_home)
+    payload, warnings = transfer.encode_entry("statusline", "claude")
+    assert warnings == []  # {script} 占位 -> 无本机路径警告
+
+    home_b = _second_home(tmp_path, monkeypatch, fake_home)
+    # 预置另一工具片段：apply 不得动它
+    (home_b / ".agents/statusline").mkdir(parents=True)
+    (home_b / ".agents/statusline/manifest.json").write_text(
+        json.dumps({"codex": {"tui": {"status_line": ["model"]}}}), encoding="utf-8")
+
+    lines = transfer.apply_entry("statusline", "claude", payload, apply=True)
+    assert any(l.startswith("add") for l in lines)
+    lib_b = home_b / ".agents/statusline"
+    assert (lib_b / "claude/statusline.py").read_text(encoding="utf-8") == "# sl v1\n"
+    manifest = json.loads((lib_b / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["claude"]["statusLine"]["command"] == "python3 {script}"
+    assert manifest["codex"] == {"tui": {"status_line": ["model"]}}  # 邻居片段保留
+
+    # 幂等：同内容再传 -> ok
+    assert transfer.apply_entry("statusline", "claude", payload, apply=True)[0].startswith("ok")
+
+    # 冲突：目标侧片段漂移 -> 默认跳过；prefer=replace 备份后覆盖
+    manifest["claude"]["statusLine"]["padding"] = 9
+    (lib_b / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert transfer.apply_entry("statusline", "claude", payload, apply=True)[0].startswith("conflict")
+    lines = transfer.apply_entry("statusline", "claude", payload, prefer="replace", apply=True)
+    assert lines[0].startswith("replace")
+    fixed = json.loads((lib_b / "manifest.json").read_text(encoding="utf-8"))
+    assert fixed["claude"]["statusLine"]["padding"] == 0
+    backups = list((home_b / ".config/halter/backups").rglob("*/statusline/manifest.json"))
+    assert backups and json.loads(backups[0].read_text(encoding="utf-8"))["claude"]["statusLine"]["padding"] == 9
+
+
+def test_statusline_encode_missing_and_local_path_warning(fake_home: Path) -> None:
+    with __import__("pytest").raises(LookupError):
+        transfer.encode_entry("statusline", "claude")   # 无库
+    _make_statusline_library(fake_home)
+    manifest_path = fake_home / ".agents/statusline/manifest.json"
+    doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+    doc["claude"]["statusLine"]["command"] = f"python3 {fake_home}/.claude/statusline.py"
+    manifest_path.write_text(json.dumps(doc), encoding="utf-8")
+    _, warnings = transfer.encode_entry("statusline", "claude")
+    assert any("本机路径" in w for w in warnings)
+
+
+def test_statusline_distribute_after_ingest(fake_home: Path, tmp_path: Path, monkeypatch) -> None:
+    _make_statusline_library(fake_home)
+    payload, _ = transfer.encode_entry("statusline", "claude")
+
+    home_b = _second_home(tmp_path, monkeypatch, fake_home)
+    (home_b / ".claude").mkdir()
+    (home_b / ".claude/settings.json").write_text('{"model": "keep"}', encoding="utf-8")
+    transfer.apply_entry("statusline", "claude", payload, apply=True)
+    lines = transfer.distribute_item("statusline", "claude", apply=True)
+    link = home_b / ".claude/statusline.py"
+    assert link.is_symlink() and link.resolve() == (home_b / ".agents/statusline/claude/statusline.py").resolve()
+    data = json.loads((home_b / ".claude/settings.json").read_text(encoding="utf-8"))
+    assert data["model"] == "keep"
+    assert data["statusLine"]["command"] == f"python3 {link}"
+    assert any(l.startswith("link") for l in lines)
+
+
+def test_cli_push_statusline_to_machine(fake_home: Path, monkeypatch) -> None:
+    _make_statusline_library(fake_home)
+    runner.invoke(app, ["machines", "add", "desktop", "--host", "10.0.0.2"])
+    captured = _fake_remote(monkeypatch)
+    r = runner.invoke(app, ["push", "statusline", "claude", "--to", "desktop", "--apply"])
+    assert r.exit_code == 0
+    assert captured["args"] == ["machines", "ingest", "statusline", "claude",
+                                "--prefer", "skip", "--apply"]
+    assert captured["input"] == transfer.encode_entry("statusline", "claude")[0]
+
+
+def test_cli_push_statusline_rejected_when_library_lacks_tool(fake_home: Path, monkeypatch) -> None:
+    runner.invoke(app, ["machines", "add", "desktop", "--host", "10.0.0.2"])
+    captured = _fake_remote(monkeypatch)
+    r = runner.invoke(app, ["push", "statusline", "zcode", "--to", "desktop"])
+    assert r.exit_code == 1
+    assert "没有 zcode 的片段" in r.output
+    assert "args" not in captured          # 源侧导出失败即止，未触达远端

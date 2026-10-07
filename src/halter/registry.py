@@ -72,7 +72,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         display="OpenCode",
         cli_names=("opencode",),
         config_dirs=(".config/opencode", ".opencode"),
-        skills_dirs=(".config/opencode/skills",),
+        skills_dirs=(".config/opencode/skills", ".agents/skills"),  # 后者为 opencode 1.18+ 自动加载的外部路径
         memory_files=(".config/opencode/AGENTS.md", ".opencode/AGENTS.md"),
         notes="MCP 在 opencode.json 的 mcp 键，command 为数组格式",
     ),
@@ -86,19 +86,26 @@ TOOLS: tuple[ToolSpec, ...] = (
         key="kimi",
         display="Kimi Code",
         cli_names=("kimi",),
-        notes="npm @moonshot-ai/kimi-code 分发；暂未接管其配置层，仅更新面板纳管版本对比",
+        config_dirs=(".kimi-code",),
+        notes="npm @moonshot-ai/kimi-code 分发；statusline 在 ~/.kimi-code/tui.toml 的 [status_line]（items 槽位 + command 脚本并存）",
     ),
     ToolSpec(
         key="pi",
         display="Pi",
         cli_names=("pi",),
-        notes="npm @earendil-works/pi-coding-agent 分发（仓库 earendil-works/pi，旧 @mariozechner scope 已弃更）；仅更新面板纳管版本对比",
+        config_dirs=(".pi/agent",),
+        skills_dirs=(".pi/agent/skills", ".agents/skills"),  # 后者为 pi 原生共享发现路径（Agent Skills 规范）
+        memory_files=(".pi/agent/AGENTS.md",),
+        notes="npm @earendil-works/pi-coding-agent 分发（旧 @mariozechner scope 已弃更）；"
+              "MCP 在 ~/.pi/agent/mcp.json 顶层 mcpServers（http 型可用，sse 拒收）；"
+              "会话在 ~/.pi/agent/sessions/--<项目路径>--/；extensions 走 settings.json packages，暂不纳管",
     ),
     ToolSpec(
         key="qwen",
         display="Qwen Code",
         cli_names=("qwen",),
-        notes="npm @qwen-code/qwen-code 分发（gemini-cli 同源分支）；仅更新面板纳管版本对比",
+        config_dirs=(".qwen",),
+        notes="npm @qwen-code/qwen-code 分发（gemini-cli 同源分支）；statusline 在 ~/.qwen/settings.json 的 ui.statusLine（刻意嵌套）",
     ),
     ToolSpec(
         key="iflow",

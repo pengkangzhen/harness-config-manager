@@ -94,7 +94,6 @@ body {
 }
 .machine-scope-row { display: flex; gap: 6px; }
 .machine-scope-row .machine-select { flex: 1; min-width: 0; background: var(--bg); }
-.machine-scope-row .machines-manage { flex: none; padding: 5px 9px; }
 
 .nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 
@@ -838,6 +837,8 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
 .mx-cell.present { color: var(--amber); }
 /* 只压暗字形、不用 opacity：opacity 会连 border-top 一起压暗，行分隔线深浅不均 */
 .mx-cell.missing { color: var(--text-faint); }
+/* statusline 行的非本工具列：片段独立、互不适用 */
+.mx-cell.na { color: var(--text-faint); cursor: default; }
 
 /* 可点击单元格：点一下圆点 = 同步该条目到该工具 */
 .mx-cell.clickable { cursor: pointer; transition: background .12s; }
@@ -853,7 +854,7 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 22px 0 1
   50% { opacity: 1; }
 }
 
-/* ---------- 跨机器：选择器 / 管理面板 / 幽灵行 ---------- */
+/* ---------- 跨机器：选择器 / 幽灵行 ---------- */
 
 .machine-select {
   background: var(--bg-raise);
@@ -921,7 +922,7 @@ select.dd-native { display: none; }
 .dd-item-main { overflow: hidden; text-overflow: ellipsis; }
 .dd-item-sub { color: var(--text-dim); font-size: 11.5px; }
 
-/* 机器管理面板：全局浮层（侧栏 ⌗ 按钮唤起），锚在机器选择块右下 */
+/* 浮层面板基座：providers 添加/编辑表单复用（#providers-add-panel） */
 .machines-panel {
   position: fixed;
   top: 138px;
@@ -944,36 +945,6 @@ select.dd-native { display: none; }
   font-weight: 600;
 }
 .machines-note { font-size: 12px; line-height: 1.5; }
-
-.machine-row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; padding: 6px 0;
-  border-bottom: 1px solid var(--hairline);
-}
-.machine-info { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.machine-name { font-family: var(--mono); color: var(--accent); font-size: 12.5px; }
-.machine-host { font-size: 12px; }
-.machine-origin {
-  font-family: var(--mono); font-size: 10.5px;
-  color: var(--text-faint);
-  border: 1px dashed var(--border);
-  border-radius: 5px;
-  padding: 0 6px;
-}
-
-.machine-add-form {
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
-.machine-add-form input {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 8px;
-  font-size: 12.5px;
-  width: 130px;
-}
-.machine-add-form input:focus { outline: 1px solid var(--accent); }
 
 /* 幽灵行：本机有、远端无的条目（虚线分节 + 推送格） */
 .mx-ghost-sep {
@@ -1509,7 +1480,6 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   width: 100%;
 }
 .provider-add-form { display: flex; flex-direction: column; gap: 8px; }
-.provider-add-form .btn-sm { align-self: flex-start; }
 /* 编辑模式锁定的 id / 工具 / 预设 */
 .pv-form-grid input:disabled, .pv-form-grid select:disabled { opacity: .5; cursor: not-allowed; }
 /* 表单分组小标题 */
@@ -1518,12 +1488,14 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
   letter-spacing: .08em; margin-top: 2px;
 }
 /* 配置 JSON 编辑区（对标 CC Switch 的「配置JSON」编辑框） */
-/* providers 面板含整块 JSON 编辑器，比 machines 浮层（430px）更宽：约两倍宽，窄窗自适应 */
+/* providers 面板含整块 JSON 编辑器：加宽浮层，窄窗自适应 */
 #providers-add-panel {
   width: min(780px, calc(100vw - 270px));
   max-height: calc(100vh - 160px);
 }
 .pv-def-head { display: flex; align-items: center; justify-content: space-between; }
+/* 表单动作行：格式化（次级）与保存（主色）并排收在右下 */
+.pv-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .pv-def {
   width: 100%; min-height: 320px; resize: vertical;
   background: var(--bg); color: var(--text);

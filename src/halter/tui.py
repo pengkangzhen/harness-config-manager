@@ -1,6 +1,6 @@
 """halter tui：交互式全屏矩阵浏览器（htop/k9s 风格）。
 
-1-7 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
+1-8 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
 g 只看缺口 · / 过滤 · q 退出。数据来自 scan_all，只读。
 """
 
@@ -23,10 +23,11 @@ LAYERS: list[tuple[str, str, str]] = [
     ("skills", "SKILLS", "1"),
     ("agents", "SUBAGENTS", "2"),
     ("memory", "MEMORY", "3"),
-    ("mcp", "MCP", "4"),
-    ("plugins", "PLUGINS", "5"),
-    ("hooks", "HOOKS", "6"),
-    ("sessions", "SESSIONS", "7"),
+    ("statusline", "STATUSLINE", "4"),
+    ("mcp", "MCP", "5"),
+    ("plugins", "PLUGINS", "6"),
+    ("hooks", "HOOKS", "7"),
+    ("sessions", "SESSIONS", "8"),
 ]
 
 
@@ -43,7 +44,7 @@ class HelpScreen(ModalScreen[None]):
         lines = [
             "[b cyan]halter tui 快捷键[/b cyan]",
             "[dim]────────────────────────────[/dim]",
-            "[b]1-7[/b]   切换层（Skills/Subagents/Memory/MCP/Plugins/Hooks/Sessions）",
+            "[b]1-8[/b]   切换层（Skills/Subagents/Memory/Statusline/MCP/Plugins/Hooks/Sessions）",
             "[b]↑↓←→[/b]  移动选择，右侧面板显示详情",
             "[b]g[/b]     只看缺口（再按恢复）",
             "[b]s[/b]     循环排序：缺口 → 名称 → 覆盖",
@@ -91,6 +92,9 @@ def _layer_rows(layer: str, reports: list[ToolReport]) -> list[Row]:
         elif layer == "memory":
             if r.memory is not None and r.memory.present:
                 put("MEMORY", r.tool, r.memory)
+        elif layer == "statusline":
+            if r.statusline is not None and r.statusline.present:
+                put("STATUSLINE", r.tool, r.statusline)
         elif layer == "mcp":
             for m in r.mcp_servers:
                 put(m.name, r.tool, m)
@@ -139,6 +143,16 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
             fields.insert(0, ("路径", str(path)))
         size = getattr(first, "size", 0)
         fields.insert(1, ("大小", f"{size}B"))
+        linked = [t for t, e in row.entries.items() if getattr(e, "linked", False)]
+        if linked:
+            fields.append(("已链接工具", ", ".join(sorted(linked))))
+    elif layer == "statusline":
+        command = getattr(first, "command", None)
+        items = getattr(first, "items", None)
+        fields.insert(0, ("命令", str(command or (", ".join(items) if items else "-"))[:120]))
+        script = getattr(first, "script", None)
+        if script is not None:
+            fields.insert(1, ("脚本", str(script)))
         linked = [t for t, e in row.entries.items() if getattr(e, "linked", False)]
         if linked:
             fields.append(("已链接工具", ", ".join(sorted(linked))))
@@ -270,6 +284,8 @@ class HalterTui(App[None]):
         if entry is None:
             return Text("·", style="dim")
         if self._layer in ("skills", "agents", "memory"):
+            return Text("●", style="green") if getattr(entry, "linked", False) else Text("◐", style="yellow")
+        if self._layer == "statusline":
             return Text("●", style="green") if getattr(entry, "linked", False) else Text("◐", style="yellow")
         return Text("●")
 

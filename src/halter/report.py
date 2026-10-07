@@ -39,6 +39,15 @@ def to_json(reports: list[ToolReport]) -> str:
                 "linked": r.memory.linked, "size": r.memory.size,
                 "mtime": r.memory.mtime,
             },
+            "statusline": None if r.statusline is None else {
+                "settings_path": str(r.statusline.settings_path),
+                "present": r.statusline.present,
+                "command": r.statusline.command,
+                "items": r.statusline.items,
+                "script": None if r.statusline.script is None else str(r.statusline.script),
+                "linked": r.statusline.linked,
+                "synced": r.statusline.synced,
+            },
             "mcp_servers": [
                 {"name": m.name, "transport": m.transport, "command": m.command,
                  "url": m.url, "extra": m.extra}
@@ -63,6 +72,7 @@ def print_summary(reports: list[ToolReport]) -> None:
     table.add_column("Skills", justify="right")
     table.add_column("Subagents", justify="right")
     table.add_column("Memory", justify="center")
+    table.add_column("Statusline", justify="center")
     table.add_column("MCP", justify="right")
     table.add_column("插件", justify="right")
     table.add_column("Hooks", justify="right")
@@ -78,11 +88,20 @@ def print_summary(reports: list[ToolReport]) -> None:
                 memory_cell = "[yellow]◐[/yellow]"
             else:
                 memory_cell = "[dim]·[/dim]"
+        statusline_cell = "-"
+        if r.statusline is not None:
+            if r.statusline.linked:
+                statusline_cell = "[green]●[/green]"
+            elif r.statusline.present:
+                statusline_cell = "[yellow]◐[/yellow]"
+            else:
+                statusline_cell = "[dim]·[/dim]"
         table.add_row(
             r.display,
             skills_cell,
             str(len(r.agents)) if r.agents else "-",
             memory_cell,
+            statusline_cell,
             str(len(r.mcp_servers)),
             str(len(r.plugins)),
             str(len(r.hooks)) if r.hooks else "-",
@@ -153,6 +172,29 @@ def print_memory_detail(reports: list[ToolReport]) -> None:
         table.add_row(r.display, state, str(m.path), size)
     console.print(table)
     console.print("[dim]● 为指向事实源的 symlink（halter sync 分发）；◐ 为本地独立文件（内容可能与库漂移）[/dim]")
+
+
+def print_statusline_detail(reports: list[ToolReport]) -> None:
+    capable = [r for r in reports if r.statusline is not None]
+    if not capable:
+        return
+    table = Table(title="⚓ 状态栏 (statusline)")
+    table.add_column("工具", style="cyan")
+    table.add_column("状态", justify="center")
+    table.add_column("command", style="dim")
+    table.add_column("settings", style="dim")
+    for r in capable:
+        s = r.statusline
+        if s.linked:
+            state = "[green]● 已同步[/green]"
+        elif s.present:
+            state = "[yellow]◐ 本地配置[/yellow]"
+        else:
+            state = "[dim]· 未配置[/dim]"
+        target = s.command or (", ".join(s.items) if s.items else None) or "-"
+        table.add_row(r.display, state, target, str(s.settings_path))
+    console.print(table)
+    console.print("[dim]● 为脚本指向事实源库的 symlink + statusLine 键与库一致；◐ 为本地独立配置（可能与库漂移）[/dim]")
 
 
 def print_mcp_detail(reports: list[ToolReport]) -> None:
@@ -317,6 +359,16 @@ def print_memory_matrix(reports: list[ToolReport]) -> None:
     _print_matrix("MEMORY", "MEMORY", capable,
                   lambda r, n: r.memory if r.memory.present else None,
                   ["MEMORY"], linked=True)
+
+
+def print_statusline_matrix(reports: list[ToolReport]) -> None:
+    """单条目层的矩阵：一行 STATUSLINE × 各工具的同步状态（缺失=· 本地=◐ 链接=●）。"""
+    capable = [r for r in reports if r.statusline is not None]
+    if not capable:
+        return
+    _print_matrix("STATUSLINE", "STATUSLINE", capable,
+                  lambda r, n: r.statusline if r.statusline.present else None,
+                  ["STATUSLINE"], linked=True)
 
 
 def print_mcp_matrix(reports: list[ToolReport]) -> None:

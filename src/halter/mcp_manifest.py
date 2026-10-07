@@ -23,7 +23,7 @@ from .registry import expand
 MCP_MANIFEST = lambda: expand(".config/halter/mcp.toml")  # noqa: E731
 SECRETS_FILE = lambda: expand(".config/halter/secrets.toml")  # noqa: E731
 
-HTTP_CAPABLE = {"claude", "zcode"}  # 仅这两家支持 http/sse 类型
+HTTP_CAPABLE = {"claude", "zcode", "pi"}  # http 型仅分发这几家（pi 文档：streamable http 可用，sse 拒收）
 
 
 @dataclass

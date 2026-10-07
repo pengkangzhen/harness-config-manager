@@ -361,6 +361,48 @@ def _scan_zcode(project: Path | None) -> list[SessionInfo]:
     return found
 
 
+def _scan_pi(project: Path | None) -> list[SessionInfo]:
+    """~/.pi/agent/sessions/--<项目路径>--/<时间戳>_<id>.jsonl（首行 session 头含 cwd，无损过滤）。"""
+    root = expand(".pi/agent/sessions")
+    if not root.is_dir():
+        return []
+    found: list[SessionInfo] = []
+    for path in sorted(root.rglob("*.jsonl")):
+        meta: dict = {}
+        title: str | None = None
+        model: str | None = None
+        count = 0
+        last_ts: object = None
+        for obj in _json_lines(path):
+            kind = obj.get("type")
+            if kind == "session":
+                meta = obj
+            elif kind == "model_change":
+                model = obj.get("modelId") or model
+            elif kind == "message":
+                msg = obj.get("message")
+                if not (isinstance(msg, dict) and msg.get("role") in ("user", "assistant")):
+                    continue
+                count += 1
+                if title is None and msg.get("role") == "user":
+                    title = _short_title(_first_text(msg.get("content")))
+            if obj.get("timestamp"):
+                last_ts = obj.get("timestamp")
+        if not meta:
+            continue
+        cwd = meta.get("cwd")
+        if not _within_project(cwd, project):
+            continue
+        found.append(SessionInfo(
+            tool="pi", session_id=str(meta.get("id") or path.stem), path=path,
+            project=Path(str(cwd)) if cwd else None,
+            started_at=_dt(meta.get("timestamp")) or _dt(path.stat().st_mtime),
+            updated_at=_dt(last_ts) or _dt(path.stat().st_mtime),
+            message_count=count, title=title, model=model,
+        ))
+    return found
+
+
 def _ctx_executable() -> str | None:
     return shutil.which("ctx")
 
@@ -434,6 +476,8 @@ def scan_sessions(project: Path | None = None, tools: list[str] | None = None) -
         native.extend(_scan_opencode(project))
     if tools is None or "zcode" in tools:
         native.extend(_scan_zcode(project))
+    if tools is None or "pi" in tools:
+        native.extend(_scan_pi(project))
     indexed = _scan_ctx(project)
     by_ref = {s.ref: s for s in native}
     for item in indexed:

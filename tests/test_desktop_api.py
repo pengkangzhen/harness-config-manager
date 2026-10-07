@@ -41,6 +41,24 @@ def test_scan_json_includes_doctor(fake_home) -> None:
         assert "params" in item
 
 
+def test_scan_json_statusline_contract(fake_home: Path) -> None:
+    """desktop overview chip / 矩阵的 statusline 数据源：三态字段形状。"""
+    (fake_home / ".claude").mkdir()
+    script = fake_home / ".claude/statusline.py"
+    script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (fake_home / ".claude/settings.json").write_text(json.dumps({
+        "statusLine": {"type": "command", "command": f"python3 {script}", "padding": 0}}),
+        encoding="utf-8")
+    result = runner.invoke(app, ["scan", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    claude = next(t for t in payload["inventory"] if t["tool"] == "claude")
+    s = claude["statusline"]
+    assert s["present"] is True and s["linked"] is False   # ◐ 本地配置
+    assert s["command"] == f"python3 {script}"
+    assert s["script"] == str(script)
+
+
 def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> None:
     """projects 聚合：跨助手计数 / 最近活动排序 / 当前项目标记。"""
     from datetime import datetime, timezone

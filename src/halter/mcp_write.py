@@ -75,6 +75,16 @@ def write_cursor(specs: list[McpSpec]) -> list[str]:
     return [f"cursor: 写入 {', '.join(s.name for s in specs)}"]
 
 
+def write_pi(specs: list[McpSpec]) -> list[str]:
+    path = expand(".pi/agent/mcp.json")
+    data = _load_json_dict(path)
+    data.setdefault("mcpServers", {})
+    for s in specs:
+        data["mcpServers"][s.name] = _canonical_to_common(s)
+    _atomic_write_json(path, data)
+    return [f"pi: 写入 {', '.join(s.name for s in specs)}"]
+
+
 def write_vscode(specs: list[McpSpec]) -> list[str]:
     path = expand("Library/Application Support/Code/User/mcp.json")
     data = _load_json_dict(path)
@@ -142,6 +152,7 @@ MCP_WRITERS: dict[str, callable] = {
     "vscode": write_vscode,
     "gemini": write_gemini,
     "opencode": write_opencode,
+    "pi": write_pi,
 }
 
 
@@ -159,6 +170,8 @@ def _current_entries(tool: str) -> dict[str, dict]:
         return dict(_load_json_dict(expand(".zcode/cli/config.json")).get("mcp", {}).get("servers") or {})
     if tool == "cursor":
         return dict(_load_json_dict(expand(".cursor/mcp.json")).get("mcpServers") or {})
+    if tool == "pi":
+        return dict(_load_json_dict(expand(".pi/agent/mcp.json")).get("mcpServers") or {})
     if tool == "vscode":
         return dict(_load_json_dict(
             expand("Library/Application Support/Code/User/mcp.json")).get("servers") or {})

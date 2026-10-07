@@ -329,14 +329,14 @@ const MATRIX_LAYERS = [
   { key: "hooks", field: "hooks", labelKey: "mlayer.hooks" },
 ];
 
-// 支持跨机器 push/pull 的层（memory/statusline/plugins/sessions 不在跨机范围）
-const PUSH_LAYERS = ["skills", "agents", "mcp", "hooks"];
+// 支持矩阵跨机推送（幽灵行/拉取按钮）的层。statusline 的行名 = 工具名 = 推送
+// 条目（每工具一个片段），天然适配行级推送；memory/plugins/sessions 无跨机通道。
+const PUSH_LAYERS = ["skills", "agents", "mcp", "hooks", "statusline"];
 
 function matrixItemName(layer, item) {
   if (layer.key === "plugins") return item.plugin_id;
   if (layer.key === "hooks") return item.label;
   if (layer.key === "memory") return "MEMORY";
-  if (layer.key === "statusline") return "STATUSLINE";
   return item.name;
 }
 
@@ -349,11 +349,23 @@ function buildMatrix(scan, layerKey) {
   }
   const rows = new Map();
   for (const tool of tools) {
+    // statusline 层：每工具一行（行名 = 工具名 = 跨机推送条目）。各工具片段
+    // 独立、不互通，非本工具列渲染「不适用」而非缺失；库有片段但工具未配置
+    // （synced !== null 且 !present）也出行，格子为 ○ 可点击同步。
+    if (layer.key === "statusline") {
+      const s = tool.statusline;
+      if (!s || (!s.present && s.synced === null)) continue;
+      const row = { statuses: new Map(), items: [], item: s };
+      if (s.present) {
+        row.statuses.set(tool.tool, s.linked ? "synced" : "present");
+        row.items.push(s);
+      }
+      rows.set(tool.tool, row);
+      continue;
+    }
     const entries = layer.key === "memory"
       ? (tool.memory && tool.memory.present ? [tool.memory] : [])
-      : layer.key === "statusline"
-        ? (tool.statusline && tool.statusline.present ? [tool.statusline] : [])
-        : tool[layer.field] || [];
+      : tool[layer.field] || [];
     for (const item of entries) {
       const name = matrixItemName(layer, item);
       if (!name) continue;
@@ -362,7 +374,7 @@ function buildMatrix(scan, layerKey) {
         row = { statuses: new Map(), items: [] };
         rows.set(name, row);
       }
-      const linked = ["skills", "agents", "memory", "statusline"].includes(layer.key)
+      const linked = ["skills", "agents", "memory"].includes(layer.key)
         ? !!item.linked : false;
       row.statuses.set(tool.tool, linked ? "synced" : "present");
       row.items.push(item);
@@ -377,7 +389,10 @@ function buildMatrix(scan, layerKey) {
     item: r.items.find((x) => x.description)
       || r.items.find((x) => x.source_url)
       || r.items[0],
-    missing: tools.filter((x) => !r.statuses.has(x.tool)).length,
+    // statusline 行只对自己列有意义：缺失 = 自己列缺，其它列是不适用不是缺口
+    missing: layer.key === "statusline"
+      ? (r.statuses.has(name) ? 0 : 1)
+      : tools.filter((x) => !r.statuses.has(x.tool)).length,
   }));
   list.sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
   return { tools, rows: list };
@@ -666,6 +681,13 @@ function renderMatrix(scan) {
     }
     grid.append(nameCell);
     for (const tool of tools) {
+      // statusline 行：非本工具列是不适用（片段独立），既非缺失也不可点
+      if (layer.key === "statusline" && tool.tool !== row.name) {
+        const na = el("div", "mx-cell na", "—");
+        na.title = t("mx.cellNA");
+        grid.append(na);
+        continue;
+      }
       const st = row.statuses.get(tool.tool) || "missing";
       const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
       cell.title = t("mx.cellTitle", { tool: tool.tool, status: cellStatusText(st) });
@@ -1638,7 +1660,7 @@ $("search-input").addEventListener("keydown", (e) => {
 /* ---------------- 全量同步（原 Sync 面板并入矩阵工具栏） ---------------- */
 
 function fullSyncLayers() {
-  // 六个矩阵层 + 可选 sessions（不在矩阵中，用工具栏开关控制）
+  // 七个矩阵层 + 可选 sessions（不在矩阵中，用工具栏开关控制）
   const layers = MATRIX_LAYERS.map((l) => l.key);
   if ($("matrix-include-sessions").checked) layers.push("sessions");
   return layers;
@@ -1787,7 +1809,7 @@ $("btn-memory-open").addEventListener("click", () => {
 
 $("btn-memory-refresh").addEventListener("click", () => loadMemory());
 
-/* ---------------- 机器：全局作用域选择器 + 注册表管理 ---------------- */
+/* ---------------- 机器：全局作用域选择器 ---------------- */
 
 const OS_LABEL = { wsl: "WSL", macos: "macOS", linux: "Linux", windows: "Windows" };
 
@@ -1806,7 +1828,6 @@ async function loadMachines() {
     state.machine = "";
   }
   renderMachineSelect();
-  renderMachinesPanel();
   probeMissingHostNames();
 }
 
@@ -1884,82 +1905,6 @@ function reloadActiveView() {
 
 $("global-machine-select").addEventListener("change", (e) => {
   setMachine(e.target.value);
-});
-
-$("btn-machines-manage").addEventListener("click", () => {
-  $("machines-panel").classList.toggle("hidden");
-  renderMachinesPanel();
-});
-
-$("btn-machines-close").addEventListener("click", () => {
-  $("machines-panel").classList.add("hidden");
-});
-
-function renderMachinesPanel() {
-  const listEl = $("machines-list");
-  if (!listEl) return;
-  listEl.replaceChildren();
-  if (!state.machines.length) {
-    listEl.append(el("div", "dim", t("mx.machinesEmpty")));
-    return;
-  }
-  for (const m of state.machines) {
-    const row = el("div", "machine-row");
-    const info = el("div", "machine-info");
-    info.append(el("span", "machine-name", m.host_name || m.name));
-    if (m.host_name) info.append(el("span", "machine-origin dim", m.name));
-    if (m.local) info.append(el("span", "machine-origin", t("mx.machineIsLocal")));
-    if (m.source === "ssh") {
-      // ~/.ssh/config 自动发现：user/port 由 ssh 解析，只展示别名与解析到的账号
-      info.append(el("span", "machine-host dim",
-        `${m.user ? `${m.user}@` : ""}${m.host}`));
-      info.append(el("span", "machine-origin", t("mx.machineFromSsh")));
-      row.append(info);
-      listEl.append(row);
-      continue;
-    }
-    info.append(el("span", "machine-host dim",
-      `${m.user ? `${m.user}@` : ""}${m.host}:${m.port || 22}`));
-    row.append(info);
-    const rm = el("button", "btn btn-sm", t("mx.machineRemove"));
-    rm.addEventListener("click", async () => {
-      try {
-        await invoke("halter_machines_remove", { name: m.name });
-      } catch (err) {
-        showMatrixToast(t("mx.machineRemove"), errorDetail(err), true);
-        return;
-      }
-      const wasCurrent = state.machine === m.name;
-      await loadMachines();
-      if (wasCurrent) setMachine("");
-    });
-    row.append(rm);
-    listEl.append(row);
-  }
-}
-
-$("machine-add-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const name = $("machine-name").value.trim();
-  const host = $("machine-host").value.trim();
-  if (!name || !host) return;
-  const user = $("machine-user").value.trim();
-  const portRaw = $("machine-port").value.trim();
-  const halterPath = $("machine-halter-path").value.trim();
-  try {
-    await invoke("halter_machines_add", {
-      name,
-      host,
-      user: user || null,
-      port: portRaw ? Number(portRaw) : null,
-      halterPath: halterPath || null,
-    });
-  } catch (err) {
-    showMatrixToast(t("mx.machineAdd"), errorDetail(err), true);
-    return;
-  }
-  $("machine-add-form").reset();
-  await loadMachines();
 });
 
 /* ---------------- settings：语言 / 主题 / 关于 ---------------- */

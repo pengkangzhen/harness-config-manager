@@ -8,6 +8,7 @@
   vscode   User/mcp.json（键 servers）+ ~/.vscode/mcp.json（键 mcpServers）JSON
   gemini   ~/.gemini/settings.json             -> mcpServers{...}   JSON（嵌套在 settings）
   opencode ~/.config/opencode/opencode.json    -> mcp{...}          JSON（command 为数组）
+  pi       ~/.pi/agent/mcp.json                -> mcpServers{...}   JSON（stdio/http 两型）
 """
 
 from __future__ import annotations
@@ -222,4 +223,5 @@ MCP_READERS: dict[str, McpReader] = {
     "vscode": read_vscode,
     "gemini": read_gemini,
     "opencode": read_opencode,
+    "pi": _reader_json(".pi/agent/mcp.json", "mcpServers"),
 }

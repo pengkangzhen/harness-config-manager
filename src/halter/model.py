@@ -1,4 +1,4 @@
-"""数据模型：工具探测结果与六层对象（skills / MCP / 插件 / hooks / subagents / memory）的统一表示。"""
+"""数据模型：工具探测结果与各配置层对象（skills / MCP / 插件 / hooks / subagents / memory / statusline）的统一表示。"""
 
 from __future__ import annotations
 
@@ -102,6 +102,23 @@ class MemoryInfo:
 
 
 @dataclass
+class StatuslineInfo:
+    settings_path: Path           # statusline 配置所在文件（settings.json / config.toml…）
+    present: bool = False         # statusline 配置存在
+    payload: dict = field(default_factory=dict)  # 工具侧 canonical 片段（家族方言归一后）
+    command: str | None = None    # statusLine.command（command 驱动家族；展示 / doctor 用）
+    items: list[str] | None = None  # 声明式家族的条目列表（codex [tui].status_line）
+    script: Path | None = None    # command 引用的本地脚本绝对路径（无则 None）
+    script_linked: bool = False   # 脚本为 symlink（command 驱动家族的同步标志）
+    synced: bool | None = None    # 与库片段一致（None = 库缺失无从判定）
+
+    @property
+    def linked(self) -> bool:
+        """矩阵 ● 的统一口径：脚本已链接 或 配置与库片段一致。"""
+        return self.script_linked or self.synced is True
+
+
+@dataclass
 class McpServerInfo:
     name: str
     transport: str                # stdio / http / sse
@@ -140,6 +157,7 @@ class ToolReport:
     skills: list[SkillInfo] = field(default_factory=list)
     agents: list[AgentInfo] = field(default_factory=list)
     memory: MemoryInfo | None = None
+    statusline: StatuslineInfo | None = None
     mcp_servers: list[McpServerInfo] = field(default_factory=list)
     plugins: list[PluginInfo] = field(default_factory=list)
     hooks: list[HookInfo] = field(default_factory=list)

@@ -230,13 +230,13 @@ test("matrix 工具栏全量同步：预览、sessions 开关与两步确认", a
   });
   await page.locator('.nav-item[data-view="matrix"]').click();
 
-  // 预览：dry-run，六个矩阵层 + sessions 全开
+  // 预览：dry-run，七个矩阵层 + sessions 全开
   await page.locator("#btn-matrix-preview").click();
   await expect(page.locator("#matrix-sync-output")).toContainText("计划: link×1");
   let args = await page.evaluate(() => window.__fullSyncArgs[0]);
   expect(args.apply).toBe(false);
   expect(args.layers).toEqual(
-    ["skills", "agents", "memory", "mcp", "plugins", "hooks", "sessions"]);
+    ["skills", "agents", "memory", "statusline", "mcp", "plugins", "hooks", "sessions"]);
 
   // 关掉 sessions 开关后不再包含
   await page.locator("#matrix-include-sessions").uncheck();

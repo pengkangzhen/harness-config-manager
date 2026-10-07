@@ -199,7 +199,7 @@ def test_memory_cli_end_to_end(fake_home: Path):
 
     runner = CliRunner()
     off = ["--no-skills", "--no-agents", "--no-mcp", "--no-plugins",
-           "--no-hooks", "--no-sessions"]
+           "--no-hooks", "--no-statusline", "--no-sessions"]
     make_tool_dir(fake_home, "claude", "# claude memory v1\n")
     make_tool_dir(fake_home, "zcode", "# zcode older memory\n")
 

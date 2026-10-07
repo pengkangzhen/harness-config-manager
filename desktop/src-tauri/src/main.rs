@@ -177,41 +177,6 @@ async fn halter_machines_test(name: String) -> Result<Value, String> {
     run_json_args(arg(&["machines", "test", name.as_str(), "--json"])).await
 }
 
-#[tauri::command]
-async fn halter_machines_add(
-    name: String,
-    host: String,
-    user: Option<String>,
-    port: Option<u32>,
-    halter_path: Option<String>,
-) -> Result<SidecarOutput, String> {
-    let mut args = vec!["machines".into(), "add".into(), name];
-    args.push("--host".into());
-    args.push(host);
-    if let Some(u) = user.as_deref().filter(|u| !u.trim().is_empty()) {
-        args.push("--user".into());
-        args.push(u.into());
-    }
-    if let Some(p) = port.filter(|p| *p != 0) {
-        args.push("--port".into());
-        args.push(p.to_string());
-    }
-    if let Some(hp) = halter_path.as_deref().filter(|hp| !hp.trim().is_empty()) {
-        args.push("--halter-path".into());
-        args.push(hp.into());
-    }
-    tauri::async_runtime::spawn_blocking(move || run_halter(&args))
-        .await
-        .map_err(|e| format!("sidecar task failed: {e}"))?
-}
-
-#[tauri::command]
-async fn halter_machines_remove(name: String) -> Result<SidecarOutput, String> {
-    tauri::async_runtime::spawn_blocking(move || run_halter(&arg(&["machines", "remove", &name])))
-        .await
-        .map_err(|e| format!("sidecar task failed: {e}"))?
-}
-
 /// Run `halter push <layer> <item>`: copy one entry between machines.
 /// Exactly one of `to` / `from` names a remote machine; the other side is
 /// always this machine and is simply omitted from the CLI invocation.
@@ -639,8 +604,6 @@ fn main() {
             halter_scan,
             halter_machines_list,
             halter_machines_test,
-            halter_machines_add,
-            halter_machines_remove,
             halter_push,
             halter_memory_show,
             open_path,

@@ -240,9 +240,14 @@ def plan_sync(library: Path, reports: list[ToolReport], exclude: list[str]) -> l
         spec = BY_KEY.get(r.tool)
         seen: set[Path] = set()
         if spec:
-            for d in (expand(p) for p in spec.skills_dirs):
-                if d.is_dir():
-                    seen.add(d)
+            dirs = [expand(p) for p in spec.skills_dirs]
+            seen.update(d for d in dirs if d.is_dir())
+            # 工具已装、但库共享路径之外的自有 skills 目录一个都没有：
+            # 以首个（工具原生）目录为准自动铺设，否则「分发计划为空 → 假成功」，
+            # 矩阵圆点永远点不亮（双根注册且仅库根存在的场景同样命中）。
+            if all(d.resolve() == library.resolve() for d in seen) \
+                    and dirs and dirs[0].resolve() != library.resolve():
+                seen.add(dirs[0])
         for s in r.skills:  # 未注册工具兜底：从扫描结果反推目录
             if s.path.parent.is_dir():
                 seen.add(s.path.parent)
@@ -291,6 +296,7 @@ def run_sync(actions: list[SyncAction], library: Path, apply: bool,
         if act.kind == "link":
             lines.append(f"link   {act.tool}:{act.skill} -> {act.path}")
             if apply:
+                act.path.parent.mkdir(parents=True, exist_ok=True)
                 act.path.symlink_to(library / act.skill)
         elif act.kind == "relink":
             lines.append(f"relink {act.tool}:{act.skill} ({act.detail})")

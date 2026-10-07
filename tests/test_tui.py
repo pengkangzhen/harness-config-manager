@@ -71,7 +71,7 @@ async def _check_layer_switch_and_gaps() -> None:
         assert {r.name for r in app_._visible} == {"MEMORY"}
         row = app_._visible[0]
         assert set(row.entries) == {"claude", "zcode"}
-        await pilot.press("4")  # MCP
+        await pilot.press("5")  # MCP
         assert app_._layer == "mcp"
         assert {r.name for r in app_._visible} == {"codegraph"}
         await pilot.press("g")
@@ -106,7 +106,7 @@ def test_tui_filter() -> None:
 async def _check_plugins_merge() -> None:
     app_ = HalterTui(_reports())
     async with app_.run_test() as pilot:
-        await pilot.press("5")  # PLUGINS
+        await pilot.press("6")  # PLUGINS
         rows = {r.name: r for r in app_._visible}
         assert "github" in rows  # 两个 @market 变体合并为一行
         assert set(rows["github"].entries) == {"claude", "zcode"}
@@ -153,7 +153,8 @@ def test_tui_help_and_sort() -> None:
 
 async def _check_tab_click() -> None:
     app_ = HalterTui(_reports())
-    async with app_.run_test() as pilot:
+    # 8 个层 tab 超出默认 80 列，加宽终端让 #tab-mcp 不被横向滚动裁剪
+    async with app_.run_test(size=(140, 30)) as pilot:
         await pilot.click("#tab-mcp")
         assert app_._layer == "mcp"
 

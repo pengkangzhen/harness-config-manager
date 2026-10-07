@@ -14,6 +14,7 @@ from .plugins import PLUGIN_READERS
 from .registry import BY_KEY, TOOLS
 from .sessions import scan_sessions
 from .skills import scan_skills
+from .statusline import scan_statusline
 
 
 def scan_tool(key: str) -> ToolReport:
@@ -30,6 +31,10 @@ def scan_tool(key: str) -> ToolReport:
 
     memory, notes = scan_memory(spec)
     report.memory = memory
+    report.scan_notes.extend(notes)
+
+    statusline, notes = scan_statusline(spec)
+    report.statusline = statusline
     report.scan_notes.extend(notes)
 
     if key in MCP_READERS:

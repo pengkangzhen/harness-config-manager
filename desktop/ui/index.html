@@ -52,7 +52,6 @@
         <span class="machine-scope-label" data-i18n="mx.machineLabel">机器</span>
         <div class="machine-scope-row">
           <select id="global-machine-select" class="machine-select" data-i18n-title="mx.machineSelect" aria-label="machine"></select>
-          <button id="btn-machines-manage" class="btn btn-sm machines-manage" type="button" data-i18n-title="mx.machinesManage" data-i18n-aria-label="mx.machinesManage">⌗</button>
         </div>
       </div>
       <nav class="nav">
@@ -103,23 +102,6 @@
         <span class="settings-label" data-i18n="st.about">关于</span>
         <div id="halter-version" class="version-pill">halter …</div>
       </div>
-    </div>
-
-    <div id="machines-panel" class="machines-panel hidden">
-      <div class="machines-panel-head">
-        <span data-i18n="mx.machinesTitle">远程机器</span>
-        <button id="btn-machines-close" class="btn btn-sm" type="button" data-i18n="mx.machinesClose">✕</button>
-      </div>
-      <div id="machines-list"></div>
-      <form id="machine-add-form" class="machine-add-form">
-        <input id="machine-name" data-i18n-placeholder="mx.machineName" placeholder="名称（如 desktop）" autocomplete="off" />
-        <input id="machine-host" data-i18n-placeholder="mx.machineHost" placeholder="ssh 主机名 / IP" autocomplete="off" />
-        <input id="machine-user" data-i18n-placeholder="mx.machineUser" placeholder="用户（可选）" autocomplete="off" />
-        <input id="machine-port" data-i18n-placeholder="mx.machinePort" placeholder="端口 22" inputmode="numeric" autocomplete="off" />
-        <input id="machine-halter-path" data-i18n-placeholder="mx.machineHalterPath" placeholder="远端 halter 路径（可选）" autocomplete="off" />
-        <button type="submit" class="btn btn-sm" data-i18n="mx.machineAdd">添加</button>
-      </form>
-      <div class="dim machines-note" data-i18n="mx.machineHint">远端需装有 halter 且 ssh 免密；连通性用 halter machines test 检查</div>
     </div>
 
     <main class="main">
@@ -289,11 +271,13 @@
             </div>
             <div class="pv-def-head">
               <span class="pv-form-h" data-i18n="pv.formSecDef">配置 JSON</span>
-              <button id="pv-def-format" type="button" class="btn btn-sm" data-i18n="pv.defFormat">格式化</button>
             </div>
             <textarea id="pv-def" class="pv-def" spellcheck="false" autocomplete="off"></textarea>
             <div id="pv-def-error" class="pv-def-error hidden"></div>
-            <button type="submit" class="btn btn-sm" data-i18n="pv.formSubmit">保存</button>
+            <div class="pv-form-actions">
+              <button id="pv-def-format" type="button" class="btn btn-sm" data-i18n="pv.defFormat">格式化</button>
+              <button type="submit" class="btn btn-sm btn-primary" data-i18n="pv.formSubmit">保存</button>
+            </div>
           </form>
           <div class="dim machines-note" id="pv-form-hint" data-i18n="pv.formHint">选预设自动填端点；档位映射与托管环境变量在表单内直接编辑。</div>
         </div>

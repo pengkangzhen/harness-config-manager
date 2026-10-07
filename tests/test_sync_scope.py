@@ -14,7 +14,7 @@ from conftest import make_skill
 runner = CliRunner()
 
 OFF = ["--no-skills", "--no-mcp", "--no-plugins", "--no-hooks",
-       "--no-agents", "--no-memory", "--no-sessions"]
+       "--no-agents", "--no-memory", "--no-statusline", "--no-sessions"]
 
 
 def only(layer: str) -> list[str]:

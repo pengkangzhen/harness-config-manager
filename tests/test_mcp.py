@@ -23,6 +23,7 @@ from halter.mcp_write import (
     write_claude,
     write_codex,
     write_opencode,
+    write_pi,
 )
 
 
@@ -134,6 +135,35 @@ def test_write_opencode_command_array(fake_home: Path) -> None:
     write_opencode([spec])
     data = json.loads(cfg.read_text())
     assert data["mcp"]["node"]["command"] == ["/bin/node", "--repl"]
+
+
+def test_pi_reader_and_writer_roundtrip(fake_home: Path) -> None:
+    from halter.mcp import MCP_READERS
+
+    cfg = fake_home / ".pi/agent/mcp.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"mcpServers": {
+        "existing": {"type": "stdio", "command": "uvx", "args": ["keep-me"]},
+    }}), encoding="utf-8")
+
+    out: list = []
+    notes: list[str] = []
+    MCP_READERS["pi"](out, notes)
+    assert [(s.name, s.command) for s in out] == [("existing", "uvx")]
+
+    spec = McpSpec(name="drawio", transport="stdio", command="npx", args=["-y", "drawio"])
+    assert write_pi([spec]) == ["pi: 写入 drawio"]
+    data = json.loads(cfg.read_text())
+    assert data["mcpServers"]["existing"]["args"] == ["keep-me"]  # 原有条目不动
+    assert data["mcpServers"]["drawio"]["command"] == "npx"
+
+
+def test_write_pi_creates_fresh_config(fake_home: Path) -> None:
+    cfg = fake_home / ".pi/agent/mcp.json"
+    spec = McpSpec(name="sentry", transport="http", url="https://mcp.example.dev/mcp")
+    write_pi([spec])
+    data = json.loads(cfg.read_text())
+    assert data == {"mcpServers": {"sentry": {"type": "http", "url": "https://mcp.example.dev/mcp"}}}
 
 
 # ---------------------------------------------------------------------------

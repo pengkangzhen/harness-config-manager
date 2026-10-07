@@ -461,7 +461,7 @@ def scan(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
-        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / memory / sessions",
+        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / memory / statusline / sessions",
     ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
@@ -506,12 +506,15 @@ def scan(
             rp.print_agents_detail(reports)
         if "memory" in detail:
             rp.print_memory_detail(reports)
+        if "statusline" in detail:
+            rp.print_statusline_detail(reports)
         if "sessions" in detail:
             rp.print_sessions_detail(reports)
     else:
         rp.print_skills_matrix(reports)
         rp.print_agents_matrix(reports)
         rp.print_memory_matrix(reports)
+        rp.print_statusline_matrix(reports)
         rp.print_mcp_matrix(reports)
         rp.print_plugins_matrix(reports)
         rp.print_hooks_matrix(reports)
@@ -634,6 +637,7 @@ def sync(
     layer_hooks: bool = typer.Option(True, "--hooks/--no-hooks", help="同步 hooks 层"),
     layer_agents: bool = typer.Option(True, "--agents/--no-agents", help="同步 subagents 层"),
     layer_memory: bool = typer.Option(True, "--memory/--no-memory", help="同步用户级记忆层（CLAUDE.md / AGENTS.md…）"),
+    layer_statusline: bool = typer.Option(True, "--statusline/--no-statusline", help="同步状态栏层（statusLine 键 + 脚本）"),
     layer_sessions: bool = typer.Option(True, "--sessions/--no-sessions", help="分发跨工具历史会话查询 skill"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认跳过）/ library（备份工具侧后以清单覆盖）"),
@@ -669,6 +673,14 @@ def sync(
     )
     from .plugin_sync import auto_plugin_source, load_plugin_manifest, sync_plugins
     from .scan import scan_all
+    from .statusline import (
+        load_manifest as load_statusline_manifest,
+        plan_adopt_statusline,
+        plan_sync_statusline,
+        resolve_statusline_library,
+        run_adopt_statusline,
+        run_sync_statusline,
+    )
     from .sessions import install_session_skill
     from .skills import plan_adopt, plan_sync, resolve_library, run_adopt, run_sync
 
@@ -681,6 +693,7 @@ def sync(
                "--hooks" if layer_hooks else "--no-hooks",
                "--agents" if layer_agents else "--no-agents",
                "--memory" if layer_memory else "--no-memory",
+               "--statusline" if layer_statusline else "--no-statusline",
                "--sessions" if layer_sessions else "--no-sessions"]
         if apply:
             fwd.append("--apply")
@@ -757,6 +770,37 @@ def sync(
                 console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
         elif not plan.sources:
             console.print("\nmemory: 无事实源也无现存工具侧记忆（先在任一工具建立后再 sync）")
+
+    # --- statusline 层：库缺某工具片段先逐工具收养，然后按家族方言分发 ---
+    if layer_statusline:
+        statusline_lib = resolve_statusline_library(cfg, create=apply)
+        manifest = load_statusline_manifest(statusline_lib)
+        adoptable = [(t, i) for t, i in plan_adopt_statusline(reports)
+                     if t not in manifest and hit_tool(t)]
+        if adoptable:
+            console.print(f"\nstatusline: 事实源缺 {len(adoptable)} 个工具的片段，逐工具收养"
+                          "（片段按工具独立，无跨工具冲突）")
+            for adopt_tool, adopt_info in adoptable:
+                for line in run_adopt_statusline(adopt_tool, adopt_info, statusline_lib, apply):
+                    console.print(f"  {'[apply]' if apply else '[dry-run]'} {line}")
+            manifest = load_statusline_manifest(statusline_lib) if apply else manifest
+        if manifest:
+            statusline_actions = [a for a in plan_sync_statusline(statusline_lib, reports)
+                                  if hit_tool(a.tool)]
+            statusline_counts: dict[str, int] = {}
+            for a in statusline_actions:
+                statusline_counts[a.kind] = statusline_counts.get(a.kind, 0) + 1
+            console.print(f"\nstatusline 事实源: {statusline_lib}（{len(manifest)} 个工具片段）")
+            console.print("计划: " + (", ".join(f"{k}×{v}" for k, v in sorted(statusline_counts.items()))
+                                 or "（无动作）"))
+            if not apply:
+                console.print("[dim]dry-run 模式（--apply 生效）[/dim]")
+            for line in run_sync_statusline(statusline_actions, statusline_lib, apply, prefer):
+                style = {"link": "green", "relink": "yellow", "replace": "yellow",
+                         "update": "yellow", "conflict": "red"}.get(line.split()[0], None)
+                console.print(f"  {'[apply]' if apply else '[plan]'} {line}", style=style)
+        elif not plan_adopt_statusline(reports):
+            console.print("\nstatusline: 无事实源也无现存工具侧配置（先在任一工具设置 statusline 后再 sync）")
 
     # --- MCP 层：清单为空则自动收集 ---
     if layer_mcp:
@@ -1022,8 +1066,8 @@ def _push_core(layer: str, item: str, source: str | None, to: str | None,
 
 @app.command()
 def push(
-    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
-    item: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名）"),
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks / statusline"),
+    item: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名 / statusline 工具名）"),
     source: str = typer.Option(None, "--from", help="来源机器，缺省 = 本机"),
     to: str = typer.Option(None, "--to", help="目标机器，缺省 = 本机"),
     with_secrets: bool = typer.Option(False, "--with-secrets",
@@ -1031,7 +1075,7 @@ def push(
     prefer: str = typer.Option("skip", help="目标侧同名冲突：skip（默认）/ replace（备份后覆盖）"),
     apply: bool = typer.Option(False, "--apply", help="实际执行（默认 dry-run）"),
 ) -> None:
-    """把一个条目（skill / MCP server / subagent / hook）从 A 机器同步到 B 机器。"""
+    """把一个条目（skill / MCP server / subagent / hook / statusline 片段）从 A 机器同步到 B 机器。"""
     from . import transfer
 
     if layer not in transfer.LAYERS:
@@ -1045,7 +1089,7 @@ def push(
 
 @app.command()
 def pull(
-    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks / statusline"),
     item: str = typer.Argument(help="条目名"),
     source: str = typer.Option(..., "--from", help="来源机器"),
     with_secrets: bool = typer.Option(False, "--with-secrets", help="连同 MCP 密钥真实值"),
@@ -1198,8 +1242,8 @@ def test(
 
 @machines_app.command()
 def export(
-    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
-    name: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名）"),
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks / statusline"),
+    name: str = typer.Argument(help="条目名（skill 目录名 / agent 名 / MCP server 名 / hook id 基名 / statusline 工具名）"),
     with_secrets: bool = typer.Option(False, "--with-secrets",
                                        help="连同该条目引用的密钥真实值（仅 MCP；走 ssh 加密通道）"),
 ) -> None:
@@ -1220,7 +1264,7 @@ def export(
 
 @machines_app.command()
 def ingest(
-    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks"),
+    layer: str = typer.Argument(help="层：skills / agents / mcp / hooks / statusline"),
     name: str = typer.Argument(help="条目名"),
     prefer: str = typer.Option("skip", help="冲突处理：skip（默认）/ replace（备份目标侧后覆盖）"),
     with_secrets: bool = typer.Option(False, "--with-secrets",

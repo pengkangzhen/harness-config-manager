@@ -26,6 +26,7 @@ class HalterConfig:
     agents_library: str | None = None     # subagents 事实源，None 默认 ~/.agents/agents
     exclude_agents: list[str] = field(default_factory=list)
     memory_file: str | None = None        # 用户级记忆事实源，None 默认 ~/.agents/memory/MEMORY.md
+    statusline_library: str | None = None # statusline 事实源目录，None 默认 ~/.agents/statusline
     # OpenAI-compatible 模型端点；真实 key 仍只存环境变量 / secrets，不入 config
     # 原生 Agent 的 MCP 桥接 allowlist（键 read/write -> mcp_<server>_<tool> 名）。
     # read 缺省 = 允许全部 declared read-only 工具；write 缺省/空 = 禁止全部
@@ -47,6 +48,7 @@ def load_config(path: Path | None = None) -> HalterConfig:
         agents_library=doc.get("agents_library"),
         exclude_agents=list(doc.get("exclude_agents", [])),
         memory_file=doc.get("memory_file"),
+        statusline_library=doc.get("statusline_library"),
     )
 
 
@@ -60,6 +62,7 @@ def save_config(cfg: HalterConfig, path: Path | None = None) -> None:
         "library": cfg.library,
         "agents_library": cfg.agents_library,
         "memory_file": cfg.memory_file,
+        "statusline_library": cfg.statusline_library,
     }
     for key, value in scalar_fields.items():
         if value is None:
