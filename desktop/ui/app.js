@@ -225,6 +225,7 @@ const LAYERS = [
   ["statusline", "layer.statusline"],
   ["mcp_servers", "layer.mcp"],
   ["plugins", "layer.plugins"],
+  ["mods", "layer.mods"],
   ["hooks", "layer.hooks"],
   ["sessions", "layer.sessions"],
 ];
@@ -326,6 +327,8 @@ const MATRIX_LAYERS = [
   { key: "statusline", field: "statusline", labelKey: "mlayer.statusline" },
   { key: "mcp", field: "mcp_servers", labelKey: "mlayer.mcp" },
   { key: "plugins", field: "plugins", labelKey: "mlayer.plugins" },
+  // mods 是插件的函数式子集（JS/TS 事件模块），只盘点；安装与启停走 plugins 层
+  { key: "mods", field: "mods", labelKey: "mlayer.mods", sync: false },
   { key: "hooks", field: "hooks", labelKey: "mlayer.hooks" },
 ];
 
@@ -334,7 +337,7 @@ const MATRIX_LAYERS = [
 const PUSH_LAYERS = ["skills", "agents", "mcp", "hooks", "statusline"];
 
 function matrixItemName(layer, item) {
-  if (layer.key === "plugins") return item.plugin_id;
+  if (layer.key === "plugins" || layer.key === "mods") return item.plugin_id;
   if (layer.key === "hooks") return item.label;
   if (layer.key === "memory") return "MEMORY";
   return item.name;
@@ -554,6 +557,7 @@ function pluginHoverBody(row) {
   const bits = [];
   if (it.version) bits.push(`v${it.version}`);
   if (it.marketplace) bits.push(it.marketplace);
+  if (it.origin && it.origin !== "marketplace") bits.push(`@${it.origin}`);
   if (bits.length) nodes.push(el("div", "hc-sub", bits.join(" · ")));
   if (it.source_url) {
     nodes.push(el("div", "hc-src", t("hv.sourceRepo", { url: it.source_url })));
@@ -646,6 +650,9 @@ function renderMatrix(scan) {
     missing: t("mx.legendMissing"),
   })[st] || st;
 
+  // mods 层无独立同步动作（mod 即插件），格子不可点击同步
+  const cellSyncOn = layer.key !== "mods";
+
   const renderRow = (row, cls) => {
     const nameCell = el("div", `mx-name ${cls || ""}`);
     nameCell.title = row.name;
@@ -653,7 +660,7 @@ function renderMatrix(scan) {
       nameCell.removeAttribute("title");
       attachHoverPreview(nameCell, () => skillHoverBody(row));
     }
-    if (layer.key === "plugins") {
+    if (layer.key === "plugins" || layer.key === "mods") {
       nameCell.removeAttribute("title");
       attachHoverPreview(nameCell, () => pluginHoverBody(row));
     }
@@ -691,7 +698,7 @@ function renderMatrix(scan) {
       const st = row.statuses.get(tool.tool) || "missing";
       const cell = el("div", `mx-cell ${st}`, CELL_GLYPH[st] || "○");
       cell.title = t("mx.cellTitle", { tool: tool.tool, status: cellStatusText(st) });
-      attachCellSync(cell, tool.tool, [row.name], st);
+      if (cellSyncOn) attachCellSync(cell, tool.tool, [row.name], st);
       grid.append(cell);
     }
   };
@@ -730,7 +737,7 @@ function renderMatrix(scan) {
         total: group.members.length,
       });
       // 家族聚合格：点击 = 整个家族同步到该工具
-      attachCellSync(cell, tool.tool, group.members.map((m) => m.name), st);
+      if (cellSyncOn) attachCellSync(cell, tool.tool, group.members.map((m) => m.name), st);
       grid.append(cell);
     }
 
@@ -1660,8 +1667,8 @@ $("search-input").addEventListener("keydown", (e) => {
 /* ---------------- 全量同步（原 Sync 面板并入矩阵工具栏） ---------------- */
 
 function fullSyncLayers() {
-  // 七个矩阵层 + 可选 sessions（不在矩阵中，用工具栏开关控制）
-  const layers = MATRIX_LAYERS.map((l) => l.key);
+  // 矩阵层（mods 只盘点不参与同步）+ 可选 sessions（不在矩阵中，用工具栏开关控制）
+  const layers = MATRIX_LAYERS.filter((l) => l.sync !== false).map((l) => l.key);
   if ($("matrix-include-sessions").checked) layers.push("sessions");
   return layers;
 }

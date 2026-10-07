@@ -54,6 +54,7 @@ def to_json(reports: list[ToolReport]) -> str:
                 for m in r.mcp_servers
             ],
             "plugins": [dataclasses.asdict(p) for p in r.plugins],
+            "mods": [dataclasses.asdict(m) for m in r.mods],
             "sessions": [session_to_dict(x) for x in r.sessions],
             "hooks": [
                 {"event": h.event, "label": h.label, "type": h.type,
@@ -75,6 +76,7 @@ def print_summary(reports: list[ToolReport]) -> None:
     table.add_column("Statusline", justify="center")
     table.add_column("MCP", justify="right")
     table.add_column("插件", justify="right")
+    table.add_column("Mods", justify="right")
     table.add_column("Hooks", justify="right")
     table.add_column("Sessions", justify="right")
     for r in reports:
@@ -104,6 +106,7 @@ def print_summary(reports: list[ToolReport]) -> None:
             statusline_cell,
             str(len(r.mcp_servers)),
             str(len(r.plugins)),
+            str(len(r.mods)) if r.mods else "-",
             str(len(r.hooks)) if r.hooks else "-",
             str(len(r.sessions)) if r.sessions else "-",
         )
@@ -224,6 +227,28 @@ def print_plugins_detail(reports: list[ToolReport]) -> None:
             enabled = {True: "[green]✓[/green]", False: "[red]✗[/red]", None: "-"}[p.enabled]
             table.add_row(p.plugin_id, p.version or "-", enabled, p.marketplace or "-")
         console.print(table)
+
+
+def print_mods_detail(reports: list[ToolReport]) -> None:
+    shown = False
+    for r in reports:
+        if not r.mods:
+            continue
+        shown = True
+        table = Table(title=f"{r.display} — mods ({len(r.mods)})")
+        table.add_column("ID", style="cyan")
+        table.add_column("版本")
+        table.add_column("启用", justify="center")
+        table.add_column("来源", style="dim")
+        table.add_column("事件模块", style="dim")
+        for m in r.mods:
+            enabled = {True: "[green]✓[/green]", False: "[red]✗[/red]", None: "-"}[m.enabled]
+            source = m.marketplace if m.origin == "marketplace" else f"@{m.origin}"
+            table.add_row(m.plugin_id, m.version or "-", enabled, source or "-",
+                          ", ".join(m.modules) or "-")
+        console.print(table)
+    if shown:
+        console.print("[dim]mod = 自带进程内 JS/TS 事件模块的插件（Claude Code 2.1.287+）；安装与启停走插件层[/dim]")
 
 
 def print_sessions_detail(reports: list[ToolReport]) -> None:
@@ -383,6 +408,14 @@ def print_plugins_matrix(reports: list[ToolReport]) -> None:
     names = sorted({p.plugin_id for r in capable for p in r.plugins})
     _print_matrix("PLUGINS", "PLUGIN", capable,
                   lambda r, n: next((p for p in r.plugins if p.plugin_id == n), None),
+                  names, merge_base=True)
+
+
+def print_mods_matrix(reports: list[ToolReport]) -> None:
+    capable = [r for r in reports if r.mods]
+    names = sorted({m.plugin_id for r in capable for m in r.mods})
+    _print_matrix("MODS", "MOD", capable,
+                  lambda r, n: next((m for m in r.mods if m.plugin_id == n), None),
                   names, merge_base=True)
 
 

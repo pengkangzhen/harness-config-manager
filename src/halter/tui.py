@@ -1,6 +1,6 @@
 """halter tui：交互式全屏矩阵浏览器（htop/k9s 风格）。
 
-1-8 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
+1-9 切层 · 方向键选择条目 · 右侧详情面板（描述/路径/形态）
 g 只看缺口 · / 过滤 · q 退出。数据来自 scan_all，只读。
 """
 
@@ -26,8 +26,9 @@ LAYERS: list[tuple[str, str, str]] = [
     ("statusline", "STATUSLINE", "4"),
     ("mcp", "MCP", "5"),
     ("plugins", "PLUGINS", "6"),
-    ("hooks", "HOOKS", "7"),
-    ("sessions", "SESSIONS", "8"),
+    ("mods", "MODS", "7"),
+    ("hooks", "HOOKS", "8"),
+    ("sessions", "SESSIONS", "9"),
 ]
 
 
@@ -44,7 +45,7 @@ class HelpScreen(ModalScreen[None]):
         lines = [
             "[b cyan]halter tui 快捷键[/b cyan]",
             "[dim]────────────────────────────[/dim]",
-            "[b]1-8[/b]   切换层（Skills/Subagents/Memory/Statusline/MCP/Plugins/Hooks/Sessions）",
+            "[b]1-9[/b]   切换层（Skills/Subagents/Memory/Statusline/MCP/Plugins/Mods/Hooks/Sessions）",
             "[b]↑↓←→[/b]  移动选择，右侧面板显示详情",
             "[b]g[/b]     只看缺口（再按恢复）",
             "[b]s[/b]     循环排序：缺口 → 名称 → 覆盖",
@@ -101,6 +102,9 @@ def _layer_rows(layer: str, reports: list[ToolReport]) -> list[Row]:
         elif layer == "plugins":
             for p in r.plugins:
                 put(p.plugin_id.split("@", 1)[0], r.tool, p, merged_id=p.plugin_id)
+        elif layer == "mods":
+            for m in r.mods:
+                put(m.plugin_id.split("@", 1)[0], r.tool, m, merged_id=m.plugin_id)
         elif layer == "hooks":
             for h in r.hooks:
                 put(h.label, r.tool, h)
@@ -169,6 +173,14 @@ def _detail_fields(layer: str, row: Row) -> list[tuple[str, str]]:
         source = getattr(first, "source_url", None)
         if source:
             fields.append(("来源仓库", source))
+    elif layer == "mods":
+        if row.merged:
+            fields.insert(0, ("变体", "\n".join(sorted(row.merged))))
+        origin = getattr(first, "origin", "marketplace")
+        fields.insert(1, ("来源", origin))
+        modules = getattr(first, "modules", None) or []
+        if modules:
+            fields.append(("事件模块", ", ".join(modules)))
     elif layer == "hooks":
         event = getattr(first, "event", "-")
         command = getattr(first, "command", None) or "-"

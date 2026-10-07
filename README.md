@@ -21,7 +21,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 |---|---|---|---|---|---|
 | Core model | single source of truth → all tools, repeatable | point-to-point copy `--from A --to B` | symlink sync | single `.agentsmesh` dir convention | install from GitHub repos |
 | Scope | **user-level** global config | project-level files (`CLAUDE.md`, `.cursorrules`…) | user-level | user-level | user-level |
-| Layers | skills + MCP + plugins + hooks + **subagents** + memory + statusline + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
+| Layers | skills + MCP + plugins + mods + hooks + **subagents** + memory + statusline + read-only project sessions | instructions, rules, skills, MCP | config + MCP | rules + MCP + skills | skills + agents + commands + MCP |
 | Detection / inventory / health checks | ✅ (13 tools, coverage matrices, doctor) | ❌ | ❌ | ❌ | ❌ |
 | Multi-machine | ✅ ssh: auto-discover ~/.ssh/config hosts, remote scan/sync, per-entry push/pull | ❌ | ❌ | ❌ | ❌ |
 | Secret handling | `${VAR}` placeholders + 0600 secrets file, redacted output | ❌ | ❌ | ❌ | ❌ |
@@ -33,7 +33,7 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 
 ![Overview](docs/images/app-overview-en.png)
 
-**Config matrix** — harness × skills / subagents / MCP / plugins / hooks coverage at a glance (skill families collapse into one row, expandable). Click any not-yet-synced dot to sync just that entry to that tool (CLI equivalent: `halter sync --tool <tool> --item <name> --apply`; clicking a family row's dot syncs the whole family). The toolbar also carries the full sync: preview the dry-run plan or apply everything (sessions-skill layer toggleable) with a two-step confirm:
+**Config matrix** — harness × skills / subagents / MCP / plugins / mods / hooks coverage at a glance (skill families collapse into one row, expandable; mods = plugins with in-process JS/TS event handlers, inventoried read-only — installs ride the plugins layer). Click any not-yet-synced dot to sync just that entry to that tool (CLI equivalent: `halter sync --tool <tool> --item <name> --apply`; clicking a family row's dot syncs the whole family). The toolbar also carries the full sync: preview the dry-run plan or apply everything (sessions-skill layer toggleable) with a two-step confirm:
 
 ![Config matrix](docs/images/app-matrix-en.png)
 
@@ -231,7 +231,7 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 219 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 225 tests, all against a fake $HOME — never touches your real config
 ```
 
 ## License
@@ -252,7 +252,7 @@ It registers `halter_cli`, a read-only agent tool (scan / assess / sessions list
 
 `desktop/` ships a Tauri v2 desktop app:
 
-- **Overview dashboard**: detected tools, per-layer counts (skills / subagents / memory / statusline / MCP / plugins / hooks), doctor issues
+- **Overview dashboard**: detected tools, per-layer counts (skills / subagents / memory / statusline / MCP / plugins / mods / hooks), doctor issues
 - **Memory panel**: view and edit the global memory source of truth, inspect each tool-side copy with a unified diff, save with automatic backup
 - **Cross-assistant session browser**: project session list, redacted transcripts, full-text search, one-click handoff generation
 - **Sync**: per-layer toggles + dry-run preview; Apply requires two-step confirmation and keeps the CLI's safety semantics

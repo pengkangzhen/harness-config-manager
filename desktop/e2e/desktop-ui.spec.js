@@ -222,6 +222,39 @@ test("matrix 点击圆点单元格触发定向同步并刷新矩阵", async ({ p
   await expect(page.locator(".mx-cell.missing")).toHaveCount(0);
 });
 
+test("matrix mods 页签：行渲染自 mods 字段，格子只盘点不触发同步", async ({ page }) => {
+  // mod 即插件（函数式子集）：Mods 页签展示盘点结果，格子点击不发起定向同步
+  const scan = {
+    doctor: [],
+    inventory: [
+      {
+        tool: "claude", display: "Claude Code", installed: true, category: "harness",
+        plugins: [{ plugin_id: "cc-diff@claude-plugins-official", version: "1.0.0", enabled: true }],
+        mods: [
+          { plugin_id: "cc-diff@claude-plugins-official", origin: "marketplace", version: "1.0.0", enabled: true, marketplace: "claude-plugins-official", modules: ["./register.js"] },
+          { plugin_id: "cc-plugin-you-should-know@builtin", origin: "builtin", version: null, enabled: true, marketplace: null, modules: [] },
+        ],
+      },
+      { tool: "gemini", display: "Gemini CLI", installed: true, category: "harness" },
+    ],
+  };
+  await openApp(page, bootData({ halter_scan: scan }));
+
+  await page.locator('.nav-item[data-view="matrix"]').click();
+  await page.locator(".layer-tab", { hasText: "Mods" }).click();
+  await expect(page.locator("#matrix-summary")).toContainText("Mods");
+  await expect(page.locator(".mx-name", { hasText: "cc-diff" })).toBeVisible();
+  await expect(page.locator(".mx-name", { hasText: "cc-plugin-you-should-know" })).toBeVisible();
+
+  // 格子无 clickable 修饰；点击后也不产生 halter_sync 调用
+  const cell = page.locator(".mx-cell").first();
+  await expect(cell).not.toHaveClass(/clickable/);
+  await cell.click();
+  const syncCalls = (await page.evaluate(() => window.__calls))
+    .filter(([cmd]) => cmd === "halter_sync");
+  expect(syncCalls).toHaveLength(0);
+});
+
 test("matrix 工具栏全量同步：预览、sessions 开关与两步确认", async ({ page }) => {
   await openApp(page, bootData());
   await setHandler(page, "halter_sync", () => async (args) => {
@@ -230,13 +263,14 @@ test("matrix 工具栏全量同步：预览、sessions 开关与两步确认", a
   });
   await page.locator('.nav-item[data-view="matrix"]').click();
 
-  // 预览：dry-run，七个矩阵层 + sessions 全开
+  // 预览：dry-run，矩阵同步层（mods 只盘点不参与）+ sessions 全开
   await page.locator("#btn-matrix-preview").click();
   await expect(page.locator("#matrix-sync-output")).toContainText("计划: link×1");
   let args = await page.evaluate(() => window.__fullSyncArgs[0]);
   expect(args.apply).toBe(false);
   expect(args.layers).toEqual(
     ["skills", "agents", "memory", "statusline", "mcp", "plugins", "hooks", "sessions"]);
+  expect(args.layers).not.toContain("mods");
 
   // 关掉 sessions 开关后不再包含
   await page.locator("#matrix-include-sessions").uncheck();

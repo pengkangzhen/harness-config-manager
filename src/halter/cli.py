@@ -461,7 +461,7 @@ def scan(
     json_out: bool = typer.Option(False, "--json", help="以 JSON 输出"),
     detail: list[str] = typer.Option(
         [], "--detail", "-d",
-        help="查看某层明细，可多选：skills / mcp / plugins / hooks / agents / memory / statusline / sessions",
+        help="查看某层明细，可多选：skills / mcp / plugins / mods / hooks / agents / memory / statusline / sessions",
     ),
 ) -> None:
     """看一眼：装了哪些工具、各配置了什么、有无健康问题。"""
@@ -500,6 +500,8 @@ def scan(
             rp.print_mcp_detail(reports)
         if "plugins" in detail:
             rp.print_plugins_detail(reports)
+        if "mods" in detail:
+            rp.print_mods_detail(reports)
         if "hooks" in detail:
             rp.print_hooks_detail(reports)
         if "agents" in detail:
@@ -517,6 +519,7 @@ def scan(
         rp.print_statusline_matrix(reports)
         rp.print_mcp_matrix(reports)
         rp.print_plugins_matrix(reports)
+        rp.print_mods_matrix(reports)
         rp.print_hooks_matrix(reports)
         rp.print_sessions_matrix(reports)
         console.print("[dim]图例  [green]●[/green] symlink 同步 · [yellow]◐[/yellow] 本地拷贝 · · 缺失[/dim]")

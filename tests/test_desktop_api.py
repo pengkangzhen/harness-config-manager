@@ -59,6 +59,36 @@ def test_scan_json_statusline_contract(fake_home: Path) -> None:
     assert s["script"] == str(script)
 
 
+def test_scan_json_mods_contract(fake_home: Path) -> None:
+    """desktop mods 页签的数据源：mods 数组字段形状（marketplace + 保留来源）。"""
+    mod_dir = fake_home / ".claude/plugins/cache/claude-plugins-official/cc-diff/1.0.0/hooks"
+    mod_dir.mkdir(parents=True)
+    (mod_dir / "hooks.json").write_text(
+        json.dumps({"modules": ["./register.js"]}), encoding="utf-8")
+    installed = fake_home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({"version": 2, "plugins": {
+        "cc-diff@claude-plugins-official": [
+            {"version": "1.0.0", "installPath": str(mod_dir.parent), "scope": "user"}],
+    }}), encoding="utf-8")
+    (fake_home / ".claude").mkdir(exist_ok=True)
+    (fake_home / ".claude" / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {
+            "cc-diff@claude-plugins-official": True,
+            "cc-plugin-you-should-know@builtin": True,
+        }}), encoding="utf-8")
+
+    result = runner.invoke(app, ["scan", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    claude = next(t for t in payload["inventory"] if t["tool"] == "claude")
+    by_id = {m["plugin_id"]: m for m in claude["mods"]}
+    assert by_id["cc-diff@claude-plugins-official"]["origin"] == "marketplace"
+    assert by_id["cc-diff@claude-plugins-official"]["modules"] == ["./register.js"]
+    assert by_id["cc-plugin-you-should-know@builtin"]["origin"] == "builtin"
+    assert by_id["cc-plugin-you-should-know@builtin"]["enabled"] is True
+
+
 def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> None:
     """projects 聚合：跨助手计数 / 最近活动排序 / 当前项目标记。"""
     from datetime import datetime, timezone

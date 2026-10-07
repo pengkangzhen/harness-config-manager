@@ -10,7 +10,7 @@
 
 ![总览](docs/images/app-overview.png)
 
-**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细）。点一下任意未同步的圆点，即定向同步该条目到该工具（CLI 等价 `halter sync --tool <tool> --item <name> --apply`；家族聚合格一点同步整个家族）。工具栏同时承载全量同步：预览 dry-run 计划，或两步确认后全量执行（sessions skill 层可开关）：
+**配置矩阵** —— Harness × Skills / Subagents / MCP / 插件 / Mods / Hooks，谁装了、谁缺了一目了然（skill 家族自动聚合，可展开明细；mods = 自带进程内 JS/TS 事件模块的插件，只读盘点，安装与启停走插件层）。点一下任意未同步的圆点，即定向同步该条目到该工具（CLI 等价 `halter sync --tool <tool> --item <name> --apply`；家族聚合格一点同步整个家族）。工具栏同时承载全量同步：预览 dry-run 计划，或两步确认后全量执行（sessions skill 层可开关）：
 
 ![配置矩阵](docs/images/app-matrix.png)
 
@@ -194,7 +194,7 @@ statusline_library = ""          # statusline 事实源目录；缺省为 ~/.age
 ## 测试
 
 ```bash
-uv run pytest               # 219 项单测，全部使用假 HOME，绝不触碰真实配置
+uv run pytest               # 225 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
 
 ## 在 DeepSeek Harness（dsh）中使用
@@ -211,7 +211,7 @@ dsh plugin --profile web add dsh-halter
 
 `desktop/` 内置一个 Tauri v2 桌面应用：
 
-- **总览仪表盘**：检测到的工具、各层配置（skills / subagents / memory / statusline / MCP / 插件 / hooks）计数、健康检查问题
+- **总览仪表盘**：检测到的工具、各层配置（skills / subagents / memory / statusline / MCP / 插件 / mods / hooks）计数、健康检查问题
 - **记忆面板**：查看并编辑记忆事实源，逐工具展示副本状态与差异（unified diff），保存自动备份旧文件
 - **跨助手会话浏览器**：项目会话列表、脱敏 transcript、内容搜索、一键生成交接上下文
 - **同步**：分层勾选 + dry-run 预览；Apply 需两步确认，保留 CLI 的安全语义

@@ -51,6 +51,7 @@ const I18N = {
     "layer.statusline": "状态栏",
     "layer.mcp": "MCP",
     "layer.plugins": "插件",
+    "layer.mods": "mods",
     "layer.hooks": "hooks",
     "layer.sessions": "sessions",
 
@@ -60,6 +61,7 @@ const I18N = {
     "mlayer.statusline": "Statusline",
     "mlayer.mcp": "MCP",
     "mlayer.plugins": "插件",
+    "mlayer.mods": "Mods",
     "mlayer.hooks": "Hooks",
 
     "mx.heading": "配置矩阵",
@@ -319,6 +321,7 @@ const I18N = {
     "layer.statusline": "statusline",
     "layer.mcp": "MCP",
     "layer.plugins": "Plugins",
+    "layer.mods": "mods",
     "layer.hooks": "hooks",
     "layer.sessions": "sessions",
 
@@ -328,6 +331,7 @@ const I18N = {
     "mlayer.statusline": "Statusline",
     "mlayer.mcp": "MCP",
     "mlayer.plugins": "Plugins",
+    "mlayer.mods": "Mods",
     "mlayer.hooks": "Hooks",
 
     "mx.heading": "Config matrix",

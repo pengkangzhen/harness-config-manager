@@ -1,4 +1,4 @@
-"""数据模型：工具探测结果与各配置层对象（skills / MCP / 插件 / hooks / subagents / memory / statusline）的统一表示。"""
+"""数据模型：工具探测结果与各配置层对象（skills / MCP / 插件 / mods / hooks / subagents / memory / statusline）的统一表示。"""
 
 from __future__ import annotations
 
@@ -138,6 +138,17 @@ class PluginInfo:
 
 
 @dataclass
+class ModsInfo:
+    plugin_id: str                # name@marketplace 或保留来源 name@builtin / name@synced
+    origin: str = "marketplace"   # marketplace / builtin / synced
+    version: str | None = None
+    enabled: bool | None = None
+    marketplace: str | None = None
+    # hooks/hooks.json 声明的事件模块入口（保留来源的内置 mod 无从读取，为空）
+    modules: list[str] = field(default_factory=list)
+
+
+@dataclass
 class HookInfo:
     event: str                    # canonical 事件名（Claude/ZCode 大写驼峰；cursor-only 保留小驼峰原名）
     label: str                    # 展示名：halter id / 第三方标记 / command 首段截断
@@ -160,6 +171,7 @@ class ToolReport:
     statusline: StatuslineInfo | None = None
     mcp_servers: list[McpServerInfo] = field(default_factory=list)
     plugins: list[PluginInfo] = field(default_factory=list)
+    mods: list[ModsInfo] = field(default_factory=list)
     hooks: list[HookInfo] = field(default_factory=list)
     sessions: list["SessionInfo"] = field(default_factory=list)
     scan_notes: list[str] = field(default_factory=list)

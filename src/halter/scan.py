@@ -9,6 +9,7 @@ from .detect import detect_tools
 from .hooks import HOOK_READERS
 from .memory import scan_memory
 from .model import Detection, ToolReport
+from .mods import MODS_READERS
 from .mcp import MCP_READERS, plugin_provided_mcp
 from .plugins import PLUGIN_READERS
 from .registry import BY_KEY, TOOLS
@@ -47,6 +48,10 @@ def scan_tool(key: str) -> ToolReport:
 
     if key in PLUGIN_READERS:
         report.plugins = PLUGIN_READERS[key]()
+
+    # mods 是插件的函数式子集，只盘点；安装与启停走 plugins 层
+    if key in MODS_READERS:
+        report.mods = MODS_READERS[key]()
 
     if key in HOOK_READERS:
         HOOK_READERS[key](report.hooks, report.scan_notes)
