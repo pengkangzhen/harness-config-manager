@@ -321,9 +321,15 @@ def version(
     """显示 halter 版本。"""
     from importlib.metadata import PackageNotFoundError, version as pkg_version
 
-    try:
-        v = pkg_version("halter")
-    except PackageNotFoundError:
+    # PyPI 发行名是 halter-cli（halter 已被占用），import 名仍是 halter；
+    # 开发 checkout 两者都可能缺失，退回 0.0.0+dev
+    for dist in ("halter", "halter-cli"):
+        try:
+            v = pkg_version(dist)
+            break
+        except PackageNotFoundError:
+            continue
+    else:
         v = "0.0.0+dev"
     if json_out:
         emit_json(_json.dumps({"name": "halter", "version": v}, ensure_ascii=False))

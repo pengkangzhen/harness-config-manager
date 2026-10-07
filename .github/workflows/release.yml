@@ -1,0 +1,45 @@
+name: release
+
+# M1 发布流水线：tag v* 触发
+#   1. 构建 CLI 的 sdist/wheel 并附到 GitHub release（必成路径）
+#   2. 经 PyPI trusted publishing 发布 halter-cli（需在 pypi.org 为本项目
+#      配置 pending publisher：repo pengkangzhen/harness-config-manager，
+#      workflow release.yml，environment pypi —— 配置前此 job 会失败，不影响资产）
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build CLI distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # 附产物到 GitHub release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Attach distributions to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish halter-cli to PyPI (trusted publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # OIDC trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

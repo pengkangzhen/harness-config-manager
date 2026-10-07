@@ -43,18 +43,21 @@ A serious AI-assisted developer typically runs several coding harnesses side by 
 
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/):
+Requires Python 3.12+. The PyPI distribution is **`halter-cli`** (the bare `halter` name was taken by an unrelated project) — it still installs the `halter` command:
 
 ```bash
-uv tool install git+https://github.com/pengkangzhen/halter.git
+pipx install halter-cli        # or: uv tool install halter-cli
 ```
 
-Or from source:
+Until the first PyPI release propagates, install straight from the repository:
 
 ```bash
-git clone https://github.com/pengkangzhen/halter.git
-uv tool install --editable ./halter
+uv tool install git+https://github.com/pengkangzhen/harness-config-manager.git
 ```
+
+**Desktop app (Windows)**: NSIS installer + portable exe are attached to each [GitHub release](https://github.com/pengkangzhen/harness-config-manager/releases). macOS/Linux desktop builds arrive in a later release; the CLI covers those platforms fully.
+
+**Platform support**: the CLI is a first-class citizen on macOS and Linux. On Windows, the core distribution mechanism (per-entry symlinks) requires developer mode and is not yet tested — treat Windows as desktop-app-only for now. The `library` channel's remote takeover needs a POSIX remote (macOS/Linux); Windows remotes are not supported.
 
 ## Quick start
 

@@ -20,11 +20,21 @@
 
 ## 安装
 
+需要 Python 3.12+。PyPI 发行名为 **`halter-cli`**（裸名 `halter` 已被无关项目占用）——安装后得到的命令仍是 `halter`：
+
 ```bash
-uv tool install .          # 从本仓库安装，得到 halter 命令
+pipx install halter-cli    # 或 uv tool install halter-cli
 ```
 
-依赖：Python 3.12+，typer / rich / tomlkit。
+首个 PyPI 版本发布前，可直接从仓库安装：
+
+```bash
+uv tool install git+https://github.com/pengkangzhen/harness-config-manager.git
+```
+
+**桌面 App（Windows）**：NSIS 安装包与便携版 exe 附在每个 [GitHub release](https://github.com/pengkangzhen/harness-config-manager/releases)；macOS/Linux 桌面构建将在后续版本提供，这两平台的 CLI 已完整覆盖。
+
+**平台支持**：CLI 在 macOS 与 Linux 上是一等公民；Windows 上核心分发机制（条目级 symlink）需要开发者模式且未经测试——现阶段 Windows 请以桌面 App 为主。`library` 库通道的远端接管要求 POSIX 远端（macOS/Linux），不支持 Windows 远端。
 
 ## 快速上手
 

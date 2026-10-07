@@ -58,6 +58,19 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# PyPI 发行名 halter-cli（halter 被占用）；旧环境可能仍是本地名 halter
+DIST_NAME=$(uv run python - <<'PY'
+import importlib.metadata as m
+for d in ("halter-cli", "halter"):
+    try:
+        m.version(d)
+        print(d)
+        break
+    except m.PackageNotFoundError:
+        pass
+PY
+)
+
 PYINSTALLER_CONFIG_DIR="$PYI_CACHE" \
 UV_CACHE_DIR="${UV_CACHE_DIR:-$OUT/.uv-cache}" \
 uv run pyinstaller \
@@ -65,7 +78,7 @@ uv run pyinstaller \
     --distpath "$WORK/dist" \
     --workpath "$WORK/build" \
     --specpath "$WORK" \
-    --copy-metadata halter \
+    --copy-metadata "$DIST_NAME" \
     desktop/pyinstaller_entry.py
 
 # Move through a private temporary name, then record the hash only after the
