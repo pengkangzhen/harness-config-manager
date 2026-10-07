@@ -1,6 +1,6 @@
 [project]
 name = "halter"
-version = "0.2.0"
+version = "0.3.0"
 description = "Detect, distribute, and recall user-level AI coding harness config and project-scoped session history."
 readme = "README.md"
 authors = [
