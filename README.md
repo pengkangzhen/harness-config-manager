@@ -247,8 +247,10 @@ Adding a tool = one `ToolSpec` entry in `registry.py` (detection + skills layer 
 
 ```bash
 uv sync
-uv run pytest               # 225 tests, all against a fake $HOME — never touches your real config
+uv run pytest               # 231 tests, all against a fake $HOME — never touches your real config
 ```
+
+**Releasing** (maintainer): push a `v*` tag — `release.yml` builds sdist/wheel, attaches them plus the Windows installers to the GitHub release, and publishes to PyPI via trusted publishing. One-time setup on [pypi.org](https://pypi.org): register the project `halter-cli`, then add a *pending publisher* for this repo (workflow `release.yml`, environment `pypi`); until then the publish job fails harmlessly while release assets still attach. Version numbers must agree across `pyproject.toml` / `tauri.conf.json` / `Cargo.toml` (a contract test enforces it, and the sidecar must be rebuilt via `scripts/build_sidecar.sh`).
 
 ## License
 
