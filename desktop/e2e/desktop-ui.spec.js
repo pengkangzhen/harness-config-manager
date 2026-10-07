@@ -354,9 +354,11 @@ test("机器下拉切换远端矩阵：幽灵行推送与行级拉取", async ({
   const pushes = await page.evaluate(() => window.__pushArgs);
   expect(pushes[0]).toEqual({
     layer: "skills", item: "alpha", to: "desktop", from: null, withSecrets: false,
+    prefer: null,
   });
   expect(pushes[1]).toEqual({
     layer: "skills", item: "beta", to: null, from: "desktop", withSecrets: false,
+    prefer: null,
   });
   await expect(page.locator("#matrix-toast")).toContainText("add    beta");
 });

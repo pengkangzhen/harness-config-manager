@@ -187,6 +187,7 @@ async fn halter_push(
     to: Option<String>,
     from: Option<String>,
     with_secrets: bool,
+    prefer: Option<String>,
 ) -> Result<SidecarOutput, String> {
     let mut args = vec!["push".into(), layer, item];
     if let Some(t2) = to.as_deref().filter(|t2| !t2.trim().is_empty()) {
@@ -199,6 +200,10 @@ async fn halter_push(
     }
     if with_secrets {
         args.push("--with-secrets".into());
+    }
+    if let Some(p) = prefer.as_deref().filter(|p| !p.trim().is_empty() && *p != "skip") {
+        args.push("--prefer".into());
+        args.push(p.into());
     }
     args.push("--apply".into());
     tauri::async_runtime::spawn_blocking(move || run_halter(&args))

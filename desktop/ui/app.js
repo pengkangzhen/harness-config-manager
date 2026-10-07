@@ -685,6 +685,21 @@ function renderMatrix(scan) {
         pullRemoteItem(row.name);
       });
       nameCell.append(pull);
+    } else if (localNames && PUSH_LAYERS.includes(layer.key)) {
+      // 两边都有（可能漂移）：⇅ 一键以某侧为准（prefer replace，被覆盖侧自动备份）
+      const pullOver = el("button", "mx-pull-btn", "↓");
+      pullOver.title = t("mx.pullOverwriteHint", { item: row.name, machine: state.machine });
+      pullOver.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pullRemoteItem(row.name, "replace");
+      });
+      const pushOver = el("button", "mx-pull-btn", "↑");
+      pushOver.title = t("mx.pushOverwriteHint", { item: row.name, machine: state.machine });
+      pushOver.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pushRemoteOverwrite(row.name);
+      });
+      nameCell.append(pullOver, pushOver);
     }
     grid.append(nameCell);
     for (const tool of tools) {
@@ -829,7 +844,7 @@ async function syncMatrixCell(cell, tool, names) {
 
 /* ---------------- 跨机器单条目同步：幽灵行推送 / 行级拉取 ---------------- */
 
-async function pushEntry(layer, item, { to, from }) {
+async function pushEntry(layer, item, { to, from, prefer } = {}) {
   const machine = to || from;
   const key = `push|${machine}|${item}`;
   if (syncBusyKeys.has(key)) return { ok: false };
@@ -842,6 +857,7 @@ async function pushEntry(layer, item, { to, from }) {
       to: to || null,
       from: from || null,
       withSecrets: false,
+      prefer: prefer || null,
     });
   } finally {
     syncBusyKeys.delete(key);
@@ -869,10 +885,11 @@ async function pushGhostItem(item, cell) {
   await loadMatrix(true); // 推送后两端状态都可能变化，强制重扫
 }
 
-async function pullRemoteItem(item) {
+async function pullRemoteItem(item, prefer = null) {
   let result = null;
   try {
-    result = await pushEntry(state.matrixLayer, item, { from: state.machine });
+    result = await pushEntry(state.matrixLayer, item,
+      { from: state.machine, ...(prefer ? { prefer } : {}) });
   } catch (err) {
     showMatrixToast(t("mx.pullFailed", { item, machine: state.machine }), errorDetail(err), true);
     return;
@@ -880,6 +897,23 @@ async function pullRemoteItem(item) {
   const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
   showMatrixToast(
     t(result.ok ? "mx.pullDone" : "mx.pullFailed", { item, machine: state.machine }),
+    body || t("mx.syncNoop"),
+    !result.ok,
+  );
+  await loadMatrix(true);
+}
+
+async function pushRemoteOverwrite(item) {
+  let result = null;
+  try {
+    result = await pushEntry(state.matrixLayer, item, { to: state.machine, prefer: "replace" });
+  } catch (err) {
+    showMatrixToast(t("mx.pushFailed", { item, machine: state.machine }), errorDetail(err), true);
+    return;
+  }
+  const body = [result.stdout, result.stderr].filter((s) => s && s.trim()).join("\n").trim();
+  showMatrixToast(
+    t(result.ok ? "mx.pushDone" : "mx.pushFailed", { item, machine: state.machine }),
     body || t("mx.syncNoop"),
     !result.ok,
   );
