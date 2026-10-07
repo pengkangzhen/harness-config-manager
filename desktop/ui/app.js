@@ -117,6 +117,7 @@ function enhanceSelect(sel) {
     label.textContent = opt
       ? (opt.dataset.sub ? `${opt.text} · ${opt.dataset.sub}` : opt.text)
       : "";
+    btn.title = label.textContent; // 按钮宽度截断时补全（如长主机名）
     btn.disabled = sel.disabled;
   };
   const buildItems = () => {
@@ -1437,7 +1438,18 @@ function setDetailMode(mode) {
   if (state.lastDetail) renderSessionDetail(state.lastDetail);
 }
 
-async function copyToClipboard(text, btn, restoreKey) {
+// 单色描边小图标（Lucide 路径）：复制按钮与复制成功/失败反馈共用
+const ICON_PATHS = {
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+};
+
+function iconSvg(name) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+}
+
+async function copyToClipboard(text, btn, restoreKey, { icon = false } = {}) {
   let ok = true;
   try {
     await navigator.clipboard.writeText(text);
@@ -1449,6 +1461,12 @@ async function copyToClipboard(text, btn, restoreKey) {
     ta.select();
     try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
     ta.remove();
+  }
+  if (icon) { // 图标按钮：反馈走图标切换（成功打勾变绿），不动文字
+    btn.innerHTML = iconSvg(ok ? "check" : "x");
+    btn.classList.toggle("copied", ok);
+    setTimeout(() => { btn.innerHTML = iconSvg("copy"); btn.classList.remove("copied"); }, 1200);
+    return;
   }
   btn.textContent = ok ? t("ss.traceCopied") : t("ss.traceCopyFailed");
   setTimeout(() => { btn.textContent = t(restoreKey); }, 1200);
@@ -2040,12 +2058,6 @@ async function loadProviders(force = false) {
   renderProviders();
 }
 
-function pvStatusMeta(status) {
-  if (status === "halter") return { cls: "halter", key: "pv.statusHalter" };
-  if (status === "external") return { cls: "external", key: "pv.statusExternal" };
-  return { cls: "official", key: "pv.statusOfficial" };
-}
-
 function renderProviders() {
   const data = providersState.data;
   if (!data) return;
@@ -2081,29 +2093,33 @@ function renderProviders() {
   const tool = providersState.tool;
   const cur = data.current[tool] || { status: "official", provider: "", base_url: "", model: "" };
 
-  const statusEl = el("span", `pv-status ${pvStatusMeta(cur.status).cls}`, t(pvStatusMeta(cur.status).key));
-  const curTitle = el("div", "pv-cur-title");
-  curTitle.append(
-    el("strong", "", cur.provider || t(cur.status === "external" ? "pv.externalName" : "pv.officialName")),
-    statusEl,
-  );
-  const curMeta = el("div", "dim", `${cur.base_url || t("pv.officialEndpoint")}${cur.model ? " · " + cur.model : ""}`);
-  const currentCard = el("div", "pv-current");
-  currentCard.append(el("div", "pv-cur-label", t("pv.currentLabel")), curTitle, curMeta);
-  if (cur.status === "external" && cur.detail) {
-    currentCard.append(el("div", "pv-external-hint", t("pv.externalHint")));
-  }
+  // 顶部当前卡仅在 external 态渲染：清单之外的配置在列表无行可表达，需要它可见；
+  // halter / official 态的激活信息由列表行的 active 徽标表达，不再顶部重复
+  const currentHost = $("providers-current");
   if (cur.status === "external" && cur.base_url) {
-    // 外部配置不在清单里（列表无行可编辑）：双击当前卡进入收编表单——
-    // 带实况端点/模型/托管 env（claude 的 cur.env 为扁平托管键，档位映射等一并带入），
-    // 起个 id 保存即收编进清单（卡片即入口，不再放独立按钮）
+    const statusEl = el("span", "pv-status external", t("pv.statusExternal"));
+    const curTitle = el("div", "pv-cur-title");
+    curTitle.append(
+      el("strong", "", cur.provider || t("pv.externalName")),
+      statusEl,
+    );
+    const curMeta = el("div", "dim", `${cur.base_url}${cur.model ? " · " + cur.model : ""}`);
+    const currentCard = el("div", "pv-current");
+    currentCard.append(el("div", "pv-cur-label", t("pv.currentLabel")), curTitle, curMeta);
+    if (cur.detail) {
+      currentCard.append(el("div", "pv-external-hint", t("pv.externalHint")));
+    }
+    // 双击当前卡进入收编表单——带实况端点/模型/扁平 env（档位映射等一并带入），
+    // 起个 id 保存即收编进清单（卡片即入口；token 未填时自动继承实况）
     currentCard.classList.add("adoptable");
     currentCard.title = t("pv.externalHint");
     currentCard.addEventListener("dblclick", () => openProviderForm("external", {
       [tool]: { base_url: cur.base_url, model: cur.model || "", env: cur.env || {} },
     }));
+    currentHost.replaceChildren(currentCard);
+  } else {
+    currentHost.replaceChildren();
   }
-  $("providers-current").replaceChildren(currentCard);
 
   const list = $("providers-list");
   list.replaceChildren();
@@ -2551,17 +2567,23 @@ function renderUpdateCard(tool) {
   rows.append(upRow("up.latest", tool.latest || "—"));
   card.append(rows);
 
-  // 手动安装 / 升级命令：逐条独立成行（官方脚本与 npm 分开），每行各带复制按钮；
-  // 卡内按钮仅此用途，升级动作仍在 CLI
+  // 手动安装 / 升级命令：逐条独立成行（官方脚本与 npm 分开），命令单行省略（悬停看全文，
+  // 复制始终是完整命令），行尾是图标复制按钮；卡内按钮仅此用途，升级动作仍在 CLI
   if (Array.isArray(tool.install) && tool.install.length) {
     const install = el("div", "up-install");
     install.append(el("span", "up-install-label", t("up.install")));
     const list = el("div", "up-install-list");
     for (const cmd of tool.install) {
       const item = el("div", "up-install-item");
-      item.append(el("code", "up-install-cmd", cmd));
-      const copy = el("button", "btn btn-sm up-copy", t("up.copy"));
-      copy.addEventListener("click", () => copyToClipboard(cmd, copy, "up.copy"));
+      const cmdEl = el("code", "up-install-cmd", cmd);
+      cmdEl.title = cmd;
+      item.append(cmdEl);
+      const copy = el("button", "btn btn-sm up-copy");
+      copy.type = "button";
+      copy.innerHTML = iconSvg("copy");
+      copy.title = t("up.copy");
+      copy.setAttribute("aria-label", t("up.copy"));
+      copy.addEventListener("click", () => copyToClipboard(cmd, copy, "up.copy", { icon: true }));
       item.append(copy);
       list.append(item);
     }

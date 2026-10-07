@@ -1550,19 +1550,25 @@ pre.memory-editor { min-height: 0; max-height: 320px; overflow: auto; margin: 8p
 .up-row-label { font-size: 11px; color: var(--text-faint); }
 .up-row-value { font-family: var(--mono); font-size: 12px; color: var(--text); }
 
-/* 手动安装命令：标签 + 命令行列表（官方脚本与 npm 各一行，逐行复制） */
+/* 手动安装命令：标签 + 命令行列表（官方脚本与 npm 各一行；命令单行省略悬停看全文，
+   行尾图标复制按钮） */
 .up-install {
   display: flex; align-items: flex-start; gap: 8px;
   border-top: 1px dashed var(--border); padding-top: 8px;
 }
 .up-install-label { font-size: 11px; color: var(--text-faint); white-space: nowrap; padding-top: 2px; }
 .up-install-list { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.up-install-item { display: flex; align-items: flex-start; gap: 8px; }
+.up-install-item { display: flex; align-items: center; gap: 8px; }
 .up-install-cmd {
   flex: 1; min-width: 0; font-family: var(--mono); font-size: 10.5px;
-  color: var(--text); word-break: break-all; line-height: 1.5;
+  color: var(--text); line-height: 1.5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.up-copy { flex-shrink: 0; }
+.up-copy {
+  flex-shrink: 0; width: 26px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.up-copy.copied { color: var(--green); border-color: var(--green); }
 
 /* ---------------- 浅色主题特例 ---------------- */
 

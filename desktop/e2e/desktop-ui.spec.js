@@ -536,12 +536,14 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]",
   });
 
-  // 整体替换：加 Opus 档、删 Sonnet 档、Haiku 档保持、换主模型（def 紧凑序列化传 IPC）
+  // 整体替换：加 Opus 档、删 Sonnet 档、Haiku 档保持、换主模型；JSON 里粘了 token
+  // → 保存前剥离出 def，经 token 参数走 stdin（def 串不含密钥）
   await page.locator("#pv-def").fill(JSON.stringify({
     ANTHROPIC_BASE_URL: "https://open.bigmodel.cn/api/anthropic",
     ANTHROPIC_MODEL: "glm-5.4[1M]",
     ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.4[1M]",
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-5.3-flash[1M]",
+    ANTHROPIC_AUTH_TOKEN: "sk-json-pasted",
   }));
   await page.locator('#provider-add-form button[type="submit"]').click();
   const editArgs = await page.evaluate(() => window.__editArgs);
@@ -552,7 +554,7 @@ test("providers：编辑表单预填配置 JSON 并整体替换提交（编辑�
       + '"ANTHROPIC_DEFAULT_OPUS_MODEL":"glm-5.4[1M]",'
       + '"ANTHROPIC_DEFAULT_HAIKU_MODEL":"glm-5.3-flash[1M]"}',
     label: "Zhipu GLM",
-    token: null,
+    token: "sk-json-pasted",
   });
   await expect(page.locator("#matrix-toast")).toContainText("更新 zhipu");
 
@@ -652,13 +654,17 @@ test("updates：版本卡片渲染与整卡红绿灰状态", async ({ page }) =>
   await expect(claudeCard.locator(".up-state")).toHaveClass(/ok/);
   await expect(claudeCard.locator(".up-state")).toHaveText("已就绪");
   await expect(claudeCard.locator(".up-state")).toHaveAttribute("title", "已就绪");
-  // 卡内按钮均为安装命令的「复制」：官方脚本与 npm 各一行、逐行复制
+  // 卡内按钮均为安装命令的图标复制按钮：官方脚本与 npm 各一行、逐行复制（title/aria 无障碍）
   await expect(claudeCard.locator("button")).toHaveCount(2);
   await expect(claudeCard.locator(".up-copy")).toHaveCount(2);
-  await expect(claudeCard.locator(".up-copy").first()).toHaveText("复制");
+  await expect(claudeCard.locator(".up-copy").first()).toHaveAttribute("title", "复制");
+  await expect(claudeCard.locator(".up-copy").first()).toHaveAttribute("aria-label", "复制");
+  await expect(claudeCard.locator(".up-copy svg")).toHaveCount(2);
   const claudeCmds = claudeCard.locator(".up-install-cmd");
   await expect(claudeCmds).toHaveCount(2);
+  // 单行省略：DOM 文本仍是完整命令（CSS 截断展示），悬停 title 提供全文
   await expect(claudeCmds.first()).toContainText("https://claude.ai/install.sh");
+  await expect(claudeCmds.first()).toHaveAttribute("title", UPDATES.tools[0].install[0]);
   await expect(claudeCmds.first()).not.toContainText("npm install");
   await expect(claudeCmds.nth(1)).toHaveText("npm install -g @anthropic-ai/claude-code@latest");
   await expect(claudeCard.locator(".up-row-value")).toHaveText(["macOS", "2.1.292", "2.1.292"]);
