@@ -188,6 +188,19 @@ body {
   cursor: help;
 }
 
+/* 机器选择器旁的远端 halter 版本落后告警（title 给出细节与升级指引） */
+.stale-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--red);
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 107, 129, .55);
+  cursor: help;
+  white-space: nowrap;
+}
+
 /* ---------- Main ---------- */
 .main { flex: 1; overflow-y: auto; padding: 26px 30px; }
 

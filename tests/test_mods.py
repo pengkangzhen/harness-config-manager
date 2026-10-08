@@ -115,3 +115,32 @@ def test_scan_detail_and_json(fake_home: Path) -> None:
     assert by_id["cc-diff@claude-plugins-official"]["modules"] == ["./register.js"]
     assert by_id["cc-plugin-you-should-know@builtin"]["origin"] == "builtin"
     assert by_id["cc-plugin-you-should-know@builtin"]["enabled"] is True
+
+
+def test_scan_json_mods_capability_gate(fake_home: Path) -> None:
+    """mods 字段只对具备 mods 机制的工具有：无键 = 该层不适用（桌面矩阵收列依据）。"""
+    from halter.report import to_json
+    from halter.scan import scan_tool
+
+    payload = json.loads(to_json([scan_tool("claude"), scan_tool("codex")]))
+    by_tool = {t["tool"]: t for t in payload}
+    assert "mods" in by_tool["claude"]
+    assert "mods" not in by_tool["codex"]
+
+
+def test_mods_matrix_only_capable_columns(capsys) -> None:
+    """CLI mods 矩阵只列具备 mods 机制的列（mods_supported），不具备的没有 Mod 功能。"""
+    from halter.model import ModsInfo, ToolReport
+    from halter.report import print_mods_matrix
+
+    claude = ToolReport(tool="claude", display="Claude Code", installed=True,
+                        mods_supported=True,
+                        mods=[ModsInfo(plugin_id="cc-diff@mp", origin="marketplace")])
+    # zcode 具备机制但 0 个 mod：出列且计缺口；codex 无机制：不出列
+    zcode = ToolReport(tool="zcode", display="ZCode", installed=True, mods_supported=True)
+    codex = ToolReport(tool="codex", display="Codex CLI", installed=True)
+    print_mods_matrix([claude, zcode, codex])
+    out = capsys.readouterr().out
+    assert "1 × 2" in out and "gap 1" in out   # cc-diff 覆盖 claude、缺 zcode
+    assert "zcode" in out                       # 具备机制的空列也出列
+    assert "codex" not in out                   # 无机制的列不进矩阵

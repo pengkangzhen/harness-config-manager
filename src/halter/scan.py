@@ -49,8 +49,11 @@ def scan_tool(key: str, sessions_all_projects: bool = False) -> ToolReport:
     if key in PLUGIN_READERS:
         report.plugins = PLUGIN_READERS[key]()
 
-    # mods 是插件的函数式子集，只盘点；安装与启停走 plugins 层
-    if key in MODS_READERS:
+    # mods 是插件的函数式子集，只盘点；安装与启停走 plugins 层。
+    # mods_supported 标记该工具是否有 mods 机制，矩阵据此收列
+    # （无机制的列不算缺口，否则 mods 行在所有列渲染假 ○）
+    report.mods_supported = key in MODS_READERS
+    if report.mods_supported:
         report.mods = MODS_READERS[key]()
 
     if key in HOOK_READERS:

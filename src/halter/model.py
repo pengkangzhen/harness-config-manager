@@ -172,6 +172,9 @@ class ToolReport:
     mcp_servers: list[McpServerInfo] = field(default_factory=list)
     plugins: list[PluginInfo] = field(default_factory=list)
     mods: list[ModsInfo] = field(default_factory=list)
+    # 该工具是否具备 mods 机制（Claude Code 系插件缓存）：矩阵只把具备的列
+    # 当可覆盖目标，不具备的列不渲染、不计缺口（否则全量列渲染假 ○）
+    mods_supported: bool = False
     hooks: list[HookInfo] = field(default_factory=list)
     sessions: list["SessionInfo"] = field(default_factory=list)
     scan_notes: list[str] = field(default_factory=list)

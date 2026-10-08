@@ -178,6 +178,7 @@ const state = {
   machinesLocal: null,     // 本机显示信息 {host_name, os}（同一次 list --json 的 local 节点）
   machinesLoaded: false,
   machine: "",       // "" = 本机；其他 = machines.toml 里的机器名
+  halterVersion: null, // 本机 sidecar 版本（boot 时 halter_version），远端 stale 告警的对比基准
   sessionsLoaded: false,
   sessions: [],
   projects: [],
@@ -292,6 +293,8 @@ function renderOverview(data) {
 
     const chips = el("div", "layer-chips");
     for (const [key, labelKey] of LAYERS) {
+      // mods 无键 = 该工具无 mods 机制，不显示 Mods chip（区别于 0 个条目）
+      if (key === "mods" && !Array.isArray(tool.mods)) continue;
       let cell, on;
       if (key === "memory") {
         const m = tool.memory;
@@ -350,6 +353,9 @@ function buildMatrix(scan, layerKey) {
     // harness = 独立 AI 编码代理；editor（vscode/continue/cline 等）默认不进矩阵列
     tools = tools.filter((x) => (x.category || "harness") !== "editor");
   }
+  // mods 能力门控：scan JSON 仅对具备 mods 机制的 harness 带 mods 字段，
+  // 无机制的列不进矩阵也不计缺口（否则无 Mod 功能的列全渲染假 ○）
+  if (layer.key === "mods") tools = tools.filter((x) => Array.isArray(x.mods));
   const rows = new Map();
   for (const tool of tools) {
     // statusline 层：每工具一行（行名 = 工具名 = 跨机推送条目）。各工具片段
@@ -1875,16 +1881,25 @@ async function loadMachines() {
 // 可切换的远程机器：回环条目即本机，与「● 本机」选项重复，折叠不显示
 const selectableMachines = () => state.machines.filter((m) => !m.local);
 
-// 后台补探测：显示名缺 host_name 的机器跑一次 machines test（成功即写入后端缓存），
-// 全部完成后重拉列表刷新显示名；每台机器每次会话只探测一次，失败保持注册名。
+// 后台补探测：显示名缺 host_name 或版本未知的机器跑一次 machines test
+// （成功即把 host_name 写入后端缓存），完成后重拉列表刷新显示名；
+// 每台机器每次会话只探测一次，失败保持注册名；远端 halter 版本另存
+// machineVersions（会话内 Map，随探测填充），供 stale 告警与下拉 title 使用。
 const machinesProbed = new Set();
+const machineVersions = new Map(); // name -> 远端 halter 版本
 async function probeMissingHostNames() {
   const pending = selectableMachines()
-    .filter((m) => !m.host_name && !machinesProbed.has(m.name));
+    .filter((m) => (!m.host_name || !machineVersions.has(m.name))
+      && !machinesProbed.has(m.name));
   if (!pending.length) return;
   pending.forEach((m) => machinesProbed.add(m.name));
   const settled = await Promise.allSettled(
     pending.map((m) => invoke("halter_machines_test", { name: m.name })));
+  pending.forEach((m, i) => {
+    const r = settled[i];
+    if (r.status === "fulfilled" && r.value && r.value.ok && r.value.version)
+      machineVersions.set(m.name, r.value.version);
+  });
   if (settled.some((r) => r.status === "fulfilled")) await loadMachines();
 }
 
@@ -1905,12 +1920,45 @@ function renderMachineSelect() {
     o.value = m.name;
     o.text = m.host_name || m.name;
     o.dataset.sub = m.host_name ? m.name : "";
-    o.title = `${m.user ? `${m.user}@` : ""}${m.host}:${m.port || 22}`;
+    const rv = machineVersions.get(m.name);
+    o.title = `${m.user ? `${m.user}@` : ""}${m.host}:${m.port || 22}`
+      + (rv ? ` · halter v${rv}` : "");
     sel.append(o);
   }
   sel.value = state.machine;
   sel.classList.toggle("has-remote", selectableMachines().length > 0);
   syncDD(sel);
+  updateStalePill();
+}
+
+// 点分数字版本比较（仅纯数字段）；任一侧不可解析返回 null（视为不可比较，不告警）
+function cmpVersion(a, b) {
+  const pa = String(a || "").split(".");
+  const pb = String(b || "").split(".");
+  const numeric = (parts) => parts.length > 0 && parts.every((s) => /^\d+$/.test(s));
+  if (!numeric(pa) || !numeric(pb)) return null;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = parseInt(pa[i] || "0", 10) - parseInt(pb[i] || "0", 10);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+// 选中机器的远端 halter 落后于本机 sidecar 时，机器选择器旁出告警 pill：
+// 旧远端对 --machine 通道要么报 unknown option，要么静默缺新层（mods 等）字段，
+// 这里把原因显式化（title 给细节与升级指引），避免"矩阵莫名缺行"无从排查。
+function updateStalePill() {
+  const pill = $("machine-stale-pill");
+  if (!pill) return;
+  const m = selectableMachines().find((x) => x.name === state.machine);
+  const remote = m && machineVersions.get(m.name);
+  const stale = !!(remote && state.halterVersion
+    && cmpVersion(remote, state.halterVersion) < 0);
+  pill.classList.toggle("hidden", !stale);
+  if (stale) {
+    pill.textContent = t("mx.stalePill", { version: remote });
+    pill.title = t("mx.staleTip", { remote, local: state.halterVersion });
+  }
 }
 
 // 切换机器作用域：所有视图的数据都在被切机器之下，快照类缓存全部作废
@@ -2626,6 +2674,7 @@ $("btn-refresh-updates").addEventListener("click", () => loadUpdates(true));
   document.querySelectorAll("select").forEach(enhanceSelect);
   try {
     const v = await invoke("halter_version");
+    state.halterVersion = v.version || null;
     const badge = $("halter-version");
     badge.textContent = `halter ${v.version}`;
     if (v.desktop && v.version && String(v.version) !== String(v.desktop)) {

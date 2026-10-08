@@ -250,6 +250,12 @@ test("matrix mods 页签：行渲染自 mods 字段，格子只盘点不触发�
   await expect(page.locator(".mx-name", { hasText: "cc-diff" })).toBeVisible();
   await expect(page.locator(".mx-name", { hasText: "cc-plugin-you-should-know" })).toBeVisible();
 
+  // 能力门控：gemini 无 mods 字段（无 Mod 机制）——不进列、不计缺口
+  await expect(page.locator(".mx-tool-head", { hasText: "claude" })).toBeVisible();
+  await expect(page.locator(".mx-tool-head", { hasText: "gemini" })).toHaveCount(0);
+  await expect(page.locator("#matrix-summary")).toContainText("1 个 AI Harness");
+  await expect(page.locator("#matrix-summary")).toContainText("缺口 0 处");
+
   // 格子无 clickable 修饰；点击后也不产生 halter_sync 调用
   const cell = page.locator(".mx-cell").first();
   await expect(cell).not.toHaveClass(/clickable/);
@@ -365,6 +371,30 @@ test("机器下拉切换远端矩阵：幽灵行推送与行级拉取", async ({
     prefer: null,
   });
   await expect(page.locator("#matrix-toast")).toContainText("add    beta");
+});
+
+test("远端 halter 版本落后时机器选择器旁出 stale 告警", async ({ page }) => {
+  // machines list 不带 version → boot 后台补一次 machines test；探测到远端
+  // 落后（0.0.9 < 本机 0.1.0）后，选中该机器出 pill，切回本机隐藏
+  await openApp(page, bootData({
+    halter_machines_list: {
+      count: 2,
+      local: { host_name: "WSLBOX", os: "wsl" },
+      machines: [
+        { name: "oldbox", host: "10.0.0.2", user: null, port: 22, halter_path: "halter",
+          local: false, host_name: "oldbox.example", os: "linux" },
+      ],
+    },
+    halter_machines_test: { ok: true, version: "0.0.9", host_name: "oldbox.example", os: "linux" },
+  }));
+  const pill = page.locator("#machine-stale-pill");
+  await expect(pill).toBeHidden(); // 默认本机不出
+  await ddChoose(page, "global-machine-select", "oldbox");
+  await expect(pill).toBeVisible();
+  await expect(pill).toHaveText("halter v0.0.9 ⚠");
+  await expect(pill).toHaveAttribute("title", /落后于本机 v0\.1\.0/);
+  await ddChoose(page, "global-machine-select", "");
+  await expect(pill).toBeHidden();
 });
 
 test("机器作用域：切换后 sessions/memory/providers 请求都带 machine 并持久化", async ({ page }) => {

@@ -77,6 +77,7 @@ def test_scan_json_mods_contract(fake_home: Path) -> None:
             "cc-diff@claude-plugins-official": True,
             "cc-plugin-you-should-know@builtin": True,
         }}), encoding="utf-8")
+    (fake_home / ".codex").mkdir()  # 标记 codex 已装：无 mods 机制的对照列
 
     result = runner.invoke(app, ["scan", "--json"])
     assert result.exit_code == 0
@@ -87,6 +88,9 @@ def test_scan_json_mods_contract(fake_home: Path) -> None:
     assert by_id["cc-diff@claude-plugins-official"]["modules"] == ["./register.js"]
     assert by_id["cc-plugin-you-should-know@builtin"]["origin"] == "builtin"
     assert by_id["cc-plugin-you-should-know@builtin"]["enabled"] is True
+    # mods 键缺失 = 该工具无 mods 机制（桌面矩阵据此收列，不算缺口）
+    codex = next(t for t in payload["inventory"] if t["tool"] == "codex")
+    assert "mods" not in codex
 
 
 def test_sessions_projects_json_contract(fake_home, monkeypatch, tmp_path) -> None:

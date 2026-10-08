@@ -115,6 +115,13 @@ def _layer_rows(layer: str, reports: list[ToolReport]) -> list[Row]:
     return list(rows.values())
 
 
+def _layer_reports(layer: str, reports: list[ToolReport]) -> list[ToolReport]:
+    """该层矩阵的适用列：mods 仅对具备机制的（mods_supported），其余层全量。"""
+    if layer == "mods":
+        return [r for r in reports if r.mods_supported]
+    return reports
+
+
 def _fmt_time(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -225,6 +232,7 @@ class HalterTui(App[None]):
     def __init__(self, reports: list[ToolReport]) -> None:
         super().__init__()
         self._reports = [r for r in reports if r.installed]
+        self._applicable: list[ToolReport] = []  # 当前层的适用列（_reload 填充）
         self._layer = "skills"
         self._gaps_only = False
         self._sort = 0  # 0=缺口降序 1=名称 2=覆盖降序
@@ -257,13 +265,15 @@ class HalterTui(App[None]):
     # ---------- 数据渲染 ----------
 
     def _reload(self) -> None:
+        # 该层适用的列（mods 只对具备机制的）——排序/缺口/表格都以它为分母
+        self._applicable = _layer_reports(self._layer, self._reports)
         rows = _layer_rows(self._layer, self._reports)
         if self._sort == 1:
             rows.sort(key=lambda r: r.name)
         elif self._sort == 2:
             rows.sort(key=lambda r: (-len(r.entries), r.name))
         else:
-            rows.sort(key=lambda r: (-(len(self._reports) - len(r.entries)), r.name))
+            rows.sort(key=lambda r: (-(len(self._applicable) - len(r.entries)), r.name))
         self._rows = rows
         self._visible = [r for r in self._rows if self._passes(r)]
         self._by_name = {r.name: r for r in self._visible}
@@ -272,7 +282,7 @@ class HalterTui(App[None]):
         self._render_detail()
 
     def _passes(self, row: Row) -> bool:
-        if self._gaps_only and len(row.entries) == len(self._reports):
+        if self._gaps_only and len(row.entries) == len(self._applicable):
             return False
         return not self._filter or self._filter.casefold() in row.name.casefold()
 
@@ -282,7 +292,7 @@ class HalterTui(App[None]):
             btn = self.query_one(f"#tab-{key}", Button)
             btn.label = f"{k} {label}·{counts[key]}"
             btn.set_classes("tab -active" if key == self._layer else "tab")
-        gaps = sum(len(self._reports) - len(r.entries) for r in self._rows)
+        gaps = sum(len(self._applicable) - len(r.entries) for r in self._rows)
         sort_label = ("gap", "name", "cover")[self._sort]
         state = f"{len(self._visible)}/{len(self._rows)} · gap {gaps} · sort:{sort_label}"
         if self._gaps_only:
@@ -304,9 +314,9 @@ class HalterTui(App[None]):
     def _render_table(self) -> None:
         table = self.query_one("#matrix", DataTable)
         table.clear(columns=True)
-        table.add_columns("ITEM", *[r.tool for r in self._reports])
+        table.add_columns("ITEM", *[r.tool for r in self._applicable])
         for row in self._visible:
-            table.add_row(Text(row.name, style="cyan"), *(self._cell(row, r.tool) for r in self._reports), key=row.name)
+            table.add_row(Text(row.name, style="cyan"), *(self._cell(row, r.tool) for r in self._applicable), key=row.name)
 
     def _render_detail(self, row: Row | None = None) -> None:
         static = self.query_one("#detail", Static)

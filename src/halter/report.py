@@ -54,7 +54,10 @@ def to_json(reports: list[ToolReport]) -> str:
                 for m in r.mcp_servers
             ],
             "plugins": [dataclasses.asdict(p) for p in r.plugins],
-            "mods": [dataclasses.asdict(m) for m in r.mods],
+            # mods 字段仅对具备 mods 机制的工具有：键缺失 = 该层不适用，
+            # 桌面矩阵据此收列，不把无机制的 harness 计成缺口
+            **({"mods": [dataclasses.asdict(m) for m in r.mods]}
+               if r.mods_supported else {}),
             "sessions": [session_to_dict(x) for x in r.sessions],
             "hooks": [
                 {"event": h.event, "label": h.label, "type": h.type,
@@ -412,7 +415,9 @@ def print_plugins_matrix(reports: list[ToolReport]) -> None:
 
 
 def print_mods_matrix(reports: list[ToolReport]) -> None:
-    capable = [r for r in reports if r.mods]
+    # 只列具备 mods 机制的工具（mods_supported）：具备但 0 个也出列，
+    # 不具备的（codex/cursor 等）没有 Mod 功能，出了列就是假缺口
+    capable = [r for r in reports if r.mods_supported]
     names = sorted({m.plugin_id for r in capable for m in r.mods})
     _print_matrix("MODS", "MOD", capable,
                   lambda r, n: next((m for m in r.mods if m.plugin_id == n), None),

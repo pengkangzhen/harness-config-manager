@@ -52,6 +52,8 @@
         <span class="machine-scope-label" data-i18n="mx.machineLabel">机器</span>
         <div class="machine-scope-row">
           <select id="global-machine-select" class="machine-select" data-i18n-title="mx.machineSelect" aria-label="machine"></select>
+          <!-- 选中机器的远端 halter 落后于本机 sidecar 时出现（版本经 machines test 探测） -->
+          <span id="machine-stale-pill" class="stale-pill hidden">halter</span>
         </div>
       </div>
       <nav class="nav">
