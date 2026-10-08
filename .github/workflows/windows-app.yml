@@ -6,6 +6,13 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# main 与 v* tag 同推会触发多个并行构建，都 force push 同一个
+# windows-build 分支 —— 并发推会让后到者在远端 ref 锁上被拒
+# （v0.4.1 发布时实测）。同组排队、新构建取消旧构建（同一份代码，留最新即可）。
+concurrency:
+  group: windows-app
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
