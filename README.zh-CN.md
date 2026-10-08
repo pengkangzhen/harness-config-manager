@@ -217,7 +217,7 @@ statusline_library = ""          # statusline 事实源目录；缺省为 ~/.age
 ## 测试
 
 ```bash
-uv run pytest               # 231 项单测，全部使用假 HOME，绝不触碰真实配置
+uv run pytest               # 233 项单测，全部使用假 HOME，绝不触碰真实配置
 ```
 
 ## 在 DeepSeek Harness（dsh）中使用

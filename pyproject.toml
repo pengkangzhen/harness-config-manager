@@ -2,7 +2,7 @@
 # PyPI 发行名：halter 已被无关项目占用，发行名带 -cli 后缀；
 # 安装后命令名与 import 名仍是 halter（见 [project.scripts]）
 name = "halter-cli"
-version = "0.4.0"
+version = "0.4.1"
 description = "Detect, distribute, and recall user-level AI coding harness config and project-scoped session history."
 readme = "README.md"
 authors = [
