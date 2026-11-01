@@ -24,6 +24,9 @@ venv/
 .zcode/
 .claude/
 
+# Remember plugin memory (personal, never committed)
+.remember/
+
 # Tauri desktop app
 desktop/node_modules/
 desktop/src-tauri/binaries/
